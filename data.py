@@ -1,4 +1,3 @@
-
 import os
 import requests
 import shutil
@@ -7,16 +6,16 @@ import functions
 import numpy as np
 
 from zipfile import ZipFile
-from google.colab import drive
+#from google.colab import drive
 from pydub import AudioSegment
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from datasets import load_from_disk
 from tqdm import tqdm
 from datasets import Dataset, DatasetDict
-drive.mount('/content/drive')
-drive_path = '/content/drive/MyDrive/ModelCheckpoints'
-os.makedirs(drive_path, exist_ok=True)
+#drive.mount('/content/drive')
+#drive_path = '/content/drive/MyDrive/ModelCheckpoints'
+#os.makedirs(drive_path, exist_ok=True)
 
 
 numeric_cols = [
@@ -31,46 +30,58 @@ numeric_cols = [
 
 
 def DownloadAndExtract():
+    # Always use Data directory at script level
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+    
+    # Define paths for category folders within data_dir
+    healthy_dir = os.path.join(data_dir, "Healthy")
+    mci_dir = os.path.join(data_dir, "MCI")
+    ad_dir = os.path.join(data_dir, "AD")
+    
+    # Create data directory and category subdirectories
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(healthy_dir, exist_ok=True)
+    os.makedirs(mci_dir, exist_ok=True)
+    os.makedirs(ad_dir, exist_ok=True)
+    
+    # Skip download if files already exist in offline mode
+    if config.running_offline and all(os.path.exists(folder) and os.listdir(folder) 
+                                     for folder in [healthy_dir, mci_dir, ad_dir]):
+        print("Running offline and target folders already exist with files. Skipping download and extraction.")
+        return
+    
     urls = [
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc2.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc3.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc4.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc5.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc6.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc7.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc8.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc9.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc10.zip",
-        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc11.zip"
+        # Your URLs here...
     ]
 
-    # Create root directories for your final data
-    os.makedirs("Healthy", exist_ok=True)
-    os.makedirs("MCI", exist_ok=True)
-    os.makedirs("AD", exist_ok=True)
-    # Create a temporary folder for extracted files
-    temp_folder = "tmp_extracted"
+    # Create a temporary folder for extracted files within the data directory
+    temp_folder = os.path.join(data_dir, "tmp_extracted")
     os.makedirs(temp_folder, exist_ok=True)
+    
     # Download and extract each zip file
     for i, url in enumerate(urls):
-        zip_filename = f"downloaded_{i}.zip"   # A local name to store the downloaded file
+        zip_filename = os.path.join(data_dir, f"downloaded_{i}.zip")  # Store downloads in data directory
+        
         # Download the file
         print(f"Downloading from {url}...")
         response = requests.get(url)
         with open(zip_filename, "wb") as f:
             f.write(response.content)
         print(f"Saved {zip_filename}")
+        
         # Extract all contents into the temp_folder
         print(f"Extracting {zip_filename}...")
         with ZipFile(zip_filename, 'r') as zip_ref:
             zip_ref.extractall(temp_folder)
+            
         # Delete the ZIP file after extraction to save space
         os.remove(zip_filename)
-    temp_folder = "tmp_extracted"
+    
     # Move files to their destinations, convert from mp3 to wav if needed
     for root, dirs, files in os.walk(temp_folder):
         for filename in files:
             full_path = os.path.join(root, filename)
+            
             # Convert MP3 to WAV if needed
             if filename.endswith(".mp3"):
                 wav_filename = filename.replace(".mp3", ".wav")
@@ -83,15 +94,17 @@ def DownloadAndExtract():
                 # Update full_path to the new WAV file
                 full_path = wav_path
                 filename = wav_filename
+                
             # Move to corresponding folder
             if filename.startswith("AD"):
-                shutil.move(full_path, os.path.join("AD", filename))
+                shutil.move(full_path, os.path.join(ad_dir, filename))
             elif filename.startswith("MCI"):
-                shutil.move(full_path, os.path.join("MCI", filename))
+                shutil.move(full_path, os.path.join(mci_dir, filename))
             elif filename.startswith("HC"):
-                shutil.move(full_path, os.path.join("Healthy", filename))
+                shutil.move(full_path, os.path.join(healthy_dir, filename))
             else:
                 print(f"File '{filename}' doesn't match AD/MCI/HC. Skipping or placing it elsewhere.")
+    
     print("MP3 conversion and file moving completed.")
     # Delete temporary folder
     shutil.rmtree(temp_folder, ignore_errors=True)
@@ -99,6 +112,9 @@ def DownloadAndExtract():
 
 
 def datasetSplit(data_df, test_size):
+    #First, Drop class feature (label already encodes this info) and Sex (The class is imbalanced)
+    data_df = data_df.drop(columns=["class", "Sex"])
+
     test_size = test_size  # Adjust as needed (0.10 to 0.15)
 
     # Split data into train/test
@@ -128,7 +144,7 @@ def datasetSplit(data_df, test_size):
     return train_df, val_df, test_df
 
 
-def loadDataset():
+def loadHFDataset():
     dataset = load_from_disk(config.OUTPUT_PATH)
     return dataset
 
@@ -177,11 +193,7 @@ def process_data(df):
     return data
 
 
-########################################
-# 5) PROCESS TRAIN, VAL, AND TEST
-########################################
-
-def processDatasets(train_df, val_df, test_df):
+def createHFDatasets(train_df, val_df, test_df):
     train_data = process_data(train_df)
     val_data = process_data(val_df)
     test_data = process_data(test_df)
@@ -199,4 +211,3 @@ def processDatasets(train_df, val_df, test_df):
     # Finally, save to disk    
     dataset.save_to_disk(config.OUTPUT_PATH)
     print(f"Dataset saved to {config.OUTPUT_PATH}")
-    

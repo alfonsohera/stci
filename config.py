@@ -1,15 +1,19 @@
 import os
 from transformers import TrainingArguments
 
+# Define data directory path
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
 
+running_offline = False
 ## Misc definitions
-training_from_scratch = False
+training_from_scratch = True
 ROOT_DIR = os.getcwd()
-DATASET_PATH = ROOT_DIR  # Root folder where audio files are stored
+DATASET_PATH = DATA_DIR  # Root folder where audio files are stored
 OUTPUT_PATH = os.path.join(ROOT_DIR, "ProcessedFiles")
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 LABEL_MAP = {"Healthy": 0, "MCI": 1, "AD": 2}
 checkpoint_dir = '/content/drive/MyDrive/ModelCheckpoints'
+
 
 classes = ["HC", "MCI", "AD"]
 #Extracted features

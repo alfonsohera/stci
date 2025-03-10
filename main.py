@@ -1,20 +1,8 @@
-from google.colab import drive
+#from google.colab import drive
+import sys
 import os
-#os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:true"
-import requests
-import shutil
 from zipfile import ZipFile
 import torch
-import librosa
-import datasets
-import evaluate
-import pandas as pd
-import scipy.signal
-import torch.nn as nn
-import parselmouth
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 
 # <local imports>
 import config
@@ -24,29 +12,9 @@ import plots
 import functions
 import myModel
 # </local imports>
-
-
-
-
-from parselmouth.praat import call
 from tqdm import tqdm
-from datasets import load_from_disk, Dataset, DatasetDict, concatenate_datasets
-from transformers import (
-    Wav2Vec2ForSequenceClassification,
-    Wav2Vec2Processor,
-    TrainingArguments,
-    Trainer,
-    get_scheduler
-)
-
-from torch.nn.utils.rnn import pad_sequence
-from bitsandbytes.optim import Adam8bit
-from sklearn.metrics import classification_report, confusion_matrix
-from pydub import AudioSegment
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 
 def collate_fn(batch):
@@ -111,34 +79,46 @@ def main_fn():
     data.DownloadAndExtract()
     data_df = functions.createDataframe()
     data_df = functions.featureEngineering(data_df)
-    criterion, weights_tensor = functions.setWeightedCELoss()
+    _, weights_tensor = functions.setWeightedCELoss()
     # Plots
-    plots.plotAgeDistribution(data_df)
-    functions.createAgeSexStats(data_df)
-    plots.plotProsodicFeatures(data_df)
-    plots.histogramProsodicFeatures(data_df)
+    #plots.plotAgeDistribution(data_df)
+    #functions.createAgeSexStats(data_df)
+    #plots.plotProsodicFeatures(data_df)
+    #plots.histogramProsodicFeatures(data_df)
     # Data splits
     train_df, val_df, test_df = data.datasetSplit(data_df, 0.12)
     # Apply standard scaling to the splits
     train_df, val_df, test_df = data.ScaleDatasets(train_df, val_df, test_df)
     # Create HF's dataset
-    data.processDatasets(train_df, val_df, test_df)
+    data.createHFDatasets(train_df, val_df, test_df)
     # Load HF's dataset
-    dataset = data.loadDataset()
+    dataset = data.loadHFDataset()
     # Load model
     model, optimizer = myModel.loadModel()
     # Create trainer
     trainer = myModel.createTrainer(model, optimizer, dataset, weights_tensor)
-    trainer.train()
-
+    """ trainer.train()
     torch.save(model.state_dict(), "./wav2vec2_classification/model.pth")
     processor.save_pretrained("./wav2vec2_classification")
     if config.training_from_scratch:
         model.config.save_pretrained(config.checkpoint_dir)
-    print("Training complete! Model saved to ./wav2vec2_classification")
+    print("Training complete! Model saved to ./wav2vec2_classification")  """
 
 
 def test():
     model, _ = myModel.loadModel()
     dataset = data.loadDataset()
     testModel(model, dataset)
+
+
+args = sys.argv[1:]
+if len(args) > 0:
+    mode = args[0]
+    if mode == 'offline':
+        config.running_offline = True
+    else:
+        config.running_offline = False
+else:
+    config.running_offline = True
+
+main_fn()

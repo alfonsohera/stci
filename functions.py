@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import librosa
 import config
+import myModel
 import os
 from parselmouth.praat import call
 from sklearn.metrics import classification_report, confusion_matrix
@@ -15,8 +16,9 @@ def load_audio(file_path, target_sr=16000):
     return np.array(audio, dtype=np.float32), sr  # Ensure float32 output
 
 
-def preprocess_function(processor, example):
+def preprocess_function(example):
     # Wav2Vec2 processing
+    _, processor, _  = myModel.getModelDefinitions()
     inputs = processor(example["audio"]["array"], sampling_rate=example["audio"]["sampling_rate"], return_tensors="pt")
     # Build prosodic features from :
     #   Age, duration, num_pauses, total_pause_duration, phonation_time, speech_rate, mean_intensity
@@ -200,19 +202,31 @@ def data_collator_fn(processor, features):
     return inputs
 
 
+def get_data_dir():
+    """Helper function to get the consistent data directory path"""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+
 def createDataframe():
     audio_files = []
     labels = []
-
+    
+    # Always use the Data directory at script level
+    data_dir = get_data_dir()
+    
     for category in config.LABEL_MAP.keys():
-        category_path = os.path.join(config.DATASET_PATH, category)
+        category_path = os.path.join(data_dir, category)
         if not os.path.exists(category_path):
+            print(f"Warning: Category directory '{category_path}' not found")
             continue
+        
         for file in os.listdir(category_path):
             if file.endswith(".wav"):
                 audio_files.append(os.path.join(category_path, file))
                 labels.append(config.LABEL_MAP[category])
 
+    if not audio_files:
+        print(f"Warning: No audio files found in the data directory")
+    
     df = pd.DataFrame({"file_path": audio_files, "label": labels})
     return df
 
@@ -247,9 +261,7 @@ def featureEngineering(data_df):
     # Merge the extracted features with the main DataFrame
     data_df = pd.concat([data_df, prosodic_df], axis=1)
     # Drop duplicate columns (keep only one occurrence of each feature)
-    data_df = data_df.loc[:, ~data_df.columns.duplicated()]
-    #Drop class feature (label already encodes this info) and Sex (The class is imbalanced)
-    data_df = data_df.drop(columns=["class", "Sex"])
+    data_df = data_df.loc[:, ~data_df.columns.duplicated()]    
     return data_df
 
 
@@ -272,14 +284,13 @@ def setWeightedCELoss():
     return criterion, weights_tensor
 
 
-def createAgeSexStats(data_df)
+def createAgeSexStats(data_df):
     # Count the number of men (M) and women (W)
     total_men = (data_df["Sex"] == "M").sum()
     total_women = (data_df["Sex"] == "W").sum()
 
     print(f"Total number of men: {total_men}")
     print(f"Total number of women: {total_women}")
-
 
     most_prevalent_sex = data_df.groupby("class")["Sex"].agg(lambda x: x.mode()[0])
     print("Most prevalent sex per class")
