@@ -269,7 +269,7 @@ def setWeightedCELoss():
     weights_tensor = torch.tensor([class_weights[0], class_weights[1], class_weights[2]], dtype=torch.float).to(device)
     # Use in CrossEntropyLoss
     criterion = torch.nn.CrossEntropyLoss(weight=weights_tensor)
-    return criterion
+    return criterion, weights_tensor
 
 
 def createAgeSexStats(data_df)

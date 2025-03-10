@@ -2,14 +2,32 @@
 import os
 import requests
 import shutil
+import config
+import functions
+import numpy as np
 
 from zipfile import ZipFile
 from google.colab import drive
 from pydub import AudioSegment
-
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from datasets import load_from_disk
+from tqdm import tqdm
+from datasets import Dataset, DatasetDict
 drive.mount('/content/drive')
 drive_path = '/content/drive/MyDrive/ModelCheckpoints'
 os.makedirs(drive_path, exist_ok=True)
+
+
+numeric_cols = [
+    "Age",
+    "duration",
+    "num_pauses",
+    "total_pause_duration",
+    "phonation_time",
+    "speech_rate",
+    "mean_intensity"
+]
 
 
 def DownloadAndExtract():
@@ -78,3 +96,107 @@ def DownloadAndExtract():
     # Delete temporary folder
     shutil.rmtree(temp_folder, ignore_errors=True)
     print("Temporary folder removed.")
+
+
+def datasetSplit(data_df, test_size):
+    test_size = test_size  # Adjust as needed (0.10 to 0.15)
+
+    # Split data into train/test
+    train_df, test_df = train_test_split(
+        data_df,
+        test_size=test_size,
+        stratify=data_df["label"],  # keep class balance
+        random_state=42
+    )
+
+    # Define new validation size (10-12% of total dataset, relative to new train size)
+    val_size = 0.12 / (1 - test_size)  # Convert to fraction of remaining train data
+
+    # Split the train again for validation
+    train_df, val_df = train_test_split(
+        train_df,
+        test_size=val_size,
+        stratify=train_df["label"],
+        random_state=42
+    )
+
+    # Print dataset sizes
+    print(f"Training set: {len(train_df)} ({len(train_df) / len(data_df) * 100:.2f}%)")
+    print(f"Validation set: {len(val_df)} ({len(val_df) / len(data_df) * 100:.2f}%)")
+    print(f"Test set: {len(test_df)} ({len(test_df) / len(data_df) * 100:.2f}%)")
+
+    return train_df, val_df, test_df
+
+
+def loadDataset():
+    dataset = load_from_disk(config.OUTPUT_PATH)
+    return dataset
+
+
+def ScaleDatasets(train_df, val_df, test_df):
+    # Initialize scaler
+    scaler = StandardScaler()
+
+    # Fit scaler on TRAIN numeric columns only
+    scaler.fit(train_df[numeric_cols])
+
+    # Transform train, val, and test numeric columns
+    train_df[numeric_cols] = scaler.transform(train_df[numeric_cols])
+    val_df[numeric_cols] = scaler.transform(val_df[numeric_cols])
+    test_df[numeric_cols] = scaler.transform(test_df[numeric_cols])
+    return train_df, val_df, test_df
+
+
+def process_data(df):
+    data = []
+    for row in tqdm(df.itertuples(), total=len(df)):
+        audio_file = row.file_path
+        label = row.label
+
+        # Here you load the audio for the file
+        audio, sr = functions.load_audio(audio_file)
+
+        # Build a dictionary with everything you need
+        # -> the audio array, sampling rate, path, label, plus numeric features
+        data.append({
+            "audio": {
+                "array": np.array(audio, dtype=np.float32),
+                "sampling_rate": sr,
+                "path": audio_file
+            },
+            "label": label,
+            # For each numeric feature, store the standardized value
+            "Age": row.Age,
+            "duration": row.duration,
+            "num_pauses": row.num_pauses,
+            "total_pause_duration": row.total_pause_duration,
+            "phonation_time": row.phonation_time,
+            "speech_rate": row.speech_rate,
+            "mean_intensity": row.mean_intensity
+        })
+    return data
+
+
+########################################
+# 5) PROCESS TRAIN, VAL, AND TEST
+########################################
+
+def processDatasets(train_df, val_df, test_df):
+    train_data = process_data(train_df)
+    val_data = process_data(val_df)
+    test_data = process_data(test_df)
+
+    # Build HF Datasets from lists
+    dataset = DatasetDict({
+        "train": Dataset.from_list(train_data),
+        "validation": Dataset.from_list(val_data),
+        "test": Dataset.from_list(test_data),
+    })
+
+    # Example chunking or any other map-based transforms
+    dataset = dataset.map(functions.chunk_audio)
+
+    # Finally, save to disk    
+    dataset.save_to_disk(config.OUTPUT_PATH)
+    print(f"Dataset saved to {config.OUTPUT_PATH}")
+    
