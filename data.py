@@ -51,7 +51,16 @@ def DownloadAndExtract():
         return
     
     urls = [
-        # Your URLs here...
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc2.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc3.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc4.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc5.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc6.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc7.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc8.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc9.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc10.zip",
+        "https://ars.els-cdn.com/content/image/1-s2.0-S0885230821001340-mmc11.zip"
     ]
 
     # Create a temporary folder for extracted files within the data directory
