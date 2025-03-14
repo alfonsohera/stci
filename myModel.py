@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import config
-import functions
+import myConfig
+import myFunctions
 from transformers import (
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Processor,
@@ -21,7 +21,7 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
             base_model,
             num_labels=num_labels
         )
-        if config.training_from_scratch:
+        if myConfig.training_from_scratch:
             self.config = self.wav2vec2.config  # base model config
         else:
             self.config = config
@@ -72,7 +72,7 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
 
 
 def getModelDefinitions():
-    if config.training_from_scratch:
+    if myConfig.training_from_scratch:
         model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
         processor = Wav2Vec2Processor.from_pretrained(model_name)
         base_model = Wav2Vec2ForSequenceClassification.from_pretrained(
@@ -81,7 +81,7 @@ def getModelDefinitions():
         )
     else:
         model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
-        processor = Wav2Vec2Processor.from_pretrained(config.checkpoint_dir)
+        processor = Wav2Vec2Processor.from_pretrained(myConfig.checkpoint_dir)
         base_model = Wav2Vec2ForSequenceClassification.from_pretrained(
             model_name,
             num_labels=3
@@ -90,13 +90,13 @@ def getModelDefinitions():
 
 
 def loadModel(model_name):
-    if config.training_from_scratch:
+    if myConfig.training_from_scratch:
         model = Wav2Vec2ProsodicClassifier(model_name, num_labels=3)
     else:
-        model_config = AutoConfig.from_pretrained(config.checkpoint_dir)
+        model_config = AutoConfig.from_pretrained(myConfig.checkpoint_dir)
         model = Wav2Vec2ProsodicClassifier(model_name, num_labels=3, config=model_config)                
         # Load trained weights from .safetensors
-        state_dict = load_file(f"{config.checkpoint_dir}/model.safetensors")
+        state_dict = load_file(f"{myConfig.checkpoint_dir}/model.safetensors")
         model.load_state_dict(state_dict)
         model.gradient_checkpointing_enable()
         optimizer = Adam8bit(model.parameters(), lr=2e-5)
@@ -142,7 +142,7 @@ class CustomTrainer(Trainer):
 
 def createTrainer(model, optimizer, dataset, weights_tensor):
     # Define the learning rate scheduler
-    num_training_steps = config.training_args.num_train_epochs * len(dataset["train"]) // config.training_args.gradient_accumulation_steps
+    num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
 
     lr_scheduler = get_scheduler(
         name="cosine",
@@ -154,11 +154,11 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
     # Update Trainer initialization
     trainer = CustomTrainer(
         model=model,
-        args=config.training_args,
+        args=myConfig.training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
-        compute_metrics=functions.compute_metrics,
-        data_collator=functions.data_collator_fn,
+        compute_metrics=myFunctions.compute_metrics,
+        data_collator=myFunctions.data_collator_fn,
         optimizers=(optimizer, lr_scheduler),
         class_weights=weights_tensor  # Pass class weights
     )

@@ -2,8 +2,8 @@ import parselmouth
 import torch
 import pandas as pd
 import numpy as np
-import librosa
-import config
+import myConfig
+import myAudio
 import myModel
 import os
 from parselmouth.praat import call
@@ -11,9 +11,6 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.nn.utils.rnn import pad_sequence
 
 
-def load_audio(file_path, target_sr=16000):
-    audio, sr = librosa.load(file_path, sr=target_sr)
-    return np.array(audio, dtype=np.float32), sr  # Ensure float32 output
 
 
 def preprocess_function(example):
@@ -27,19 +24,6 @@ def preprocess_function(example):
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
     inputs["label"] = example["label"]
     return inputs
-
-
-def chunk_audio(example, max_length=16000*100):  # 100 seconds max
-    audio = example["audio"]
-    if len(audio) > max_length:
-        example["audio"] = audio[:max_length]
-    return preprocess_function(example)
-
-
-# Function to compute audio duration
-def compute_audio_length(file_path):
-    y, sr = librosa.load(file_path, sr=None)  # Load audio
-    return len(y) / sr  # Compute duration in seconds
 
 
 # Extract class labels from file names
@@ -213,7 +197,7 @@ def createDataframe():
     # Always use the Data directory at script level
     data_dir = get_data_dir()
     
-    for category in config.LABEL_MAP.keys():
+    for category in myConfig.LABEL_MAP.keys():
         category_path = os.path.join(data_dir, category)
         if not os.path.exists(category_path):
             print(f"Warning: Category directory '{category_path}' not found")
@@ -222,7 +206,7 @@ def createDataframe():
         for file in os.listdir(category_path):
             if file.endswith(".wav"):
                 audio_files.append(os.path.join(category_path, file))
-                labels.append(config.LABEL_MAP[category])
+                labels.append(myConfig.LABEL_MAP[category])
 
     if not audio_files:
         print(f"Warning: No audio files found in the data directory")
@@ -248,7 +232,7 @@ def extract_sex_age(file_path):
 
 def featureEngineering(data_df):
     # Add duration and class columns to the dataframe
-    data_df["duration"] = data_df["file_path"].apply(compute_audio_length)
+    data_df["duration"] = data_df["file_path"].apply(myAudio.compute_audio_length)
     data_df["class"] = data_df["file_path"].apply(extract_class)
     # Extract and add Sex and Age columns to the dataframe
     data_df["Sex"], data_df["Age"] = zip(*data_df["file_path"].apply(extract_sex_age))
@@ -257,7 +241,7 @@ def featureEngineering(data_df):
     # Extract prosodic features
     prosodic_features = data_df["file_path"].apply(extract_prosodic_features)
     # Convert the extracted feature arrays into separate columns
-    prosodic_df = pd.DataFrame(prosodic_features.tolist(), columns=config.features)
+    prosodic_df = pd.DataFrame(prosodic_features.tolist(), columns=myConfig.features)
     # Merge the extracted features with the main DataFrame
     data_df = pd.concat([data_df, prosodic_df], axis=1)
     # Drop duplicate columns (keep only one occurrence of each feature)
@@ -267,9 +251,9 @@ def featureEngineering(data_df):
 
 def setWeightedCELoss():
     # Compute original class weights
-    total_samples = sum(config.num_samples_per_class.values())
-    num_classes = len(config.num_samples_per_class)
-    class_weights = {cls: total_samples / (num_classes * count) for cls, count in config.num_samples_per_class.items()}
+    total_samples = sum(myConfig.num_samples_per_class.values())
+    num_classes = len(myConfig.num_samples_per_class)
+    class_weights = {cls: total_samples / (num_classes * count) for cls, count in myConfig.num_samples_per_class.items()}
     #  Manually increase MCI weight
     class_weights[1] *= 2  # Double MCI weight
     class_weights[2] *= 2  # Double AD weight

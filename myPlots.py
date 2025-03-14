@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
-import config
+import myConfig
 
 
 def plotAgeDistribution(data_df):
@@ -10,10 +10,10 @@ def plotAgeDistribution(data_df):
     std_values = data_df.groupby("class")["Age"].std()
     
     # Get unique classes
-    fig, axes = plt.subplots(len(config.classes), 1, figsize=(8, 5 * len(config.classes)), sharex=True)
+    fig, axes = plt.subplots(len(myConfig.classes), 1, figsize=(8, 5 * len(myConfig.classes)), sharex=True)
 
-    for i, cls in enumerate(config.classes):
-        ax = axes[i] if len(config.classes) > 1 else axes  # Handle single-class case
+    for i, cls in enumerate(myConfig.classes):
+        ax = axes[i] if len(myConfig.classes) > 1 else axes  # Handle single-class case
         subset = data_df[data_df["class"] == cls]["Age"]
 
         sns.histplot(subset, bins=15, kde=False, ax=ax)
@@ -91,14 +91,14 @@ def plotProsodicFeatures(data_df):
 
 def histogramProsodicFeatures(data_df):
     # Create a grid for histograms of prosodic features per class
-    fig, axes = plt.subplots(len(config.classes), len(config.features), figsize=(15, 12), sharex=False, sharey=False)
+    fig, axes = plt.subplots(len(myConfig.classes), len(myConfig.features), figsize=(15, 12), sharex=False, sharey=False)
     
-    mean_values = data_df.groupby("class")[config.features].mean()
-    std_values = data_df.groupby("class")[config.features].std()
+    mean_values = data_df.groupby("class")[myConfig.features].mean()
+    std_values = data_df.groupby("class")[myConfig.features].std()
     
     # Generate histograms for each feature-class combination
-    for i, cls in enumerate(config.classes):
-        for j, feature in enumerate(config.features):
+    for i, cls in enumerate(myConfig.classes):
+        for j, feature in enumerate(myConfig.features):
             # Plot histogram
             sns.histplot(
                 data=data_df[data_df["class"] == cls],  # Filter data for the class
@@ -127,9 +127,9 @@ def histogramProsodicFeatures(data_df):
 
     # Print mean and standard deviation values for each class and feature
     print("\nMean and Standard Deviation per Feature per Class:\n")
-    for cls in config.classes:
+    for cls in myConfig.classes:
         print(f"\nClass: {cls}")
-        for feature in config.features:
+        for feature in myConfig.features:
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")

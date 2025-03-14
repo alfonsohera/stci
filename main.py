@@ -5,11 +5,11 @@ from zipfile import ZipFile
 import torch
 
 # <local imports>
-import config
-import data
+import myConfig
+import myData
 import myModel
-import plots
-import functions
+import myPlots
+import myFunctions
 import myModel
 # </local imports>
 from tqdm import tqdm
@@ -76,23 +76,23 @@ def testModel(model, dataset):
 def main_fn():
     model_name, processor, base_model = myModel.getModelDefinitions()
     # Data extraction and feature engineering
-    data.DownloadAndExtract()
-    data_df = functions.createDataframe()
-    data_df = functions.featureEngineering(data_df)
-    _, weights_tensor = functions.setWeightedCELoss()
+    myData.DownloadAndExtract()
+    data_df = myFunctions.createDataframe()
+    data_df = myFunctions.featureEngineering(data_df)
+    _, weights_tensor = myFunctions.setWeightedCELoss()
     # Plots
-    #plots.plotAgeDistribution(data_df)
-    #functions.createAgeSexStats(data_df)
-    #plots.plotProsodicFeatures(data_df)
-    #plots.histogramProsodicFeatures(data_df)
+    #myPlots.plotAgeDistribution(data_df)
+    #myFunctions.createAgeSexStats(data_df)
+    #myPlots.plotProsodicFeatures(data_df)
+    #myPlots.histogramProsodicFeatures(data_df)
     # Data splits
-    train_df, val_df, test_df = data.datasetSplit(data_df, 0.12)
+    train_df, val_df, test_df = myData.datasetSplit(data_df, 0.12)
     # Apply standard scaling to the splits
-    train_df, val_df, test_df = data.ScaleDatasets(train_df, val_df, test_df)
+    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
     # Create HF's dataset
-    data.createHFDatasets(train_df, val_df, test_df)
+    myData.createHFDatasets(train_df, val_df, test_df)
     # Load HF's dataset
-    dataset = data.loadHFDataset()
+    dataset = myData.loadHFDataset()
     # Load model
     model, optimizer = myModel.loadModel()
     # Create trainer
@@ -100,14 +100,14 @@ def main_fn():
     """ trainer.train()
     torch.save(model.state_dict(), "./wav2vec2_classification/model.pth")
     processor.save_pretrained("./wav2vec2_classification")
-    if config.training_from_scratch:
-        model.config.save_pretrained(config.checkpoint_dir)
+    if myConfig.training_from_scratch:
+        model.config.save_pretrained(myConfig.checkpoint_dir)
     print("Training complete! Model saved to ./wav2vec2_classification")  """
 
 
 def test():
     model, _ = myModel.loadModel()
-    dataset = data.loadDataset()
+    dataset = myData.loadDataset()
     testModel(model, dataset)
 
 
@@ -115,10 +115,10 @@ args = sys.argv[1:]
 if len(args) > 0:
     mode = args[0]
     if mode == 'offline':
-        config.running_offline = True
+        myConfig.running_offline = True
     else:
-        config.running_offline = False
+        myConfig.running_offline = False
 else:
-    config.running_offline = True
+    myConfig.running_offline = True
 
 main_fn()

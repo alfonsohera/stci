@@ -1,8 +1,9 @@
 import os
 import requests
 import shutil
-import config
-import functions
+import myConfig
+import myFunctions
+import myAudio
 import numpy as np
 
 from zipfile import ZipFile
@@ -45,7 +46,7 @@ def DownloadAndExtract():
     os.makedirs(ad_dir, exist_ok=True)
     
     # Skip download if files already exist in offline mode
-    if config.running_offline and all(os.path.exists(folder) and os.listdir(folder) 
+    if myConfig.running_offline and all(os.path.exists(folder) and os.listdir(folder) 
                                      for folder in [healthy_dir, mci_dir, ad_dir]):
         print("Running offline and target folders already exist with files. Skipping download and extraction.")
         return
@@ -66,31 +67,31 @@ def DownloadAndExtract():
     # Create a temporary folder for extracted files within the data directory
     temp_folder = os.path.join(data_dir, "tmp_extracted")
     os.makedirs(temp_folder, exist_ok=True)
-    
+
     # Download and extract each zip file
     for i, url in enumerate(urls):
         zip_filename = os.path.join(data_dir, f"downloaded_{i}.zip")  # Store downloads in data directory
-        
+
         # Download the file
         print(f"Downloading from {url}...")
         response = requests.get(url)
         with open(zip_filename, "wb") as f:
             f.write(response.content)
         print(f"Saved {zip_filename}")
-        
+
         # Extract all contents into the temp_folder
         print(f"Extracting {zip_filename}...")
         with ZipFile(zip_filename, 'r') as zip_ref:
             zip_ref.extractall(temp_folder)
-            
+
         # Delete the ZIP file after extraction to save space
         os.remove(zip_filename)
-    
+
     # Move files to their destinations, convert from mp3 to wav if needed
     for root, dirs, files in os.walk(temp_folder):
         for filename in files:
             full_path = os.path.join(root, filename)
-            
+
             # Convert MP3 to WAV if needed
             if filename.endswith(".mp3"):
                 wav_filename = filename.replace(".mp3", ".wav")
@@ -103,7 +104,7 @@ def DownloadAndExtract():
                 # Update full_path to the new WAV file
                 full_path = wav_path
                 filename = wav_filename
-                
+
             # Move to corresponding folder
             if filename.startswith("AD"):
                 shutil.move(full_path, os.path.join(ad_dir, filename))
@@ -113,7 +114,7 @@ def DownloadAndExtract():
                 shutil.move(full_path, os.path.join(healthy_dir, filename))
             else:
                 print(f"File '{filename}' doesn't match AD/MCI/HC. Skipping or placing it elsewhere.")
-    
+
     print("MP3 conversion and file moving completed.")
     # Delete temporary folder
     shutil.rmtree(temp_folder, ignore_errors=True)
@@ -154,7 +155,7 @@ def datasetSplit(data_df, test_size):
 
 
 def loadHFDataset():
-    dataset = load_from_disk(config.OUTPUT_PATH)
+    dataset = load_from_disk(myConfig.OUTPUT_PATH)
     return dataset
 
 
@@ -178,8 +179,11 @@ def process_data(df):
         audio_file = row.file_path
         label = row.label
 
-        # Here you load the audio for the file
-        audio, sr = functions.load_audio(audio_file)
+        # Process audio files if the files were found when extracting
+        if not os.path.exists(audio_file):
+            myAudio.process_audio(audio_file)
+        # Load processed audio
+        audio, sr = myAudio.load_audio(audio_file)
 
         # Build a dictionary with everything you need
         # -> the audio array, sampling rate, path, label, plus numeric features
@@ -215,8 +219,8 @@ def createHFDatasets(train_df, val_df, test_df):
     })
 
     # Example chunking or any other map-based transforms
-    dataset = dataset.map(functions.chunk_audio)
+    dataset = dataset.map(myFunctions.chunk_audio)
 
     # Finally, save to disk    
-    dataset.save_to_disk(config.OUTPUT_PATH)
-    print(f"Dataset saved to {config.OUTPUT_PATH}")
+    dataset.save_to_disk(myConfig.OUTPUT_PATH)
+    print(f"Dataset saved to {myConfig.OUTPUT_PATH}")
