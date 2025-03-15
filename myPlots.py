@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import myConfig
+import librosa
+import librosa.display
+import numpy as np
 
 
 def plotAgeDistribution(data_df):
@@ -133,3 +136,74 @@ def histogramProsodicFeatures(data_df):
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
+
+
+def plot_waveform(audio_path, ax, title):
+    """Plots the waveform of an audio file."""
+    y, sr = librosa.load(audio_path, sr=None)
+    ax.plot(np.linspace(0, len(y)/sr, num=len(y)), y, color='b')
+    ax.set_title(title)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Amplitude")
+
+
+def plot_mel_spectrogram(audio_path, ax, title):
+    """Plots the Mel spectrogram of an audio file."""
+    y, sr = librosa.load(audio_path, sr=None)
+    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+    mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+    img = librosa.display.specshow(mel_spec_db, sr=sr, x_axis='time', y_axis='mel', ax=ax)
+    ax.set_title(title)
+    return img
+
+
+def plot_difference_spectrogram(original_path, processed_path, ax):
+    """Plots the difference between two Mel spectrograms."""
+    y_orig, sr_orig = librosa.load(original_path, sr=None)
+    y_proc, sr_proc = librosa.load(processed_path, sr=None)
+
+    mel_orig = librosa.feature.melspectrogram(y=y_orig, sr=sr_orig, n_mels=128, fmax=8000)
+    mel_proc = librosa.feature.melspectrogram(y=y_proc, sr=sr_proc, n_mels=128, fmax=8000)
+
+    # Get the smaller time dimension
+    min_time_dim = min(mel_orig.shape[1], mel_proc.shape[1])
+
+    # Truncate both to the shorter length
+    mel_orig = mel_orig[:, :min_time_dim]
+    mel_proc = mel_proc[:, :min_time_dim]
+
+    mel_diff = librosa.power_to_db(mel_proc, ref=np.max) - librosa.power_to_db(mel_orig, ref=np.max)
+    img = librosa.display.specshow(mel_diff, sr=sr_orig, x_axis='time', y_axis='mel', ax=ax, cmap='RdBu_r')
+    ax.set_title("Difference (Processed - Original) Mel Spectrogram")
+    return img
+
+
+def visualize_audio_comparison(original_path, processed_path):
+    """Plots waveform, Mel spectrograms, and difference spectrogram for two audio files."""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Waveforms
+    plot_waveform(original_path, axes[0, 0], "Original Waveform")
+    plot_waveform(processed_path, axes[0, 1], "Processed Waveform")
+
+    # Mel Spectrograms
+    img1 = plot_mel_spectrogram(original_path, axes[1, 0], "Original Mel Spectrogram")
+    img2 = plot_mel_spectrogram(processed_path, axes[1, 1], "Processed Mel Spectrogram")
+
+    # Difference Spectrogram
+    #img3 = plot_difference_spectrogram(original_path, processed_path, axes[2, 0])
+    
+    fig.colorbar(img1, ax=axes[1, 0])
+    fig.colorbar(img2, ax=axes[1, 1])
+    #fig.colorbar(img3, ax=axes[2, 0])
+
+    axes[1, 1].axis("off")  # Empty placeholder
+
+    plt.tight_layout()
+    plt.show()
+
+
+# Example usage
+original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
+processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
+visualize_audio_comparison(original_audio_path, processed_audio_path)

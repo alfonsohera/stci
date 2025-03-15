@@ -1,7 +1,7 @@
 import librosa
 import noisereduce as nr
 import soundfile as sf
-import functions
+import myFunctions
 import numpy as np
 
 
