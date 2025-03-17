@@ -11,8 +11,6 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.nn.utils.rnn import pad_sequence
 
 
-
-
 def preprocess_function(example):
     # Wav2Vec2 processing
     _, processor, _  = myModel.getModelDefinitions()
@@ -24,6 +22,13 @@ def preprocess_function(example):
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
     inputs["label"] = example["label"]
     return inputs
+
+
+def chunk_input_sample(example, max_length=16000*100):  # 100 seconds max
+    audio = example["audio"]
+    if len(audio) > max_length:
+        example["audio"] = audio[:max_length]
+    return preprocess_function(example)
 
 
 # Extract class labels from file names

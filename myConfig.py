@@ -13,8 +13,10 @@ OUTPUT_PATH = os.path.join(ROOT_DIR, "ProcessedFiles")
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 LABEL_MAP = {"Healthy": 0, "MCI": 1, "AD": 2}
 checkpoint_dir = '/content/drive/MyDrive/ModelCheckpoints'
+total_words = 66 # Total number of words in the script
+hf_token = "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"
 
-
+# Define the classes and features to be used
 classes = ["HC", "MCI", "AD"]
 #Extracted features
 features = [
