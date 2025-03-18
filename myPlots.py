@@ -93,46 +93,83 @@ def plotProsodicFeatures(data_df):
 
 
 def histogramProsodicFeatures(data_df):
-    # Create a grid for histograms of prosodic features per class
-    fig, axes = plt.subplots(len(myConfig.classes), len(myConfig.features), figsize=(15, 12), sharex=False, sharey=False)
+    # Define all features to plot (prosodic + jitter/shimmer)
+    all_features = myConfig.features + myConfig.jitter_shimmer_features
     
-    mean_values = data_df.groupby("class")[myConfig.features].mean()
-    std_values = data_df.groupby("class")[myConfig.features].std()
+    # Calculate mean and std values for all features
+    mean_values = data_df.groupby("class")[all_features].mean()
+    std_values = data_df.groupby("class")[all_features].std()
     
-    # Generate histograms for each feature-class combination
-    for i, cls in enumerate(myConfig.classes):
-        for j, feature in enumerate(myConfig.features):
+    # Create one figure per feature, with subplots for each class
+    for feature in all_features:
+        # Create figure with 3 subplots (one for each class)
+        fig, axes = plt.subplots(len(myConfig.classes), 1, figsize=(10, 12), sharex=True)
+        
+        # Set figure title for the entire plot
+        fig.suptitle(f"Distribution of {feature} across Cognitive Classes", fontsize=16)
+        
+        # Generate histograms for each class
+        for i, cls in enumerate(myConfig.classes):
+            # Get current axis (handle case of single class)
+            ax = axes[i] if len(myConfig.classes) > 1 else axes
+            
+            # Get class data for this feature
+            class_data = data_df[data_df["class"] == cls][feature]
+            
+            # Skip if no valid data
+            if len(class_data.dropna()) == 0:
+                ax.text(0.5, 0.5, f"No valid data for {cls}", ha='center', va='center')
+                ax.set_title(f"{cls}")
+                continue
+            
             # Plot histogram
             sns.histplot(
-                data=data_df[data_df["class"] == cls],  # Filter data for the class
-                x=feature,
+                data=class_data,
                 bins=20,
-                kde=False,
-                ax=axes[i, j]
+                kde=True,
+                color=myConfig.CLASS_COLORS.get(cls, f"C{i}"),
+                ax=ax
             )
-
+            
             # Get mean and std values
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
+            
             # Add vertical lines for mean and std deviation
-            axes[i, j].axvline(mean_val, color='red', linestyle='dashed', linewidth=2, label=f"Mean: {mean_val:.2f}")
-            axes[i, j].axvline(mean_val - std_val, color='blue', linestyle='dashed', linewidth=1, label=f"-1 SD: {mean_val - std_val:.2f}")
-            axes[i, j].axvline(mean_val + std_val, color='blue', linestyle='dashed', linewidth=1, label=f"+1 SD: {mean_val + std_val:.2f}")
+            ax.axvline(mean_val, color='red', linestyle='dashed', linewidth=2, label=f"Mean: {mean_val:.2f}")
+            ax.axvline(mean_val - std_val, color='blue', linestyle='dashed', linewidth=1, label=f"-1 SD: {mean_val - std_val:.2f}")
+            ax.axvline(mean_val + std_val, color='blue', linestyle='dashed', linewidth=1, label=f"+1 SD: {mean_val + std_val:.2f}")
+            
             # Add text annotations for clarity
-            axes[i, j].legend()
-            # Set plot labels and title
-            axes[i, j].set_title(f"{cls} - {feature}")
-            axes[i, j].set_xlabel(feature)
-            axes[i, j].set_ylabel("Frequency")
-    # Adjust layout for clarity
-    plt.tight_layout()
-    plt.show()
-
-    # Print mean and standard deviation values for each class and feature
+            ax.legend(loc='upper right')
+            
+            # Set subplot title and labels
+            ax.set_title(f"{cls} - {len(class_data.dropna())} samples")
+            ax.set_ylabel("Frequency")
+            
+            # Only add x-label for the bottom subplot
+            if i == len(myConfig.classes) - 1:
+                ax.set_xlabel(feature)
+        
+        # Adjust layout for clarity
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)  # Make room for suptitle
+        plt.show()
+    
+    # Print summary statistics
     print("\nMean and Standard Deviation per Feature per Class:\n")
     for cls in myConfig.classes:
         print(f"\nClass: {cls}")
+        # Print standard prosodic features
+        print("  -- Prosodic Features --")
         for feature in myConfig.features:
+            mean_val = mean_values.loc[cls, feature]
+            std_val = std_values.loc[cls, feature]
+            print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
+        
+        # Print jitter and shimmer features
+        print("\n  -- Voice Quality Features --")
+        for feature in myConfig.jitter_shimmer_features:
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")

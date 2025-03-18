@@ -44,21 +44,42 @@ def apply_noise_reduction(audio, sr=16000):
     )
 
 
-# Applies noise reduction and normalization to the audio file
 def process_audio(file_path, sr=16000):
+    """
+    Applies noise reduction and normalization to the audio file
+    Creates both processed and original versions
+    Uses marker files to prevent repeated processing
+    """
+    # Standardize path handling
+    base_file_path = file_path.replace("_original", "")
+    
     # Check if this file has already been processed
-    marker_file = f"{file_path}.processed"
-    if os.path.exists(marker_file):
-        return          
+    marker_file = f"{base_file_path}.processed"
+    original_path = base_file_path.replace(".wav", "_original.wav")
+    
+    # If marker exists or original file exists, assume already processed
+    if os.path.exists(marker_file) or os.path.exists(original_path):
+        print(f"Skipping {os.path.basename(base_file_path)} - already processed")
+        return
+    
+    # Load the audio from original path
     audio, _ = load_audio(file_path, sr)
+    
+    # Save original version for jitter/shimmer analysis
+    sf.write(original_path, audio, sr)
+    
+    # Apply processing
     target_rms = 0.05
     noise_reduced_audio = apply_noise_reduction(audio, sr)
     rms = np.sqrt(np.mean(noise_reduced_audio**2))
     audio_normalized = noise_reduced_audio * (target_rms / rms)
-    sf.write(file_path, audio_normalized, sr)
-    # Create a marker file to indicate this file has been processed
+    
+    # Always write to the base filename without suffixes
+    sf.write(base_file_path, audio_normalized, sr)
+    
+    # Create marker file
     with open(marker_file, 'w') as f:
-        f.write("1")  
+        f.write("1")
 
 
 def pyannoteExtractProsodic(speech_segments):

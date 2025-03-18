@@ -27,7 +27,7 @@ features = [
         "mean_intensity"
     ]
 #extracted jitter and shimmer features
-jitter_shimmer_features = ["jitter_local", "shimmer_apq11"]
+jitter_shimmer_features = ["jitter_local", "shimmer_local"]
 
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
@@ -35,6 +35,13 @@ num_samples_per_class = {
     0: 197,  # Healthy (HC)
     1: 90,   # MCI
     2: 74    # AD
+}
+
+# Color mapping for visualization
+CLASS_COLORS = {
+    "HC": "#2E86C1",   # Blue for Healthy Control
+    "MCI": "#F39C12",  # Orange for Mild Cognitive Impairment
+    "AD": "#C0392B"    # Red for Alzheimer's Disease
 }
 
 training_args = TrainingArguments(

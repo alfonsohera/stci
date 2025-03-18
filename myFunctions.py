@@ -46,12 +46,34 @@ def extract_class(file_path):
     return "Unknown"
 
 def extract_jitter_shimmer(audio_path):
-    try:
-        sound = parselmouth.Sound(audio_path)
+    # Try to use original version if available
+    original_path = audio_path.replace(".wav", "_original.wav")
+    if os.path.exists(original_path):
+        #path_to_use = original_path                
+        path_to_use = audio_path
+    else:
+        path_to_use = audio_path
+    
+    # Extract gender from filename to set appropriate pitch range
+    filename = os.path.basename(path_to_use)
+    parts = filename.replace(".wav", "").split("-")
+    
+    # Set gender-specific pitch ranges as recommended in the paper
+    if len(parts) >= 2 and parts[1] == "M":  # Male
+        pitch_floor = 75
+        pitch_ceiling = 300
+    elif len(parts) >= 2 and parts[1] == "W":  # Female
+        pitch_floor = 100
+        pitch_ceiling = 500
+    else:  # Default if gender can't be determined
+        pitch_floor = 75
+        pitch_ceiling = 600
         
+    try:
+        sound = parselmouth.Sound(path_to_use)        
         try:
-            # Create pitch object first - this helps with jitter extraction
-            pitch = parselmouth.praat.call(sound, "To Pitch", 0.0, 75, 600)
+            # Create pitch object with gender-specific settings
+            pitch = parselmouth.praat.call(sound, "To Pitch", 0.0, pitch_floor, pitch_ceiling)
             
             # Create point process using the pitch object
             point_process = parselmouth.praat.call([sound, pitch], 
@@ -60,7 +82,7 @@ def extract_jitter_shimmer(audio_path):
             # Make sure we have enough points for analysis
             num_points = parselmouth.praat.call(point_process, "Get number of points")
             if num_points < 3:
-                print(f"Warning: Too few voice points in {audio_path} ({num_points} points)")
+                print(f"Warning: Too few voice points in {path_to_use} ({num_points} points)")
                 return np.array([np.nan, np.nan], dtype=np.float32)
             
             # Extract jitter local - using correct parameters
@@ -69,24 +91,24 @@ def extract_jitter_shimmer(audio_path):
                                                      "Get jitter (local)", 
                                                      0.0, 0.0, 0.0001, 0.02, 1.3)
             except Exception as e:
-                print(f"Error getting jitter_local for {audio_path}: {e}")
+                print(f"Error getting jitter_local for {path_to_use}: {e}")
                 jitter_local = np.nan
             
             # Extract shimmer APQ11 - use the sound and point_process
             try:
                 shimmer_apq11 = parselmouth.praat.call([sound, point_process], 
-                                                      "Get shimmer (apq11)", 
-                                                      0.0, 0.0, 0.0001, 0.02, 1.3, 1.3)
+                                                      "Get shimmer (local)", 
+                                                      0.0, 0.0, 0.0001, 0.02, 1.3, 1.6)
             except Exception as e:
-                print(f"Error getting shimmer_apq11 for {audio_path}: {e}")
+                print(f"Error getting shimmer_apq11 for {path_to_use}: {e}")
                 shimmer_apq11 = np.nan
                 
         except Exception as e:
-            print(f"Error creating point process for {audio_path}: {e}")
+            print(f"Error creating point process for {path_to_use}: {e}")
             return np.array([np.nan, np.nan], dtype=np.float32)
             
     except Exception as e:
-        print(f"Error loading sound for {audio_path}: {e}")
+        print(f"Error loading sound for {path_to_use}: {e}")
         return np.array([np.nan, np.nan], dtype=np.float32)
 
     # Check for invalid values
