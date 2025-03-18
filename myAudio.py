@@ -4,6 +4,7 @@ import soundfile as sf
 import myConfig
 import numpy as np
 from pyannote.audio import Pipeline
+import os
 #import torch
 
 
@@ -45,12 +46,19 @@ def apply_noise_reduction(audio, sr=16000):
 
 # Applies noise reduction and normalization to the audio file
 def process_audio(file_path, sr=16000):
+    # Check if this file has already been processed
+    marker_file = f"{file_path}.processed"
+    if os.path.exists(marker_file):
+        return          
     audio, _ = load_audio(file_path, sr)
     target_rms = 0.05
     noise_reduced_audio = apply_noise_reduction(audio, sr)
     rms = np.sqrt(np.mean(noise_reduced_audio**2))
     audio_normalized = noise_reduced_audio * (target_rms / rms)
     sf.write(file_path, audio_normalized, sr)
+    # Create a marker file to indicate this file has been processed
+    with open(marker_file, 'w') as f:
+        f.write("1")  
 
 
 def pyannoteExtractProsodic(speech_segments):
@@ -61,10 +69,10 @@ def pyannoteExtractProsodic(speech_segments):
 
 
 # diarization = pipeline("audio_normalized.wav")
-vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
+""" vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
 speech_segments = vad('/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-85-58.wav')
-phonation_time, pauses, pause_durations, speech_rate = pyannoteExtractProsodic(speech_segments)
+phonation_time, pauses, pause_durations = pyannoteExtractProsodic(speech_segments)
 print(f"Phonation Time: {phonation_time:.2f} seconds")
 # Total number of pauses and the total pause duration
 print(f"Total Number of Pauses: {len(pauses)}")
-print(f"Total Pause Duration: {sum(pause_durations):.2f} seconds")
+print(f"Total Pause Duration: {sum(pause_durations):.2f} seconds") """

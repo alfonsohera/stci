@@ -18,7 +18,7 @@ hf_token = "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"
 
 # Define the classes and features to be used
 classes = ["HC", "MCI", "AD"]
-#Extracted features
+#Extracted prosodic features
 features = [
         "num_pauses",
         "total_pause_duration",
@@ -26,6 +26,9 @@ features = [
         "speech_rate",
         "mean_intensity"
     ]
+#extracted jitter and shimmer features
+jitter_shimmer_features = ["jitter_local", "shimmer_apq11"]
+
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {

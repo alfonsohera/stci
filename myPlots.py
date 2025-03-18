@@ -204,6 +204,6 @@ def visualize_audio_comparison(original_path, processed_path):
 
 
 # Example usage
-original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
+""" original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
 processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
-visualize_audio_comparison(original_audio_path, processed_audio_path)
+visualize_audio_comparison(original_audio_path, processed_audio_path) """

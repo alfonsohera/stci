@@ -179,9 +179,6 @@ def process_data(df):
         audio_file = row.file_path
         label = row.label
 
-        # Process audio files if the files were found when extracting
-        if not os.path.exists(audio_file):
-            myAudio.process_audio(audio_file)
         # Load processed audio
         audio, sr = myAudio.load_audio(audio_file)
 

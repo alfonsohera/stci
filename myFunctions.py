@@ -15,9 +15,12 @@ def preprocess_function(example):
     # Wav2Vec2 processing
     _, processor, _  = myModel.getModelDefinitions()
     inputs = processor(example["audio"]["array"], sampling_rate=example["audio"]["sampling_rate"], return_tensors="pt")
-    # Build prosodic features from :
-    #   Age, duration, num_pauses, total_pause_duration, phonation_time, speech_rate, mean_intensity
-    numeric_cols = ["Age", "duration", "num_pauses", "total_pause_duration", "phonation_time", "speech_rate", "mean_intensity"]
+    
+    # Build prosodic features including jitter and shimmer
+    numeric_cols = ["Age", "duration", "num_pauses", "total_pause_duration", 
+                   "phonation_time", "speech_rate", "mean_intensity", 
+                   "jitter_local", "shimmer_apq11"]  # Added jitter and shimmer
+                   
     feats = [example[col] for col in numeric_cols]
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
     inputs["label"] = example["label"]
@@ -41,6 +44,62 @@ def extract_class(file_path):
     elif filename.startswith("AD"):
         return "AD"  # Alzheimer's
     return "Unknown"
+
+def extract_jitter_shimmer(audio_path):
+    try:
+        sound = parselmouth.Sound(audio_path)
+        
+        try:
+            # Create pitch object first - this helps with jitter extraction
+            pitch = parselmouth.praat.call(sound, "To Pitch", 0.0, 75, 600)
+            
+            # Create point process using the pitch object
+            point_process = parselmouth.praat.call([sound, pitch], 
+                                                  "To PointProcess (cc)")
+            
+            # Make sure we have enough points for analysis
+            num_points = parselmouth.praat.call(point_process, "Get number of points")
+            if num_points < 3:
+                print(f"Warning: Too few voice points in {audio_path} ({num_points} points)")
+                return np.array([np.nan, np.nan], dtype=np.float32)
+            
+            # Extract jitter local - using correct parameters
+            try:
+                jitter_local = parselmouth.praat.call(point_process, 
+                                                     "Get jitter (local)", 
+                                                     0.0, 0.0, 0.0001, 0.02, 1.3)
+            except Exception as e:
+                print(f"Error getting jitter_local for {audio_path}: {e}")
+                jitter_local = np.nan
+            
+            # Extract shimmer APQ11 - use the sound and point_process
+            try:
+                shimmer_apq11 = parselmouth.praat.call([sound, point_process], 
+                                                      "Get shimmer (apq11)", 
+                                                      0.0, 0.0, 0.0001, 0.02, 1.3, 1.3)
+            except Exception as e:
+                print(f"Error getting shimmer_apq11 for {audio_path}: {e}")
+                shimmer_apq11 = np.nan
+                
+        except Exception as e:
+            print(f"Error creating point process for {audio_path}: {e}")
+            return np.array([np.nan, np.nan], dtype=np.float32)
+            
+    except Exception as e:
+        print(f"Error loading sound for {audio_path}: {e}")
+        return np.array([np.nan, np.nan], dtype=np.float32)
+
+    # Check for invalid values
+    feature_values = [jitter_local, shimmer_apq11]
+    
+    # Replace extreme values with NaN
+    for i, val in enumerate(feature_values):
+        if val is not None:
+            if np.isinf(val) or np.isnan(val) or abs(val) > 1e10:
+                feature_values[i] = np.nan
+                
+    # Convert to a NumPy array
+    return np.array(feature_values, dtype=np.float32)
 
 
 def extract_prosodic_features(audio_path):
@@ -195,6 +254,7 @@ def get_data_dir():
     """Helper function to get the consistent data directory path"""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
 
+
 def createDataframe():
     audio_files = []
     labels = []
@@ -243,12 +303,26 @@ def featureEngineering(data_df):
     data_df["Sex"], data_df["Age"] = zip(*data_df["file_path"].apply(extract_sex_age))
     # Remove possible duplicates
     data_df = data_df.loc[:, ~data_df.columns.duplicated()]
+    # Apply noise filtering and normalization to all audio files 
+    data_df["file_path"].apply(myAudio.process_audio)
     # Extract prosodic features
     prosodic_features = data_df["file_path"].apply(extract_prosodic_features)
-    # Convert the extracted feature arrays into separate columns
+    # Extract jitter and shimmer features
+    jitter_shimmer_features = data_df["file_path"].apply(extract_jitter_shimmer)
+    # Convert the extracted prosodic feature arrays into separate columns
     prosodic_df = pd.DataFrame(prosodic_features.tolist(), columns=myConfig.features)
+    # Convert the extracted jitter and shimmer feature arrays into separate columns
+    jitter_shimmer_df = pd.DataFrame(jitter_shimmer_features.tolist(), columns=myConfig.jitter_shimmer_features)
+
     # Merge the extracted features with the main DataFrame
-    data_df = pd.concat([data_df, prosodic_df], axis=1)
+    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df], axis=1)
+    
+    # Fill NaN values with the mean for jitter/shimmer features
+    for col in myConfig.jitter_shimmer_features:
+        if data_df[col].isna().any():
+            mean_val = data_df[col].mean()
+            data_df[col].fillna(mean_val, inplace=True)
+    
     # Drop duplicate columns (keep only one occurrence of each feature)
     data_df = data_df.loc[:, ~data_df.columns.duplicated()]    
     return data_df
