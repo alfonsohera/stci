@@ -11,7 +11,7 @@ import torch
 # Load the pretrained voice activity detection model
 vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
 # Move the model to the GPU if available
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 vad.to(device)
 
 
