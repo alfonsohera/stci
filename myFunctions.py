@@ -49,8 +49,7 @@ def extract_jitter_shimmer(audio_path):
     # Try to use original version if available
     original_path = audio_path.replace(".wav", "_original.wav")
     if os.path.exists(original_path):
-        #path_to_use = original_path                
-        path_to_use = audio_path
+        path_to_use = original_path
     else:
         path_to_use = audio_path
     
@@ -123,7 +122,6 @@ def extract_jitter_shimmer(audio_path):
     # Convert to a NumPy array
     return np.array(feature_values, dtype=np.float32)
 
-
 def extract_prosodic_features(audio_path):
     sound = parselmouth.Sound(audio_path)
     duration_sec = sound.duration
@@ -179,9 +177,7 @@ def extract_prosodic_features(audio_path):
 
     # ------------------------------------------------------
     # 3) Speech Energy & Intensity
-    # ------------------------------------------------------
-    mean_intensity = call(intensity, "Get mean", 0, 0)
-
+    # ------------------------------------------------------    
     # Approximate LTAS:
     spectrum = sound.to_spectrum()
     n_bands = 100
@@ -327,8 +323,8 @@ def featureEngineering(data_df):
     data_df = data_df.loc[:, ~data_df.columns.duplicated()]
     # Apply noise filtering and normalization to all audio files 
     data_df["file_path"].apply(myAudio.process_audio)
-    # Extract prosodic features
-    prosodic_features = data_df["file_path"].apply(extract_prosodic_features)
+    # Extract prosodic features    
+    prosodic_features = data_df["file_path"].apply(myAudio.extract_prosodic_features_vad)
     # Extract jitter and shimmer features
     jitter_shimmer_features = data_df["file_path"].apply(extract_jitter_shimmer)
     # Convert the extracted prosodic feature arrays into separate columns

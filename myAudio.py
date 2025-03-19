@@ -1,18 +1,18 @@
+import os
 import librosa
 import noisereduce as nr
 import soundfile as sf
-import myConfig
 import numpy as np
 from pyannote.audio import Pipeline
-import os
-#import torch
+import parselmouth
+from parselmouth.praat import call
+import torch
 
-
-#pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=myConfig.hf_token)
-vad_pipeline = Pipeline.from_pretrained("pyannote/voice-activity-detection", use_auth_token={myConfig.hf_token})
-
-#pipeline.to(torch.device("cuda"))
-#vad_pipeline.to(torch.device("cuda"))
+# Load the pretrained voice activity detection model
+vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
+# Move the model to the GPU if available
+device = "cuda" if torch.cuda.is_available() else "cpu"
+vad.to(device)
 
 
 def load_audio(file_path, target_sr=16000):
@@ -58,8 +58,7 @@ def process_audio(file_path, sr=16000):
     original_path = base_file_path.replace(".wav", "_original.wav")
     
     # If marker exists or original file exists, assume already processed
-    if os.path.exists(marker_file) or os.path.exists(original_path):
-        print(f"Skipping {os.path.basename(base_file_path)} - already processed")
+    if os.path.exists(marker_file) or os.path.exists(original_path):        
         return
     
     # Load the audio from original path
@@ -86,8 +85,26 @@ def pyannoteExtractProsodic(speech_segments):
     phonation_time = sum(seg.end - seg.start for seg in speech_segments.get_timeline())
     pauses = [(start, end) for (start, end) in speech_segments.get_timeline().gaps()]
     pause_durations = [end-start for start, end in pauses]
-    return phonation_time, pauses, pause_durations
+    speech_rate = phonation_time / (phonation_time + sum(pause_durations))
+    return phonation_time, len(pauses), sum(pause_durations), speech_rate
 
+
+def extract_prosodic_features_vad(audio_path):
+    sound = parselmouth.Sound(audio_path)
+    intensity = sound.to_intensity()
+    mean_intensity = call(intensity, "Get mean", 0, 0)  
+    speech_segments = vad(audio_path)
+    phonation_time, pauses, pause_durations, speech_rate = pyannoteExtractProsodic(speech_segments)
+
+    feature_values = [
+        pauses,
+        pause_durations,
+        phonation_time,
+        speech_rate,
+        mean_intensity,
+    ]
+    # Convert to a NumPy array (float32 for compactness/speed)
+    return np.array(feature_values, dtype=np.float32)
 
 # diarization = pipeline("audio_normalized.wav")
 """ vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
