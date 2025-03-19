@@ -54,18 +54,14 @@ def process_audio(file_path, sr=16000):
     base_file_path = file_path.replace("_original", "")
     
     # Check if this file has already been processed
-    marker_file = f"{base_file_path}.processed"
-    original_path = base_file_path.replace(".wav", "_original.wav")
+    marker_file = f"{base_file_path}.processed"    
     
-    # If marker exists or original file exists, assume already processed
-    if os.path.exists(marker_file) or os.path.exists(original_path):        
+    # If marker exists, assume already processed
+    if os.path.exists(marker_file) :
         return
     
     # Load the audio from original path
     audio, _ = load_audio(file_path, sr)
-    
-    # Save original version for jitter/shimmer analysis
-    sf.write(original_path, audio, sr)
     
     # Apply processing
     target_rms = 0.05
@@ -85,7 +81,13 @@ def pyannoteExtractProsodic(speech_segments):
     phonation_time = sum(seg.end - seg.start for seg in speech_segments.get_timeline())
     pauses = [(start, end) for (start, end) in speech_segments.get_timeline().gaps()]
     pause_durations = [end-start for start, end in pauses]
-    speech_rate = phonation_time / (phonation_time + sum(pause_durations))
+    
+    denominator = phonation_time + sum(pause_durations)
+    if denominator > 0:
+        speech_rate = phonation_time / denominator
+    else:
+        speech_rate = 0.0
+        
     return phonation_time, len(pauses), sum(pause_durations), speech_rate
 
 

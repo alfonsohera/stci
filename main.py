@@ -3,7 +3,7 @@ import sys
 import os
 from zipfile import ZipFile
 import torch
-
+import pandas as pd
 # <local imports>
 import myConfig
 import myData
@@ -76,15 +76,28 @@ def testModel(model, dataset):
 def main_fn():
     model_name, processor, base_model = myModel.getModelDefinitions()
     # Data extraction and feature engineering
-    myData.DownloadAndExtract()
-    data_df = myFunctions.createDataframe()
-    data_df = myFunctions.featureEngineering(data_df)
+    myData.DownloadAndExtract()    
+    # Check if dataframe.csv exists in the Data directory
+    data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
+    if os.path.exists(data_file_path):
+        # Load existing dataframe
+        data_df = pd.read_csv(data_file_path)
+        print(f"Loaded existing dataframe from {data_file_path}")
+    else:
+        # Create dataframe and save it
+        data_df = myFunctions.createDataframe()
+        data_df = myFunctions.featureEngineering(data_df)
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
+        # Save dataframe
+        data_df.to_csv(data_file_path, index=False)
+        print(f"Created and saved dataframe to {data_file_path}")
     _, weights_tensor = myFunctions.setWeightedCELoss()
     # Plots
     #myPlots.plotAgeDistribution(data_df)
     #myFunctions.createAgeSexStats(data_df)
     #myPlots.plotProsodicFeatures(data_df)
-    #myPlots.histogramProsodicFeatures(data_df)
+    myPlots.histogramProsodicFeatures(data_df)
     # Data splits
     train_df, val_df, test_df = myData.datasetSplit(data_df, 0.12)
     # Apply standard scaling to the splits
