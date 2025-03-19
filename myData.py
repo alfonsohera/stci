@@ -26,7 +26,7 @@ numeric_cols = [
     "total_pause_duration",
     "phonation_time",
     "speech_rate",
-    "mean_intensity"
+    "crestFactor_dB"
 ]
 
 
@@ -198,7 +198,7 @@ def process_data(df):
             "total_pause_duration": row.total_pause_duration,
             "phonation_time": row.phonation_time,
             "speech_rate": row.speech_rate,
-            "mean_intensity": row.mean_intensity
+            "crestFactor_dB": row.crestFactor_dB
         })
     return data
 

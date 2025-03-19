@@ -94,7 +94,7 @@ def plotProsodicFeatures(data_df):
 
 def histogramProsodicFeatures(data_df):
     # Define all features to plot (prosodic + jitter/shimmer)
-    all_features = myConfig.features + myConfig.jitter_shimmer_features
+    all_features = myConfig.features + myConfig.jitter_shimmer_features + myConfig.spectral_features
     
     # Calculate mean and std values for all features
     mean_values = data_df.groupby("class")[all_features].mean()
@@ -173,7 +173,14 @@ def histogramProsodicFeatures(data_df):
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
-
+        # Print spectral features
+        print("\n  -- Spectral Features --")
+        for feature in myConfig.spectral_features:
+            mean_val = mean_values.loc[cls, feature]
+            std_val = std_values.loc[cls, feature]
+            print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
+    print("\n")
+    
 
 def plot_waveform(audio_path, ax, title):
     """Plots the waveform of an audio file."""

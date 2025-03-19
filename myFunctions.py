@@ -18,8 +18,9 @@ def preprocess_function(example):
     
     # Build prosodic features including jitter and shimmer
     numeric_cols = ["Age", "duration", "num_pauses", "total_pause_duration", 
-                   "phonation_time", "speech_rate", "mean_intensity", 
-                   "jitter_local", "shimmer_apq11"]  # Added jitter and shimmer
+                   "phonation_time", "speech_rate", "crestFactor_dB", 
+                   "jitter_local", "shimmer_apq11", "skewness", "centre_of_gravity"]  
+                
                    
     feats = [example[col] for col in numeric_cols]
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
@@ -44,6 +45,16 @@ def extract_class(file_path):
     elif filename.startswith("AD"):
         return "AD"  # Alzheimer's
     return "Unknown"
+
+
+def extract_spectral_features(audio_path):
+    power = 2.
+    sound = parselmouth.Sound(audio_path)
+    spectrum = call(sound, "To Spectrum", "yes")    
+    centre_of_gravity = call(spectrum, "Get centre of gravity",power)
+    skewness = call(spectrum, "Get skewness",power)
+    feature_values = [skewness, centre_of_gravity]
+    return np.array(feature_values, dtype=np.float32)
 
 
 def extract_jitter_shimmer(audio_path):
@@ -323,13 +334,16 @@ def featureEngineering(data_df):
     data_df["file_path"].apply(myAudio.process_audio)
     # Extract prosodic features    
     prosodic_features = data_df["file_path"].apply(myAudio.extract_prosodic_features_vad)    
+    # Extract spectral features
+    spectral_features = data_df["file_path"].apply(extract_spectral_features)
     # Convert the extracted prosodic feature arrays into separate columns
     prosodic_df = pd.DataFrame(prosodic_features.tolist(), columns=myConfig.features)
     # Convert the extracted jitter and shimmer feature arrays into separate columns
     jitter_shimmer_df = pd.DataFrame(jitter_shimmer_features.tolist(), columns=myConfig.jitter_shimmer_features)
-
+    # Convert the extracted spectral feature arrays into separate columns
+    spectral_df = pd.DataFrame(spectral_features.tolist(), columns=myConfig.spectral_features)
     # Merge the extracted features with the main DataFrame
-    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df], axis=1)
+    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df, spectral_df], axis=1)    
     
     # Fill NaN values with the mean for jitter/shimmer features
     for col in myConfig.jitter_shimmer_features:

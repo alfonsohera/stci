@@ -24,11 +24,11 @@ features = [
         "total_pause_duration",
         "phonation_time",
         "speech_rate",
-        "mean_intensity"
+        "crestFactor_dB"
     ]
 #extracted jitter and shimmer features
 jitter_shimmer_features = ["jitter_local", "shimmer_local"]
-
+spectral_features = ["skewness", "centre_of_gravity"]
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {

@@ -59,16 +59,26 @@ def extract_and_report_features():
     Extract prosodic and acoustic features from audio files and 
     generate a statistical report of features across classes.
     """
-    if not check_data_exists():
-        return
-    
-    print("Extracting prosodic and acoustic features...")
-    # Use the filtered dataframe function to avoid duplicates
-    data_df = createDataframe_filtered()
-    data_df = myFunctions.featureEngineering(data_df)
-    
+
+    myData.DownloadAndExtract()    
+    # Check if dataframe.csv exists in the Data directory
+    data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
+    if os.path.exists(data_file_path):
+        # Load existing dataframe
+        data_df = pd.read_csv(data_file_path)
+        print(f"Loaded existing dataframe from {data_file_path}")
+    else:
+        # Create dataframe and save it
+        data_df = myFunctions.createDataframe()
+        data_df = myFunctions.featureEngineering(data_df)
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
+        # Save dataframe
+        data_df.to_csv(data_file_path, index=False)
+        print(f"Created and saved dataframe to {data_file_path}")
+        print("Extracting prosodic and acoustic features...")                
     # Create a combined list of features for reporting
-    all_features = myData.numeric_cols + myConfig.jitter_shimmer_features
+    all_features = myData.numeric_cols + myConfig.jitter_shimmer_features + myConfig.spectral_features
     
     # Group by class and compute statistics for all features
     stats = data_df.groupby('class')[all_features].agg(['mean', 'std'])
@@ -82,20 +92,14 @@ def extract_and_report_features():
     overall_stats = data_df[all_features].describe()
     print(overall_stats)
     
-    return stats
+    return data_df, stats
 
 
 def plot_feature_histograms():
     """
     Extract prosodic and acoustic features and create histogram plots.
     """
-    if not check_data_exists():
-        return
-    
-    print("Extracting prosodic and acoustic features...")
-    # Use the filtered dataframe function to avoid duplicates
-    data_df = createDataframe_filtered()
-    data_df = myFunctions.featureEngineering(data_df)
+    data_df, _ = extract_and_report_features()
     
     print("Generating histogram plots for prosodic features...")
     myPlots.histogramProsodicFeatures(data_df)
@@ -114,7 +118,8 @@ def main():
     args = parser.parse_args()
     
     # Set offline mode if specified
-    myConfig.running_offline = args.offline
+    #myConfig.running_offline = args.offline
+    myConfig.running_offline = True
     
     if args.action == 'report':
         extract_and_report_features()
