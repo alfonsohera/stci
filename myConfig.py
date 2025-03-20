@@ -14,6 +14,13 @@ os.makedirs(OUTPUT_PATH, exist_ok=True)
 LABEL_MAP = {"Healthy": 0, "MCI": 1, "AD": 2}
 checkpoint_dir = '/content/drive/MyDrive/ModelCheckpoints'
 total_words = 66 # Total number of words in the script
+
+reference_text = "En un lugar de la Mancha, de cuyo nombre no quiero acordarme, " \
+    "no ha mucho tiempo que vivía un hidalgo de los de lanza en astillero, adarga antigua, " \
+    "rocín flaco y galgo corredor. Una olla de algo más vaca que carnero, salpicón las más noches, " \
+    "duelos y quebrantos los sábados, lantejas los viernes, algún palomino de añadidura los domingos, " \
+    "consumían las tres partes de su hacienda"
+
 hf_token = "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"
 
 # Define the classes and features to be used
@@ -29,6 +36,7 @@ features = [
 #extracted jitter and shimmer features
 jitter_shimmer_features = ["jitter_local", "shimmer_local"]
 spectral_features = ["skewness", "centre_of_gravity"]
+speech2text_features = ["wer"]
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {

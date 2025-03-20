@@ -94,7 +94,7 @@ def plotProsodicFeatures(data_df):
 
 def histogramProsodicFeatures(data_df):
     # Define all features to plot (prosodic + jitter/shimmer)
-    all_features = myConfig.features + myConfig.jitter_shimmer_features + myConfig.spectral_features
+    all_features = myConfig.features + myConfig.jitter_shimmer_features + myConfig.spectral_features + myConfig.speech2text_features
     
     # Calculate mean and std values for all features
     mean_values = data_df.groupby("class")[all_features].mean()

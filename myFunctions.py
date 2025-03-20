@@ -5,6 +5,7 @@ import numpy as np
 import myConfig
 import myAudio
 import myModel
+import my_Speech2text
 import os
 from parselmouth.praat import call
 from sklearn.metrics import classification_report, confusion_matrix
@@ -342,8 +343,11 @@ def featureEngineering(data_df):
     jitter_shimmer_df = pd.DataFrame(jitter_shimmer_features.tolist(), columns=myConfig.jitter_shimmer_features)
     # Convert the extracted spectral feature arrays into separate columns
     spectral_df = pd.DataFrame(spectral_features.tolist(), columns=myConfig.spectral_features)
+    # Call speech2text to extract text from audio and calculate WER (potentially also speech rate)
+    speech2text_df = data_df["file_path"].apply(my_Speech2text.extract_speechFromtext)
+    speech2text_df = pd.DataFrame(speech2text_df.tolist(),columns=["wer", "transcript"])
     # Merge the extracted features with the main DataFrame
-    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df, spectral_df], axis=1)    
+    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df, spectral_df, speech2text_df], axis=1)    
     
     # Fill NaN values with the mean for jitter/shimmer features
     for col in myConfig.jitter_shimmer_features:

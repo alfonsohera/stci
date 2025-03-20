@@ -78,7 +78,7 @@ def extract_and_report_features():
         print(f"Created and saved dataframe to {data_file_path}")
         print("Extracting prosodic and acoustic features...")                
     # Create a combined list of features for reporting
-    all_features = myData.numeric_cols + myConfig.jitter_shimmer_features + myConfig.spectral_features
+    all_features = myData.numeric_cols + myConfig.jitter_shimmer_features + myConfig.spectral_features + myConfig.speech2text_features
     
     # Group by class and compute statistics for all features
     stats = data_df.groupby('class')[all_features].agg(['mean', 'std'])
