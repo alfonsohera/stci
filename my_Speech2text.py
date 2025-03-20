@@ -11,11 +11,13 @@ vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
 # Move the model to the GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 vad.to(device)
-# Load ASR model and move it to the same device
-model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
-asr_model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
-processor = Wav2Vec2Processor.from_pretrained(model_name)
 
+
+def load_asr_model(model_name):
+    # Load ASR model   
+    asr_model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
+    processor = Wav2Vec2Processor.from_pretrained(model_name)
+    return asr_model, processor
 
 
 def clean_text(text):
@@ -102,8 +104,7 @@ def compute_wer_with_transcript(audio_file, reference_text, asr_model, processor
         return 1.0, ""  # Return worst possible WER and empty transcript on error
 
 
-def extract_speechFromtext(audio_path):    
-    print(f"Extracting audio from file: {audio_path}")
+def extract_speechFromtext(audio_path, asr_model, processor):    
     try:
         wer, transcript = compute_wer_with_transcript(
             audio_path,

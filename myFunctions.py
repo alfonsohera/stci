@@ -322,32 +322,57 @@ def extract_sex_age(file_path):
 
 
 def featureEngineering(data_df):
-    # Add duration and class columns to the dataframe
-    data_df["duration"] = data_df["file_path"].apply(myAudio.compute_audio_length)
-    data_df["class"] = data_df["file_path"].apply(extract_class)
-    # Extract and add Sex and Age columns to the dataframe
-    data_df["Sex"], data_df["Age"] = zip(*data_df["file_path"].apply(extract_sex_age))
-    # Remove possible duplicates
-    data_df = data_df.loc[:, ~data_df.columns.duplicated()]
-    # Extract jitter and shimmer features with unprocessed audio
-    jitter_shimmer_features = data_df["file_path"].apply(extract_jitter_shimmer)    
-    # Apply noise filtering and normalization to all audio files 
-    data_df["file_path"].apply(myAudio.process_audio)
-    # Extract prosodic features    
-    prosodic_features = data_df["file_path"].apply(myAudio.extract_prosodic_features_vad)    
-    # Extract spectral features
-    spectral_features = data_df["file_path"].apply(extract_spectral_features)
-    # Convert the extracted prosodic feature arrays into separate columns
-    prosodic_df = pd.DataFrame(prosodic_features.tolist(), columns=myConfig.features)
-    # Convert the extracted jitter and shimmer feature arrays into separate columns
-    jitter_shimmer_df = pd.DataFrame(jitter_shimmer_features.tolist(), columns=myConfig.jitter_shimmer_features)
-    # Convert the extracted spectral feature arrays into separate columns
-    spectral_df = pd.DataFrame(spectral_features.tolist(), columns=myConfig.spectral_features)
-    # Call speech2text to extract text from audio and calculate WER (potentially also speech rate)
-    speech2text_df = data_df["file_path"].apply(my_Speech2text.extract_speechFromtext)
-    speech2text_df = pd.DataFrame(speech2text_df.tolist(),columns=["wer", "transcript"])
-    # Merge the extracted features with the main DataFrame
-    data_df = pd.concat([data_df, prosodic_df, jitter_shimmer_df, spectral_df, speech2text_df], axis=1)    
+    # Add columns for features
+    for feature in myConfig.features:
+        data_df[feature] = None
+    for feature in myConfig.jitter_shimmer_features:
+        data_df[feature] = None
+    for feature in myConfig.spectral_features:
+        data_df[feature] = None
+    for feature in myConfig.speech2text_features:
+        data_df[feature] = None
+    
+    # Load the ASR model and processor
+    model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
+    asr_model, processor = my_Speech2text.load_asr_model(model_name)
+    
+    # Process each file (with progress tracking)
+    total_files = len(data_df)
+    for idx, row in data_df.iterrows():
+        file_path = row['file_path']
+        print(f"Processing file {idx+1}/{total_files}: {file_path}")
+        
+        # Extract duration and class
+        data_df.at[idx, 'duration'] = myAudio.compute_audio_length(file_path)
+        data_df.at[idx, 'class'] = extract_class(file_path)
+        
+        # Extract Sex and Age
+        sex, age = extract_sex_age(file_path)
+        data_df.at[idx, 'Sex'] = sex
+        data_df.at[idx, 'Age'] = age
+        
+        # Extract jitter and shimmer features with unprocessed audio
+        jitter_shimmer = extract_jitter_shimmer(file_path)
+        for i, feature in enumerate(myConfig.jitter_shimmer_features):
+            data_df.at[idx, feature] = jitter_shimmer[i]
+        
+        # Apply noise filtering and normalization
+        myAudio.process_audio(file_path)
+        
+        # Extract prosodic features
+        prosodic = myAudio.extract_prosodic_features_vad(file_path)
+        for i, feature in enumerate(myConfig.features):
+            data_df.at[idx, feature] = prosodic[i]
+        
+        # Extract spectral features
+        spectral = extract_spectral_features(file_path)
+        for i, feature in enumerate(myConfig.spectral_features):
+            data_df.at[idx, feature] = spectral[i]
+        
+        # Extract WER and transcript from the audio
+        wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
+        data_df.at[idx, 'wer'] = wer
+        data_df.at[idx, 'transcript'] = transcript
     
     # Fill NaN values with the mean for jitter/shimmer features
     for col in myConfig.jitter_shimmer_features:
@@ -356,7 +381,7 @@ def featureEngineering(data_df):
             data_df[col].fillna(mean_val, inplace=True)
     
     # Drop duplicate columns (keep only one occurrence of each feature)
-    data_df = data_df.loc[:, ~data_df.columns.duplicated()]    
+    data_df = data_df.loc[:, ~data_df.columns.duplicated()]
     return data_df
 
 
