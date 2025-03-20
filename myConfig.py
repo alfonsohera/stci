@@ -31,7 +31,7 @@ features = [
         "total_pause_duration",
         "phonation_time",
         "speech_rate",
-        "crestFactor_dB"
+        "dynamic_range_db"
     ]
 #extracted jitter and shimmer features
 jitter_shimmer_features = ["jitter_local", "shimmer_local"]

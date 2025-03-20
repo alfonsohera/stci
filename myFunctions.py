@@ -19,7 +19,7 @@ def preprocess_function(example):
     
     # Build prosodic features including jitter and shimmer
     numeric_cols = ["Age", "duration", "num_pauses", "total_pause_duration", 
-                   "phonation_time", "speech_rate", "crestFactor_dB", 
+                   "phonation_time", "speech_rate", "dynamic_range_db", 
                    "jitter_local", "shimmer_apq11", "skewness", "centre_of_gravity"]  
                 
                    

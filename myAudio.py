@@ -123,20 +123,12 @@ def pyannoteExtractProsodic(speech_segments):
 
 def extract_prosodic_features_vad(audio_path):
     sound = parselmouth.Sound(audio_path)
-    rms_amplitude = sound.get_root_mean_square()
-    
-    # Handle if rms_amplitude is an array
-    if isinstance(rms_amplitude, np.ndarray) and rms_amplitude.size > 1:
-        rms_amplitude = np.mean(rms_amplitude)
-    
-    # Use np.max for safe handling of arrays
-    max_amplitude = np.max(np.abs(sound.values))
-    
-    # Now both should be scalars
-    if rms_amplitude == 0.0 or max_amplitude == 0.0:
-        crestFactor_dB = 0.0
-    else:
-        crestFactor_dB = 20 * np.log10(max_amplitude / rms_amplitude)
+    intensity = sound.to_intensity(time_step=0.01)
+    # --- Retrieve min/max dB (using Parabolic interpolation) ---
+    min_intensity = call(intensity, "Get minimum", 0, 0, "Parabolic")
+    max_intensity = call(intensity, "Get maximum", 0, 0, "Parabolic")
+    # --- Compute dynamic range in dB ---
+    dynamic_range_db = max_intensity - min_intensity
         
     speech_segments = vad(audio_path)
     phonation_time, pauses, pause_durations, speech_rate = pyannoteExtractProsodic(speech_segments)
@@ -146,7 +138,7 @@ def extract_prosodic_features_vad(audio_path):
         pause_durations,
         phonation_time,
         speech_rate,
-        crestFactor_dB,
+        dynamic_range_db,
     ]
     # Convert to a NumPy array (float32 for compactness/speed)
     return np.array(feature_values, dtype=np.float32)
