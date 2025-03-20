@@ -20,6 +20,36 @@ def load_audio(file_path, target_sr=16000):
     return np.array(audio, dtype=np.float32), sr  # Ensure float32 output
 
 
+def load_audio_segment(file_path, start_time, end_time, target_sr=16000):
+    """
+    Load a specific segment of an audio file between start_time and end_time.
+    
+    Args:
+        file_path (str): Path to the audio file
+        start_time (float): Start time of the segment in seconds
+        end_time (float): End time of the segment in seconds
+        target_sr (int): Target sample rate
+    
+    Returns:
+        numpy.ndarray: Audio segment as float32 NumPy array
+    """
+    # Load the complete audio file
+    audio, sr = load_audio(file_path, target_sr)
+    
+    # Calculate segment indices
+    start_idx = int(start_time * sr)
+    end_idx = int(end_time * sr)
+    
+    # Ensure indices are within bounds
+    start_idx = max(0, start_idx)
+    end_idx = min(len(audio), end_idx)
+    
+    # Extract the segment
+    segment = audio[start_idx:end_idx]
+    
+    return segment  # Return just the array as the tokenizer expects a single array
+
+
 # Function to compute audio duration
 def compute_audio_length(file_path):
     y, sr = librosa.load(file_path, sr=None)  # Load audio
