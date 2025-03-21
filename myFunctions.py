@@ -5,6 +5,7 @@ import numpy as np
 import myConfig
 import myAudio
 import myModel
+import myFunctions
 import my_Speech2text
 import os
 from parselmouth.praat import call
@@ -38,7 +39,7 @@ def chunk_input_sample(example, max_length=16000*100):  # 100 seconds max
 
 
 # Extract class labels from file names
-def extract_class(file_path):
+def extract_class(file_path):    
     filename = file_path.split("/")[-1]  # Extract filename
     if filename.startswith("HC"):
         return "HC"  # Healthy
@@ -277,14 +278,15 @@ def data_collator_fn(processor, features):
 
 def get_data_dir():
     """Helper function to get the consistent data directory path"""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+    return myConfig.DATA_DIR
 
 
 def createDataframe():
     audio_files = []
     labels = []
+    relative_paths = []  # Store relative paths
     
-    # Always use the Data directory at script level
+    # Always use the Data directory from myConfig
     data_dir = get_data_dir()
     
     for category in myConfig.LABEL_MAP.keys():
@@ -296,16 +298,18 @@ def createDataframe():
         for file in os.listdir(category_path):
             if file.endswith(".wav"):
                 audio_files.append(os.path.join(category_path, file))
+                # Store only the relative path (category/filename)
+                relative_paths.append(os.path.join(category, file))
                 labels.append(myConfig.LABEL_MAP[category])
 
     if not audio_files:
         print(f"Warning: No audio files found in the data directory")
     
-    df = pd.DataFrame({"file_path": audio_files, "label": labels})
+    df = pd.DataFrame({"file_path": relative_paths, "label": labels})
     return df
 
 
-def extract_sex_age(file_path):
+def extract_sex_age(file_path):    
     try:
         filename = file_path.split("/")[-1]  # Get filename from path
         parts = filename.replace(".wav", "").split("-")  # Split by '-'
@@ -319,59 +323,6 @@ def extract_sex_age(file_path):
 
     return None, None  # Default if extraction fails
 
-
-def process_all_audio_files(file_paths):
-    """Process all audio files in parallel, skipping already processed ones"""
-    # First, filter out already processed files
-    files_needing_processing = []
-    for file_path in file_paths:
-        base_file_path = file_path.replace("_original", "")
-        marker_file = f"{base_file_path}.processed"
-        if not os.path.exists(marker_file):
-            files_needing_processing.append(file_path)
-    
-    if not files_needing_processing:
-        print("All files already processed")
-        return
-    
-    print(f"Processing {len(files_needing_processing)} audio files in parallel")
-    
-    # Process files in parallel
-    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-        list(executor.map(myAudio.process_audio, files_needing_processing))
-
-
-def extract_features_for_file(file_info):
-    idx, file_path = file_info
-    result = {}
-    
-    # Extract metadata features (lightweight)
-    result['duration'] = myAudio.compute_audio_length(file_path)
-    result['class'] = extract_class(file_path)
-    sex, age = extract_sex_age(file_path)
-    result['Sex'] = sex
-    result['Age'] = age
-    
-    # Extract computationally intensive features
-    # Create Sound object ONCE for all Parselmouth operations
-    sound = parselmouth.Sound(file_path)
-    
-    # Extract jitter and shimmer using the sound object
-    jitter_shimmer = extract_jitter_shimmer(sound, file_path)
-    for i, feature in enumerate(myConfig.jitter_shimmer_features):
-        result[feature] = jitter_shimmer[i]
-    
-    # Extract prosodic features (passing sound object would require modification)
-    prosodic = myAudio.extract_prosodic_features_vad(file_path)
-    for i, feature in enumerate(myConfig.features):
-        result[feature] = prosodic[i]
-    
-    # Extract spectral features using the sound object
-    spectral = extract_spectral_features(sound)
-    for i, feature in enumerate(myConfig.spectral_features):
-        result[feature] = spectral[i]
-    
-    return idx, result
 
 def featureEngineering(data_df):
     """Feature engineering with proper CPU/GPU separation"""
@@ -401,7 +352,9 @@ def featureEngineering(data_df):
 def cpu_worker(file_info):
     idx, file_path = file_info
     result = {}
-    
+    # Resolve the audio path passed to the extraction functions
+    file_path = myFunctions.resolve_audio_path(file_path)
+
     try:
         # 1. Extract metadata features
         result['duration'] = myAudio.compute_audio_length(file_path)
@@ -463,6 +416,8 @@ def extract_gpu_features(data_df):
     print("Extracting VAD-based prosodic features...")
     for idx, row in data_df.iterrows():
         file_path = row['file_path']
+        # Resolve the audio path passed to the extraction functions
+        file_path = myFunctions.resolve_audio_path(file_path)
         try:
             prosodic = myAudio.extract_prosodic_features_vad(file_path)
             for i, feature in enumerate(myConfig.features):
@@ -493,6 +448,8 @@ def extract_gpu_features(data_df):
             
             for idx, row in batch_files.iterrows():
                 file_path = row['file_path']
+                # Resolve the audio path passed to the extraction functions
+                file_path = myFunctions.resolve_audio_path(file_path)
                 try:
                     wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
                     data_df.at[idx, 'wer'] = wer
@@ -536,4 +493,47 @@ def createAgeSexStats(data_df):
     most_prevalent_sex = data_df.groupby("class")["Sex"].agg(lambda x: x.mode()[0])
     print("Most prevalent sex per class")
     print(most_prevalent_sex)
+
+def resolve_audio_path(relative_path):
+    """
+    Convert relative audio file path to absolute path based on environment
+    
+    Args:
+        relative_path (str): Relative path like 'Healthy/HC-W-79-180.wav'
+        
+    Returns:
+        str: Absolute path to the audio file
+    """
+    data_dir = get_data_dir()
+    return os.path.join(data_dir, relative_path)
+
+def convert_absolute_to_relative_paths(dataframe):
+    """
+    Convert absolute paths in dataframe to relative paths
+    
+    Args:
+        dataframe (pd.DataFrame): Dataframe with absolute paths
+        
+    Returns:
+        pd.DataFrame: Dataframe with relative paths
+    """
+    # Function to extract relative path
+    def extract_relative_path(abs_path):
+        # Look for the pattern "Data/Category/filename.wav"
+        parts = abs_path.split('/')
+        try:
+            # Find "Data" directory in the path
+            data_idx = parts.index("Data")
+            # Return "Category/filename.wav"
+            return '/'.join(parts[data_idx+1:])
+        except ValueError:
+            # If "Data" not found, just return the filename
+            return os.path.basename(abs_path)
+    
+    # Make a copy to avoid modifying the original
+    df_copy = dataframe.copy()
+    # Apply conversion to file_path column
+    df_copy['file_path'] = df_copy['file_path'].apply(extract_relative_path)
+    
+    return df_copy
 

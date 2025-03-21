@@ -8,7 +8,6 @@ import pandas as pd
 import myConfig
 import myData
 import myModel
-import myPlots
 import myFunctions
 import myModel
 # </local imports>
@@ -74,18 +73,31 @@ def testModel(model, dataset):
 
 
 def main_fn():
+    # Ensure paths are configured correctly
+    path_config = myConfig.configure_paths()
+    for key, path in path_config.items():
+        setattr(myConfig, key, path)
+    
     model_name, processor, base_model = myModel.getModelDefinitions()
     # Data extraction and feature engineering
     myData.DownloadAndExtract()    
+    
     # Check if dataframe.csv exists in the Data directory
-    data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
+    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
     if os.path.exists(data_file_path):
         # Load existing dataframe
         data_df = pd.read_csv(data_file_path)
         print(f"Loaded existing dataframe from {data_file_path}")
+        
+        # Check if paths are absolute and convert if needed
+        if '/' in data_df['file_path'].iloc[0] and not data_df['file_path'].iloc[0].startswith(('Healthy', 'MCI', 'AD')):
+            print("Converting absolute paths to relative paths...")
+            data_df = myFunctions.convert_absolute_to_relative_paths(data_df)
+            # Save the updated dataframe
+            data_df.to_csv(data_file_path, index=False)
     else:
         # Create dataframe and save it
-        data_df = myFunctions.createDataframe()
+        data_df = myFunctions.createDataframe()        
         data_df = myFunctions.featureEngineering(data_df)
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
@@ -93,11 +105,7 @@ def main_fn():
         data_df.to_csv(data_file_path, index=False)
         print(f"Created and saved dataframe to {data_file_path}")
     _, weights_tensor = myFunctions.setWeightedCELoss()
-    # Plots
-    #myPlots.plotAgeDistribution(data_df)
-    #myFunctions.createAgeSexStats(data_df)
-    #myPlots.plotProsodicFeatures(data_df)
-    myPlots.histogramProsodicFeatures(data_df)
+    # Feature engineering    
     # Data splits
     train_df, val_df, test_df = myData.datasetSplit(data_df, 0.12)
     # Apply standard scaling to the splits
@@ -110,12 +118,12 @@ def main_fn():
     model, optimizer = myModel.loadModel()
     # Create trainer
     trainer = myModel.createTrainer(model, optimizer, dataset, weights_tensor)
-    """ trainer.train()
+    trainer.train()
     torch.save(model.state_dict(), "./wav2vec2_classification/model.pth")
     processor.save_pretrained("./wav2vec2_classification")
     if myConfig.training_from_scratch:
         model.config.save_pretrained(myConfig.checkpoint_dir)
-    print("Training complete! Model saved to ./wav2vec2_classification")  """
+    print("Training complete! Model saved to ./wav2vec2_classification")
 
 
 def test():
@@ -124,14 +132,14 @@ def test():
     testModel(model, dataset)
 
 
-args = sys.argv[1:]
-if len(args) > 0:
-    mode = args[0]
-    if mode == 'offline':
-        myConfig.running_offline = True
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    if len(args) > 0:
+        mode = args[0]
+        if mode == 'offline':
+            myConfig.running_offline = True
+        else:
+            myConfig.running_offline = False
     else:
-        myConfig.running_offline = False
-else:
-    myConfig.running_offline = True
-
-main_fn()
+        myConfig.running_offline = True
+    main_fn()

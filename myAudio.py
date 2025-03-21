@@ -7,6 +7,7 @@ from pyannote.audio import Pipeline
 import parselmouth
 from parselmouth.praat import call
 import torch
+import myFunctions
 
 # Load the pretrained voice activity detection model
 vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
@@ -15,7 +16,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 vad.to(device)
 
 
-def load_audio(file_path, target_sr=16000):
+def load_audio(file_path, target_sr=16000):        
     audio, sr = librosa.load(file_path, sr=target_sr)
     return np.array(audio, dtype=np.float32), sr  # Ensure float32 output
 
@@ -33,7 +34,7 @@ def load_audio_segment(file_path, start_time, end_time, target_sr=16000):
     Returns:
         numpy.ndarray: Audio segment as float32 NumPy array
     """
-    # Load the complete audio file
+    # Load the complete audio file    
     audio, sr = load_audio(file_path, target_sr)
     
     # Calculate segment indices
@@ -51,7 +52,7 @@ def load_audio_segment(file_path, start_time, end_time, target_sr=16000):
 
 
 # Function to compute audio duration
-def compute_audio_length(file_path):
+def compute_audio_length(file_path):    
     y, sr = librosa.load(file_path, sr=None)  # Load audio
     return len(y) / sr  # Compute duration in seconds
 
@@ -79,7 +80,7 @@ def process_audio(file_path, sr=16000):
     Applies noise reduction and normalization to the audio file
     Creates both processed and original versions
     Uses marker files to prevent repeated processing
-    """
+    """    
     # Standardize path handling
     base_file_path = file_path.replace("_original", "")
     
@@ -121,7 +122,7 @@ def pyannoteExtractProsodic(speech_segments):
     return phonation_time, len(pauses), sum(pause_durations), speech_rate
 
 
-def extract_prosodic_features_vad(audio_path):
+def extract_prosodic_features_vad(audio_path):    
     sound = parselmouth.Sound(audio_path)
     intensity = sound.to_intensity(time_step=0.01)
     # --- Retrieve min/max dB (using Parabolic interpolation) ---

@@ -3,6 +3,7 @@ from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import torch
 import myAudio
 import myConfig
+import myFunctions
 import pandas as pd
 import editdistance
 import re
@@ -27,11 +28,12 @@ def clean_text(text):
     return text.strip()
 
 
-def compute_wer_with_transcript(audio_file, reference_text, asr_model, processor):
-    """Compute Word Error Rate and return transcript between reference text and ASR output."""
+def compute_wer_with_transcript(file_path, reference_text, asr_model, processor):
+    """Compute Word Error Rate and return transcript between reference text and ASR output."""    
+    
     try:
         # 1) Voice Activity Detection
-        speech_segments = vad(audio_file)                
+        speech_segments = vad(file_path)                
         transcript = []
         
         # Check if we have any valid segments
@@ -45,7 +47,7 @@ def compute_wer_with_transcript(audio_file, reference_text, asr_model, processor
                 continue                
             try:
                 # Load audio segment
-                audio_chunk = myAudio.load_audio_segment(audio_file, start_time, end_time)                
+                audio_chunk = myAudio.load_audio_segment(file_path, start_time, end_time)                
                 # Skip empty or very small segments
                 if len(audio_chunk) < 160:  # Less than 10ms at 16kHz
                     continue                    
@@ -71,7 +73,7 @@ def compute_wer_with_transcript(audio_file, reference_text, asr_model, processor
                 continue        
         # If no valid transcription was generated
         if not transcript or segment_count == 0:
-            print(f"No valid speech segments found in {audio_file}")
+            print(f"No valid speech segments found in {file_path}")
             return 1.0, ""  # Return worst possible WER and empty transcript            
         # Combine segments
         audio_transcript = " ".join(transcript).lower()
@@ -104,7 +106,7 @@ def compute_wer_with_transcript(audio_file, reference_text, asr_model, processor
         return 1.0, ""  # Return worst possible WER and empty transcript on error
 
 
-def extract_speechFromtext(audio_path, asr_model, processor):    
+def extract_speechFromtext(audio_path, asr_model, processor):        
     try:
         wer, transcript = compute_wer_with_transcript(
             audio_path,
@@ -137,16 +139,17 @@ if __name__ == "__main__":
     #count = 0    
     for index, row in data_df.iterrows():
         audio_file = row['file_path']
-        print(f"Processing file {index+1}/{len(data_df)}: {audio_file}")
+        file_path = myFunctions.resolve_audio_path(audio_file)
+        print(f"Processing file {index+1}/{len(data_df)}: {file_path}")
         try:
             # Modified compute_wer function to return both WER and transcript
-            reading_wer, transcript = compute_wer_with_transcript(audio_file, myConfig.reference_text, asr_model, processor)
+            reading_wer, transcript = compute_wer_with_transcript(file_path, myConfig.reference_text, asr_model, processor)
             # Add WER score and transcript to the dataframe
             data_df.at[index, 'wer_score'] = reading_wer
             data_df.at[index, 'transcript'] = transcript
-            scores.append((audio_file, reading_wer))
+            scores.append((file_path, reading_wer))
         except Exception as e:
-            print(f"Error processing {audio_file}: {str(e)}")
+            print(f"Error processing {file_path}: {str(e)}")
             data_df.at[index, 'wer_score'] = -1  # Mark as error
             data_df.at[index, 'transcript'] = "ERROR: " + str(e)
         

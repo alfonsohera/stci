@@ -1,19 +1,43 @@
 import os
 from transformers import TrainingArguments
 
-# Define data directory path
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+# Dynamic path configuration
+def configure_paths():
+    """Set up all path variables based on current environment"""
+    # Find the root directory (repository root)
+    current_file_path = os.path.abspath(__file__)
+    ROOT_DIR = os.path.dirname(current_file_path)
+    
+    # Define consistent data paths relative to ROOT_DIR
+    DATA_DIR = os.path.join(ROOT_DIR, "Data")
+    OUTPUT_PATH = os.path.join(ROOT_DIR, "ProcessedFiles")
+    checkpoint_dir = os.path.join(ROOT_DIR, "checkpoints")
+    
+    # Ensure directories exist
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_PATH, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    return {
+        "ROOT_DIR": ROOT_DIR,
+        "DATA_DIR": DATA_DIR,
+        "OUTPUT_PATH": OUTPUT_PATH,
+        "checkpoint_dir": checkpoint_dir
+    }
 
-running_offline = False
-## Misc definitions
+# Initialize with default values
+running_offline = True  # Default to offline mode
+paths = configure_paths()
+ROOT_DIR = paths["ROOT_DIR"]
+DATA_DIR = paths["DATA_DIR"] 
+OUTPUT_PATH = paths["OUTPUT_PATH"]
+checkpoint_dir = paths["checkpoint_dir"]
+
+# Other config variables
 training_from_scratch = True
-ROOT_DIR = os.getcwd()
-DATASET_PATH = DATA_DIR  # Root folder where audio files are stored
-OUTPUT_PATH = os.path.join(ROOT_DIR, "ProcessedFiles")
-os.makedirs(OUTPUT_PATH, exist_ok=True)
+DATASET_PATH = DATA_DIR
 LABEL_MAP = {"Healthy": 0, "MCI": 1, "AD": 2}
-checkpoint_dir = '/content/drive/MyDrive/ModelCheckpoints'
-total_words = 66 # Total number of words in the script
+total_words = 66
 
 reference_text = "En un lugar de la Mancha, de cuyo nombre no quiero acordarme, " \
     "no ha mucho tiempo que vivía un hidalgo de los de lanza en astillero, adarga antigua, " \

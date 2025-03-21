@@ -32,7 +32,7 @@ numeric_cols = [
 
 def DownloadAndExtract():
     # Always use Data directory at script level
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+    data_dir = myConfig.DATA_DIR
     
     # Define paths for category folders within data_dir
     healthy_dir = os.path.join(data_dir, "Healthy")
@@ -177,10 +177,11 @@ def process_data(df):
     data = []
     for row in tqdm(df.itertuples(), total=len(df)):
         audio_file = row.file_path
+        file_path = myFunctions.resolve_audio_path(audio_file)
         label = row.label
 
         # Load processed audio
-        audio, sr = myAudio.load_audio(audio_file)
+        audio, sr = myAudio.load_audio(file_path)
 
         # Build a dictionary with everything you need
         # -> the audio array, sampling rate, path, label, plus numeric features
@@ -188,7 +189,7 @@ def process_data(df):
             "audio": {
                 "array": np.array(audio, dtype=np.float32),
                 "sampling_rate": sr,
-                "path": audio_file
+                "path": file_path
             },
             "label": label,
             # For each numeric feature, store the standardized value
