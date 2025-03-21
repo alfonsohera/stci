@@ -10,7 +10,8 @@ import os
 from parselmouth.praat import call
 from sklearn.metrics import classification_report, confusion_matrix
 from torch.nn.utils.rnn import pad_sequence
-
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
 def preprocess_function(example):
     # Wav2Vec2 processing
@@ -48,9 +49,8 @@ def extract_class(file_path):
     return "Unknown"
 
 
-def extract_spectral_features(audio_path):
-    power = 2.
-    sound = parselmouth.Sound(audio_path)
+def extract_spectral_features(sound):
+    power = 2.    
     spectrum = call(sound, "To Spectrum", "yes")    
     centre_of_gravity = call(spectrum, "Get centre of gravity",power)
     skewness = call(spectrum, "Get skewness",power)
@@ -58,7 +58,7 @@ def extract_spectral_features(audio_path):
     return np.array(feature_values, dtype=np.float32)
 
 
-def extract_jitter_shimmer(audio_path):
+def extract_jitter_shimmer(sound, audio_path):
     path_to_use = audio_path
     
     # Extract gender from filename to set appropriate pitch range
@@ -76,8 +76,7 @@ def extract_jitter_shimmer(audio_path):
         pitch_floor = 75
         pitch_ceiling = 600
         
-    try:
-        sound = parselmouth.Sound(path_to_use)        
+    try:                
         try:
             # Create pitch object with gender-specific settings
             pitch = parselmouth.praat.call(sound, "To Pitch", 0.0, pitch_floor, pitch_ceiling)
@@ -321,69 +320,194 @@ def extract_sex_age(file_path):
     return None, None  # Default if extraction fails
 
 
+def process_all_audio_files(file_paths):
+    """Process all audio files in parallel, skipping already processed ones"""
+    # First, filter out already processed files
+    files_needing_processing = []
+    for file_path in file_paths:
+        base_file_path = file_path.replace("_original", "")
+        marker_file = f"{base_file_path}.processed"
+        if not os.path.exists(marker_file):
+            files_needing_processing.append(file_path)
+    
+    if not files_needing_processing:
+        print("All files already processed")
+        return
+    
+    print(f"Processing {len(files_needing_processing)} audio files in parallel")
+    
+    # Process files in parallel
+    with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+        list(executor.map(myAudio.process_audio, files_needing_processing))
+
+
+def extract_features_for_file(file_info):
+    idx, file_path = file_info
+    result = {}
+    
+    # Extract metadata features (lightweight)
+    result['duration'] = myAudio.compute_audio_length(file_path)
+    result['class'] = extract_class(file_path)
+    sex, age = extract_sex_age(file_path)
+    result['Sex'] = sex
+    result['Age'] = age
+    
+    # Extract computationally intensive features
+    # Create Sound object ONCE for all Parselmouth operations
+    sound = parselmouth.Sound(file_path)
+    
+    # Extract jitter and shimmer using the sound object
+    jitter_shimmer = extract_jitter_shimmer(sound, file_path)
+    for i, feature in enumerate(myConfig.jitter_shimmer_features):
+        result[feature] = jitter_shimmer[i]
+    
+    # Extract prosodic features (passing sound object would require modification)
+    prosodic = myAudio.extract_prosodic_features_vad(file_path)
+    for i, feature in enumerate(myConfig.features):
+        result[feature] = prosodic[i]
+    
+    # Extract spectral features using the sound object
+    spectral = extract_spectral_features(sound)
+    for i, feature in enumerate(myConfig.spectral_features):
+        result[feature] = spectral[i]
+    
+    return idx, result
+
 def featureEngineering(data_df):
-    # Add columns for features
-    for feature in myConfig.features:
-        data_df[feature] = None
-    for feature in myConfig.jitter_shimmer_features:
-        data_df[feature] = None
-    for feature in myConfig.spectral_features:
-        data_df[feature] = None
-    for feature in myConfig.speech2text_features:
-        data_df[feature] = None
+    """Feature engineering with proper CPU/GPU separation"""
+    # Initialize feature columns
+    for feature_list in [myConfig.features, myConfig.jitter_shimmer_features, 
+                         myConfig.spectral_features, myConfig.speech2text_features]:
+        for feature in feature_list:
+            data_df[feature] = None
     
-    # Load the ASR model and processor
-    model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
-    asr_model, processor = my_Speech2text.load_asr_model(model_name)
+    # PHASE 1: CPU-only processing in parallel
+    extract_cpu_features(data_df)
     
-    # Process each file (with progress tracking)
-    total_files = len(data_df)
-    for idx, row in data_df.iterrows():
-        file_path = row['file_path']
-        print(f"Processing file {idx+1}/{total_files}: {file_path}")
-        
-        # Extract duration and class
-        data_df.at[idx, 'duration'] = myAudio.compute_audio_length(file_path)
-        data_df.at[idx, 'class'] = extract_class(file_path)
-        
-        # Extract Sex and Age
-        sex, age = extract_sex_age(file_path)
-        data_df.at[idx, 'Sex'] = sex
-        data_df.at[idx, 'Age'] = age
-        
-        # Extract jitter and shimmer features with unprocessed audio
-        jitter_shimmer = extract_jitter_shimmer(file_path)
-        for i, feature in enumerate(myConfig.jitter_shimmer_features):
-            data_df.at[idx, feature] = jitter_shimmer[i]
-        
-        # Apply noise filtering and normalization
-        myAudio.process_audio(file_path)
-        
-        # Extract prosodic features
-        prosodic = myAudio.extract_prosodic_features_vad(file_path)
-        for i, feature in enumerate(myConfig.features):
-            data_df.at[idx, feature] = prosodic[i]
-        
-        # Extract spectral features
-        spectral = extract_spectral_features(file_path)
-        for i, feature in enumerate(myConfig.spectral_features):
-            data_df.at[idx, feature] = spectral[i]
-        
-        # Extract WER and transcript from the audio
-        wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
-        data_df.at[idx, 'wer'] = wer
-        data_df.at[idx, 'transcript'] = transcript
+    # PHASE 2: GPU-dependent processing sequentially
+    extract_gpu_features(data_df)
     
+    # Post-processing
     # Fill NaN values with the mean for jitter/shimmer features
     for col in myConfig.jitter_shimmer_features:
         if data_df[col].isna().any():
             mean_val = data_df[col].mean()
             data_df[col].fillna(mean_val, inplace=True)
     
-    # Drop duplicate columns (keep only one occurrence of each feature)
+    # Drop duplicate columns
     data_df = data_df.loc[:, ~data_df.columns.duplicated()]
     return data_df
 
+def cpu_worker(file_info):
+    idx, file_path = file_info
+    result = {}
+    
+    try:
+        # 1. Extract metadata features
+        result['duration'] = myAudio.compute_audio_length(file_path)
+        result['class'] = extract_class(file_path)
+        sex, age = extract_sex_age(file_path)
+        result['Sex'] = sex
+        result['Age'] = age
+        
+        # 2. Extract jitter and shimmer (BEFORE audio processing)
+        sound = parselmouth.Sound(file_path)
+        jitter_shimmer = extract_jitter_shimmer(sound, file_path)
+        for i, feature in enumerate(myConfig.jitter_shimmer_features):
+            result[feature] = jitter_shimmer[i]
+        
+        # 3. Process the audio file (if needed)
+        base_file_path = file_path.replace("_original", "")
+        marker_file = f"{base_file_path}.processed"
+        if not os.path.exists(marker_file):
+            myAudio.process_audio(file_path)
+        
+        # 4. Extract spectral features (AFTER audio processing)
+        # Re-load sound if needed (in case file was processed)
+        if not os.path.exists(marker_file):
+            sound = parselmouth.Sound(file_path)
+        spectral = extract_spectral_features(sound)
+        for i, feature in enumerate(myConfig.spectral_features):
+            result[feature] = spectral[i]
+    except Exception as e:
+        print(f"Error processing CPU features for {file_path}: {str(e)}")
+        # Set default values for failed features
+        for feature_list in [myConfig.jitter_shimmer_features, myConfig.spectral_features]:
+            for feature in feature_list:
+                result[feature] = np.nan
+        
+    return idx, result
+
+def extract_cpu_features(data_df):
+    """Extract all CPU-bound features in parallel"""
+    # Create work items
+    work_items = list(enumerate(data_df['file_path']))
+    num_workers = min(multiprocessing.cpu_count(), 8)
+    print(f"Extracting CPU-only features using {num_workers} worker processes")
+    
+    # Process in parallel
+    results = []
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for result in executor.map(cpu_worker, work_items):
+            results.append(result)
+            if (len(results) % 10) == 0 or len(results) == len(work_items):
+                print(f"Processed CPU features: {len(results)}/{len(work_items)} files")
+    
+    # Update dataframe
+    for idx, result in results:
+        for key, value in result.items():
+            data_df.at[idx, key] = value
+    
+def extract_gpu_features(data_df):
+    """Extract all GPU-dependent features sequentially"""
+    print("Extracting GPU-dependent features:")
+    
+    # 1. Extract VAD-based prosodic features
+    print("Extracting VAD-based prosodic features...")
+    for idx, row in data_df.iterrows():
+        file_path = row['file_path']
+        try:
+            prosodic = myAudio.extract_prosodic_features_vad(file_path)
+            for i, feature in enumerate(myConfig.features):
+                data_df.at[idx, feature] = prosodic[i]
+        except Exception as e:
+            print(f"Error extracting prosodic features for {file_path}: {str(e)}")
+            for feature in myConfig.features:
+                data_df.at[idx, feature] = np.nan
+    
+    # 2. Load ASR model for speech-to-text
+    print("Loading ASR model...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
+    asr_model, processor = my_Speech2text.load_asr_model(model_name, device)
+    
+    # Set model to evaluation mode
+    asr_model.eval()
+    
+    # 3. Extract speech-to-text features in small batches
+    print("Extracting speech-to-text features...")
+    batch_size = 8  # Adjust based on GPU memory
+    total_files = len(data_df)
+    
+    with torch.no_grad():
+        for i in range(0, total_files, batch_size):
+            batch_files = data_df.iloc[i:i+batch_size]
+            print(f"Processing batch {i//batch_size + 1}/{(total_files + batch_size - 1)//batch_size}")
+            
+            for idx, row in batch_files.iterrows():
+                file_path = row['file_path']
+                try:
+                    wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
+                    data_df.at[idx, 'wer'] = wer
+                    data_df.at[idx, 'transcript'] = transcript
+                except Exception as e:
+                    print(f"Error in speech-to-text: {str(e)}")
+                    data_df.at[idx, 'wer'] = -1
+                    data_df.at[idx, 'transcript'] = f"ERROR: {str(e)}"
+            
+            # Free GPU memory between batches
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 def setWeightedCELoss():
     # Compute original class weights

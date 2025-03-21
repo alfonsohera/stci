@@ -13,7 +13,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 vad.to(device)
 
 
-def load_asr_model(model_name):
+def load_asr_model(model_name, device):
     # Load ASR model   
     asr_model = Wav2Vec2ForCTC.from_pretrained(model_name).to(device)
     processor = Wav2Vec2Processor.from_pretrained(model_name)
