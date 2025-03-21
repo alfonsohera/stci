@@ -381,10 +381,10 @@ def featureEngineering(data_df):
         for feature in feature_list:
             data_df[feature] = None
     
-    # PHASE 1: CPU-only processing in parallel
+    # PHASE 1: CPU-only processing 
     extract_cpu_features(data_df)
     
-    # PHASE 2: GPU-dependent processing sequentially
+    # PHASE 2: GPU-dependent processing 
     extract_gpu_features(data_df)
     
     # Post-processing
@@ -409,23 +409,20 @@ def cpu_worker(file_info):
         sex, age = extract_sex_age(file_path)
         result['Sex'] = sex
         result['Age'] = age
+                        
+        # 2. Process the audio file (if needed)
+        base_file_path = file_path.replace("_original", "")
+        marker_file = f"{base_file_path}.processed"
+        if not os.path.exists(marker_file):
+            myAudio.process_audio(file_path)        
         
-        # 2. Extract jitter and shimmer (BEFORE audio processing)
+        # 3. Extract jitter and shimmer 
         sound = parselmouth.Sound(file_path)
         jitter_shimmer = extract_jitter_shimmer(sound, file_path)
         for i, feature in enumerate(myConfig.jitter_shimmer_features):
             result[feature] = jitter_shimmer[i]
         
-        # 3. Process the audio file (if needed)
-        base_file_path = file_path.replace("_original", "")
-        marker_file = f"{base_file_path}.processed"
-        if not os.path.exists(marker_file):
-            myAudio.process_audio(file_path)
-        
-        # 4. Extract spectral features (AFTER audio processing)
-        # Re-load sound if needed (in case file was processed)
-        if not os.path.exists(marker_file):
-            sound = parselmouth.Sound(file_path)
+        # 4. Extract spectral features         
         spectral = extract_spectral_features(sound)
         for i, feature in enumerate(myConfig.spectral_features):
             result[feature] = spectral[i]
@@ -486,7 +483,7 @@ def extract_gpu_features(data_df):
     
     # 3. Extract speech-to-text features in small batches
     print("Extracting speech-to-text features...")
-    batch_size = 8  # Adjust based on GPU memory
+    batch_size = 16  # Ajdust based on GPU memory
     total_files = len(data_df)
     
     with torch.no_grad():
