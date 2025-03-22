@@ -9,8 +9,9 @@ from parselmouth.praat import call
 import torch
 import myFunctions
 
-# Load the pretrained voice activity detection model
+# Load the Hugging Face authentication token from the environment (The variable needs to be set first!)
 hf_token = os.environ.get('HF_TOKEN')
+# Load the pretrained voice activity detection model
 vad = Pipeline.from_pretrained("pyannote/voice-activity-detection", use_auth_token=hf_token)
 # Move the model to the GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

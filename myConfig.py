@@ -45,8 +45,6 @@ reference_text = "En un lugar de la Mancha, de cuyo nombre no quiero acordarme, 
     "duelos y quebrantos los sábados, lantejas los viernes, algún palomino de añadidura los domingos, " \
     "consumían las tres partes de su hacienda"
 
-hf_token = "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"
-
 # Define the classes and features to be used
 classes = ["HC", "MCI", "AD"]
 #Extracted prosodic features
