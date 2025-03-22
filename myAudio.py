@@ -7,7 +7,8 @@ from pyannote.audio import Pipeline
 import parselmouth
 from parselmouth.praat import call
 import torch
-import myFunctions
+import myPlots
+
 
 # Load the Hugging Face authentication token from the environment (The variable needs to be set first!)
 hf_token = os.environ.get('HF_TOKEN')
@@ -146,11 +147,61 @@ def extract_prosodic_features_vad(audio_path):
     # Convert to a NumPy array (float32 for compactness/speed)
     return np.array(feature_values, dtype=np.float32)
 
-# diarization = pipeline("audio_normalized.wav")
-""" vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
-speech_segments = vad('/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-85-58.wav')
-phonation_time, pauses, pause_durations = pyannoteExtractProsodic(speech_segments)
-print(f"Phonation Time: {phonation_time:.2f} seconds")
-# Total number of pauses and the total pause duration
-print(f"Total Number of Pauses: {len(pauses)}")
-print(f"Total Pause Duration: {sum(pause_durations):.2f} seconds") """
+
+def separate_with_demucs(file_path, target_sr=16000):
+    """Use Facebook's Demucs for better voice separation."""
+    import torch
+    from demucs.pretrained import get_model
+    from demucs.apply import apply_model
+    import torchaudio
+    
+    # Load the pre-trained model
+    model = get_model("htdemucs_ft")
+    model.to(device)
+    
+    # Load audio
+    waveform, sr = torchaudio.load(file_path)
+    if sr != model.samplerate:
+        waveform = torchaudio.functional.resample(waveform, sr, model.samplerate)
+    
+    # Separate sources
+    with torch.no_grad():
+        sources = apply_model(model, waveform.unsqueeze(0), device=device)[0]
+    
+    # Get just the vocals
+    vocals = sources[model.sources.index('vocals')]
+    
+    # Convert to target sample rate if needed
+    if model.samplerate != target_sr:
+        vocals = torchaudio.functional.resample(vocals, model.samplerate, target_sr)
+    
+    # Save to file
+    output_dir = os.path.dirname(file_path) + "/separated"
+    os.makedirs(output_dir, exist_ok=True)
+    base_filename = os.path.basename(file_path)
+    base_name, ext = os.path.splitext(base_filename)
+    output_file = os.path.join(output_dir, f"{base_name}_demucs{ext}")
+    
+    vocals_numpy = vocals.cpu().numpy().mean(axis=0)  # Convert to mono
+    sf.write(output_file, vocals_numpy, target_sr)
+    
+    return output_file
+
+if __name__ == "__main__":
+    file = "MCI-W-67-123"
+    ext = ".wav"
+    suffix = "_demucs"
+    orig_file_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/" + file + ext
+    proc_file_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/separated/" + file + suffix + ext
+    separate_with_demucs(orig_file_path)
+    myPlots.visualize_audio_comparison(orig_file_path, proc_file_path)
+
+
+    # diarization = pipeline("audio_normalized.wav")
+    """ vad = Pipeline.from_pretrained("pyannote/voice-activity-detection")
+    speech_segments = vad('/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-85-58.wav')
+    phonation_time, pauses, pause_durations = pyannoteExtractProsodic(speech_segments)
+    print(f"Phonation Time: {phonation_time:.2f} seconds")
+    # Total number of pauses and the total pause duration
+    print(f"Total Number of Pauses: {len(pauses)}")
+    print(f"Total Pause Duration: {sum(pause_durations):.2f} seconds") """
