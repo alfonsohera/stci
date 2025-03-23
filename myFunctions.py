@@ -51,10 +51,17 @@ def extract_class(file_path):
 
 
 def extract_spectral_features(sound):
+    """Extract spectral features from a Parselmouth Sound object"""
     power = 2.    
-    spectrum = call(sound, "To Spectrum", "yes")    
-    centre_of_gravity = call(spectrum, "Get centre of gravity",power)
-    skewness = call(spectrum, "Get skewness",power)
+    spectrum = call(sound, "To Spectrum", "yes")
+    
+    # Get features from spectrum
+    centre_of_gravity = call(spectrum, "Get centre of gravity", power)
+    skewness = call(spectrum, "Get skewness", power)
+    
+    # Clean up spectrum object    
+    del spectrum
+    
     feature_values = [skewness, centre_of_gravity]
     return np.array(feature_values, dtype=np.float32)
 
@@ -369,16 +376,22 @@ def cpu_worker(file_info):
         if not os.path.exists(marker_file):
             myAudio.process_audio(file_path)        
         
-        # 3. Extract jitter and shimmer 
+        # 3. Create sound object once and use for both feature extractions
         sound = parselmouth.Sound(file_path)
+        
+        # Extract jitter and shimmer 
         jitter_shimmer = extract_jitter_shimmer(sound, file_path)
         for i, feature in enumerate(myConfig.jitter_shimmer_features):
             result[feature] = jitter_shimmer[i]
         
-        # 4. Extract spectral features         
+        # Extract spectral features using the same sound object
         spectral = extract_spectral_features(sound)
         for i, feature in enumerate(myConfig.spectral_features):
             result[feature] = spectral[i]
+            
+        # Explicitly delete sound object to free memory
+        del sound
+        
     except Exception as e:
         print(f"Error processing CPU features for {file_path}: {str(e)}")
         # Set default values for failed features
@@ -388,30 +401,47 @@ def cpu_worker(file_info):
         
     return idx, result
 
-def extract_cpu_features(data_df):
-    """Extract all CPU-bound features in parallel"""
+def extract_cpu_features(data_df):    
     # Create work items
-    work_items = list(enumerate(data_df['file_path']))
-    num_workers = min(multiprocessing.cpu_count(), 8)
-    print(f"Extracting CPU-only features using {num_workers} worker processes")
-    
-    # Process in parallel
-    results = []
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        for result in executor.map(cpu_worker, work_items):
-            results.append(result)
-            if (len(results) % 10) == 0 or len(results) == len(work_items):
-                print(f"Processed CPU features: {len(results)}/{len(work_items)} files")
-    
-    # Update dataframe
-    for idx, result in results:
-        for key, value in result.items():
+    work_items = list(enumerate(data_df['file_path']))    
+    total_files = len(work_items)
+    processed = 0
+
+    # Process one file at a time (truly sequential)
+    for idx, file_path in work_items:
+        # Process each file individually
+        result = cpu_worker((idx, file_path))
+
+        # Update dataframe with this file's results
+        for key, value in result[1].items():
             data_df.at[idx, key] = value
+
+        # Update progress
+        processed += 1
+        if processed % 5 == 0:  # Report every 5 files
+            print(f"Processed CPU features: {processed}/{total_files} files")
+
+        # Force garbage collection after each file
+        import gc
+        gc.collect()
     
 def extract_gpu_features(data_df):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     """Extract all GPU-dependent features sequentially"""
     print("Extracting GPU-dependent features:")
-    
+    #0 Load audio separation model
+    model = myAudio.load_demucs_model()
+    print("Applying voice separation with Demucs...")
+    total_files = len(data_df)
+    for i, (idx, row) in enumerate(data_df.iterrows()):
+        file_path = row['file_path']
+        print(f"Processing file {i+1}/{total_files}: {os.path.basename(file_path)}")
+        # Resolve the audio path passed to the extraction functions
+        file_path = myFunctions.resolve_audio_path(file_path)
+        myAudio.separate_with_demucs(file_path, model, device)
+        # Periodically clear CUDA cache to avoid memory issues
+        if torch.cuda.is_available() and (i+1) % 10 == 0:
+            torch.cuda.empty_cache()     
     # 1. Extract VAD-based prosodic features
     print("Extracting VAD-based prosodic features...")
     for idx, row in data_df.iterrows():
@@ -428,8 +458,7 @@ def extract_gpu_features(data_df):
                 data_df.at[idx, feature] = np.nan
     
     # 2. Load ASR model for speech-to-text
-    print("Loading ASR model...")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Loading ASR model...")    
     model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
     asr_model, processor = my_Speech2text.load_asr_model(model_name, device)
     

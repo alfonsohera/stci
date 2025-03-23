@@ -8,7 +8,9 @@ import parselmouth
 from parselmouth.praat import call
 import torch
 import myPlots
-
+from demucs.pretrained import get_model
+from demucs.apply import apply_model
+import torchaudio
 
 # Load the Hugging Face authentication token from the environment (The variable needs to be set first!)
 hf_token = os.environ.get('HF_TOKEN')
@@ -101,11 +103,9 @@ def process_audio(file_path, sr=16000):
     target_rms = 0.05
     noise_reduced_audio = apply_noise_reduction(audio, sr)
     rms = np.sqrt(np.mean(noise_reduced_audio**2))
-    audio_normalized = noise_reduced_audio * (target_rms / rms)
-    
+    audio_normalized = noise_reduced_audio * (target_rms / rms)    
     # Always write to the base filename without suffixes
-    sf.write(base_file_path, audio_normalized, sr)
-    
+    sf.write(base_file_path, audio_normalized, sr)    
     # Create marker file
     with open(marker_file, 'w') as f:
         f.write("1")
@@ -148,19 +148,22 @@ def extract_prosodic_features_vad(audio_path):
     return np.array(feature_values, dtype=np.float32)
 
 
-def separate_with_demucs(file_path, target_sr=16000):
-    """Use Facebook's Demucs for better voice separation."""
-    import torch
-    from demucs.pretrained import get_model
-    from demucs.apply import apply_model
-    import torchaudio
-    
-    # Load the pre-trained model
+def load_demucs_model():
     model = get_model("htdemucs_ft")
     model.to(device)
+    return model
+
+
+def separate_with_demucs(file_path, model, device, target_sr=16000):
+    """Use Facebook's Demucs for better voice separation."""    
     
     # Load audio
     waveform, sr = torchaudio.load(file_path)
+    
+    # Convert mono to stereo if needed
+    if waveform.size(0) == 1:  # If mono (1 channel)
+        waveform = waveform.repeat(2, 1)  # Duplicate the channel to make stereo
+    
     if sr != model.samplerate:
         waveform = torchaudio.functional.resample(waveform, sr, model.samplerate)
     
@@ -175,17 +178,11 @@ def separate_with_demucs(file_path, target_sr=16000):
     if model.samplerate != target_sr:
         vocals = torchaudio.functional.resample(vocals, model.samplerate, target_sr)
     
-    # Save to file
-    output_dir = os.path.dirname(file_path) + "/separated"
-    os.makedirs(output_dir, exist_ok=True)
-    base_filename = os.path.basename(file_path)
-    base_name, ext = os.path.splitext(base_filename)
-    output_file = os.path.join(output_dir, f"{base_name}_demucs{ext}")
-    
+    # Save to file        
     vocals_numpy = vocals.cpu().numpy().mean(axis=0)  # Convert to mono
-    sf.write(output_file, vocals_numpy, target_sr)
+    sf.write(file_path, vocals_numpy, target_sr)
     
-    return output_file
+    return 
 
 if __name__ == "__main__":
     file = "MCI-W-67-123"
