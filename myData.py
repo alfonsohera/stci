@@ -123,28 +123,39 @@ def DownloadAndExtract():
     print("Temporary folder removed.")
 
 
-def datasetSplit(data_df, test_size):
-    #First, Drop class feature (label already encodes this info) and Sex (The class is imbalanced)
+def datasetSplit(data_df, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2):
+    """
+    Split dataset into training, validation and test sets with specified ratios.
+    
+    Args:
+        data_df: Input dataframe
+        train_ratio: Proportion for training set (default 0.6)
+        val_ratio: Proportion for validation set (default 0.2)
+        test_ratio: Proportion for test set (default 0.2)
+    """
+    # Verify ratios add up to 1.0
+    if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-10:
+        raise ValueError("Train, validation, and test ratios must sum to 1.0")
+    
+    # First, Drop class feature (label already encodes this info) and Sex (The class is imbalanced)
     data_df = data_df.drop(columns=["class", "Sex"])
 
-    test_size = test_size  # Adjust as needed (0.10 to 0.15)
-
-    # Split data into train/test
-    train_df, test_df = train_test_split(
+    # First split: separate out test set
+    train_val_df, test_df = train_test_split(
         data_df,
-        test_size=test_size,
-        stratify=data_df["label"],  # keep class balance
+        test_size=test_ratio,
+        stratify=data_df["label"],
         random_state=42
     )
 
-    # Define new validation size (10-12% of total dataset, relative to new train size)
-    val_size = 0.12 / (1 - test_size)  # Convert to fraction of remaining train data
-
-    # Split the train again for validation
+    # Second split: separate train and validation from the remaining data
+    # Calculate the validation size relative to train+val data
+    relative_val_size = val_ratio / (train_ratio + val_ratio)
+    
     train_df, val_df = train_test_split(
-        train_df,
-        test_size=val_size,
-        stratify=train_df["label"],
+        train_val_df,
+        test_size=relative_val_size,
+        stratify=train_val_df["label"],
         random_state=42
     )
 
