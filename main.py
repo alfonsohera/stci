@@ -135,7 +135,7 @@ def main_fn():
 
 def test():
     model, _ = myModel.loadModel()
-    dataset = myData.loadDataset()
+    dataset = myData.loadHFDataset()
     testModel(model, dataset)
 
 
