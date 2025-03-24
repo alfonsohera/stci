@@ -1,9 +1,11 @@
 #from google.colab import drive
 import sys
 import os
+import warnings
 from zipfile import ZipFile
 import torch
 import pandas as pd
+from transformers import logging
 # <local imports>
 import myConfig
 import myData
@@ -15,6 +17,9 @@ from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
 
+# Suppress specific warnings
+warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
+logging.set_verbosity_error()  # Set transformers logging to show only errors
 
 def collate_fn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"

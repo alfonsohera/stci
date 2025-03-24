@@ -13,7 +13,7 @@ from transformers.modeling_outputs import SequenceClassifierOutput
 from safetensors.torch import load_file
 from bitsandbytes.optim import Adam8bit
 from torch.nn.utils.rnn import pad_sequence
-
+from sklearn.metrics import classification_report, confusion_matrix
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
     def __init__(self, base_model, num_labels, config=None, prosodic_dim=12): # prosodic_dim needs to match the length of myData.extracted_features!
