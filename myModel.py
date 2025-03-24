@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
+import numpy as np
 import myConfig
-import myFunctions
 from transformers import (
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Processor,
@@ -89,6 +89,26 @@ def getModelDefinitions():
     return model_name, processor, base_model
 
 
+def data_collator_fn(processor, features):
+    waveforms = [torch.tensor(f["audio"]["array"]) for f in features]
+    prosodic_features = torch.stack([
+        torch.tensor(f["prosodic_features"], dtype=torch.float) for f in features
+    ])  # Now each prosodic_features is converted to a tensor
+    labels = torch.tensor([f["label"] for f in features])
+
+    input_values = pad_sequence(waveforms, batch_first=True, padding_value=0)
+
+    inputs = processor(
+        input_values.numpy(),
+        sampling_rate=16000,
+        padding=True,
+        return_tensors="pt"
+    )
+    inputs["labels"] = labels
+    inputs["prosodic_features"] = prosodic_features  # Add prosodic features
+    return inputs
+
+
 def loadModel(model_name):
     if myConfig.training_from_scratch:
         model = Wav2Vec2ProsodicClassifier(model_name, num_labels=3)
@@ -140,6 +160,48 @@ class CustomTrainer(Trainer):
         return (loss, logits, labels)
 
 
+def compute_metrics(eval_preds):
+    logits, labels = eval_preds
+    # Ensure predictions and labels are NumPy arrays
+    preds = torch.argmax(torch.tensor(logits), dim=-1).numpy()
+
+    # Compute classification report
+    report = classification_report(labels, preds, target_names=["Healthy", "MCI", "AD"], output_dict=True)
+
+    # Compute confusion matrix
+    cm = confusion_matrix(labels, preds)
+
+    # Extract TP, FP, TN, FN per class
+    TP = np.diag(cm)
+    FP = cm.sum(axis=0) - TP
+    FN = cm.sum(axis=1) - TP
+    TN = cm.sum() - (TP + FP + FN)
+
+    # Compute Specificity (TNR) and Negative Predictive Value (NPV) per class
+    specificity = TN / (TN + FP + 1e-10)  # True Negative Rate
+    npv = TN / (TN + FN + 1e-10)  # Negative Predictive Value
+
+    # Store per-class and macro-average results
+    results = {
+        "accuracy": report["accuracy"],
+        "macro_f1": report["macro avg"]["f1-score"],
+        "macro_precision": report["macro avg"]["precision"],
+        "macro_recall": report["macro avg"]["recall"],
+        "macro_specificity": np.mean(specificity),
+        "macro_npv": np.mean(npv),
+        "f1_healthy": report["Healthy"]["f1-score"],
+        "f1_mci": report["MCI"]["f1-score"],
+        "f1_ad": report["AD"]["f1-score"],
+        "specificity_healthy": specificity[0],
+        "specificity_mci": specificity[1],
+        "specificity_ad": specificity[2],
+        "npv_healthy": npv[0],
+        "npv_mci": npv[1],
+        "npv_ad": npv[2]
+    }
+    return results
+
+
 def createTrainer(model, optimizer, dataset, weights_tensor):
     # Define the learning rate scheduler
     num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
@@ -157,8 +219,8 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         args=myConfig.training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
-        compute_metrics=myFunctions.compute_metrics,
-        data_collator=myFunctions.data_collator_fn,
+        compute_metrics=compute_metrics,
+        data_collator=data_collator_fn,
         optimizers=(optimizer, lr_scheduler),
         class_weights=weights_tensor  # Pass class weights
     )

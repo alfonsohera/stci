@@ -5,7 +5,6 @@ import numpy as np
 import myConfig
 import myAudio
 import myModel
-import myFunctions
 import my_Speech2text
 import os
 from parselmouth.praat import call
@@ -13,6 +12,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from torch.nn.utils.rnn import pad_sequence
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
+import gc
 
 def preprocess_function(example):
     # Wav2Vec2 processing
@@ -221,68 +221,6 @@ def extract_prosodic_features(audio_path):
     return np.array(feature_values, dtype=np.float32)
 
 
-def compute_metrics(eval_preds):
-    logits, labels = eval_preds
-    # Ensure predictions and labels are NumPy arrays
-    preds = torch.argmax(torch.tensor(logits), dim=-1).numpy()
-
-    # Compute classification report
-    report = classification_report(labels, preds, target_names=["Healthy", "MCI", "AD"], output_dict=True)
-
-    # Compute confusion matrix
-    cm = confusion_matrix(labels, preds)
-
-    # Extract TP, FP, TN, FN per class
-    TP = np.diag(cm)
-    FP = cm.sum(axis=0) - TP
-    FN = cm.sum(axis=1) - TP
-    TN = cm.sum() - (TP + FP + FN)
-
-    # Compute Specificity (TNR) and Negative Predictive Value (NPV) per class
-    specificity = TN / (TN + FP + 1e-10)  # True Negative Rate
-    npv = TN / (TN + FN + 1e-10)  # Negative Predictive Value
-
-    # Store per-class and macro-average results
-    results = {
-        "accuracy": report["accuracy"],
-        "macro_f1": report["macro avg"]["f1-score"],
-        "macro_precision": report["macro avg"]["precision"],
-        "macro_recall": report["macro avg"]["recall"],
-        "macro_specificity": np.mean(specificity),
-        "macro_npv": np.mean(npv),
-        "f1_healthy": report["Healthy"]["f1-score"],
-        "f1_mci": report["MCI"]["f1-score"],
-        "f1_ad": report["AD"]["f1-score"],
-        "specificity_healthy": specificity[0],
-        "specificity_mci": specificity[1],
-        "specificity_ad": specificity[2],
-        "npv_healthy": npv[0],
-        "npv_mci": npv[1],
-        "npv_ad": npv[2]
-    }
-    return results
-
-
-def data_collator_fn(processor, features):
-    waveforms = [torch.tensor(f["audio"]["array"]) for f in features]
-    prosodic_features = torch.stack([
-        torch.tensor(f["prosodic_features"], dtype=torch.float) for f in features
-    ])  # Now each prosodic_features is converted to a tensor
-    labels = torch.tensor([f["label"] for f in features])
-
-    input_values = pad_sequence(waveforms, batch_first=True, padding_value=0)
-
-    inputs = processor(
-        input_values.numpy(),
-        sampling_rate=16000,
-        padding=True,
-        return_tensors="pt"
-    )
-    inputs["labels"] = labels
-    inputs["prosodic_features"] = prosodic_features  # Add prosodic features
-    return inputs
-
-
 def get_data_dir():
     """Helper function to get the consistent data directory path"""
     return myConfig.DATA_DIR
@@ -360,7 +298,7 @@ def cpu_worker(file_info):
     idx, file_path = file_info
     result = {}
     # Resolve the audio path passed to the extraction functions
-    file_path = myFunctions.resolve_audio_path(file_path)
+    file_path = resolve_audio_path(file_path)
 
     try:
         # 1. Extract metadata features
@@ -401,53 +339,125 @@ def cpu_worker(file_info):
         
     return idx, result
 
-def extract_cpu_features(data_df):    
-    # Create work items
-    work_items = list(enumerate(data_df['file_path']))    
-    total_files = len(work_items)
-    processed = 0
 
-    # Process one file at a time (truly sequential)
-    for idx, file_path in work_items:
-        # Process each file individually
-        result = cpu_worker((idx, file_path))
-
-        # Update dataframe with this file's results
-        for key, value in result[1].items():
-            data_df.at[idx, key] = value
-
-        # Update progress
-        processed += 1
-        if processed % 5 == 0:  # Report every 5 files
-            print(f"Processed CPU features: {processed}/{total_files} files")
-
-        # Force garbage collection after each file
-        import gc
-        gc.collect()
+def extract_cpu_features(data_df):
+    """Extract CPU features"""
+    import time
+    import signal
+    from functools import partial
     
+    # Create work items
+    work_items = [(idx, path) for idx, path in enumerate(data_df['file_path'])]
+    num_workers = max(2, multiprocessing.cpu_count()//4)  
+    total_files = len(work_items)
+    
+    print(f"Extracting CPU-only features using {num_workers} worker processes")
+    
+    # Set a global timeout handler for worker processes
+    def timeout_handler(signum, frame):
+        raise TimeoutError("Processing timed out")
+    
+    # Process in even larger batches to minimize pool creation/destruction
+    batch_size = 100
+    for batch_start in range(0, total_files, batch_size):
+        batch_end = min(batch_start + batch_size, total_files)
+        print(f"Processing batch {batch_start//batch_size + 1}/{(total_files + batch_size - 1)//batch_size}")
+        
+        # Extract just this batch
+        batch_items = work_items[batch_start:batch_end]
+        
+        # Process this batch with a separate pool
+        processed_count = 0
+        results = []
+        
+        # Create a fresh pool for this batch
+        try:
+            # Use the more robust multiprocessing.Pool
+            with multiprocessing.Pool(processes=num_workers) as pool:
+                # Process files one by one with timeout
+                for item in batch_items:
+                    try:
+                        # Apply with 60 second timeout per file
+                        result = pool.apply_async(cpu_worker, (item,))
+                        results.append(result.get(timeout=60))  # Wait for this result with timeout
+                        
+                        # Update progress after each file
+                        processed_count += 1
+                        if processed_count % 5 == 0:
+                            print(f"Processed {processed_count}/{len(batch_items)} in current batch")
+                            
+                    except Exception as e:
+                        print(f"Error processing file: {str(e)}")
+                        
+                # Explicit cleanup
+                pool.close()
+                pool.join()
+                
+        except Exception as e:
+            print(f"Pool error: {str(e)}")
+                
+        # Update dataframe after pool is closed
+        for idx, result in results:
+            for key, value in result.items():
+                data_df.at[idx, key] = value
+        
+        # Force garbage collection after batch
+        gc.collect()
+        time.sleep(1)  # Pause between batches to allow OS to reclaim resources
+        print(f"Completed batch {batch_start//batch_size + 1}, {batch_end}/{total_files} files processed")
+    
+    return data_df
+
 def extract_gpu_features(data_df):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    """Extract all GPU-dependent features sequentially"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
     print("Extracting GPU-dependent features:")
-    #0 Load audio separation model
+    
+    # 0. Load audio separation model
     model = myAudio.load_demucs_model()
     print("Applying voice separation with Demucs...")
+    
+    # Optimize batch size based on GPU memory - smaller batches might be faster
+    demucs_batch_size = 8  
     total_files = len(data_df)
-    for i, (idx, row) in enumerate(data_df.iterrows()):
-        file_path = row['file_path']
-        print(f"Processing file {i+1}/{total_files}: {os.path.basename(file_path)}")
-        # Resolve the audio path passed to the extraction functions
-        file_path = myFunctions.resolve_audio_path(file_path)
-        myAudio.separate_with_demucs(file_path, model, device)
-        # Periodically clear CUDA cache to avoid memory issues
-        if torch.cuda.is_available() and (i+1) % 10 == 0:
-            torch.cuda.empty_cache()     
+    
+    # Track processing time for performance analysis
+    import time
+    start_time = time.time()
+    total_processed = 0
+    
+    # Process files in batches with Demucs
+    for i in range(0, total_files, demucs_batch_size):
+        batch_start_time = time.time()
+        batch_end = min(i + demucs_batch_size, total_files)
+        batch_files = data_df.iloc[i:batch_end]
+        print(f"Processing Demucs batch {i//demucs_batch_size + 1}/{(total_files + demucs_batch_size - 1)//demucs_batch_size}")
+        
+        # Pre-resolve all paths at once
+        batch_paths = [resolve_audio_path(row['file_path']) for _, row in batch_files.iterrows()]
+        
+        # Process batch with Demucs
+        myAudio.process_batch_with_demucs(batch_paths, model, device)
+        
+        # Update progress and timing information
+        batch_time = time.time() - batch_start_time
+        total_processed += len(batch_paths)
+        avg_time = batch_time / len(batch_paths)
+        elapsed = time.time() - start_time
+        remaining = (avg_time * (total_files - total_processed)) if total_processed > 0 else 0
+        
+        print(f"Batch completed in {batch_time:.1f}s ({avg_time:.1f}s per file)")
+        print(f"Overall progress: {total_processed}/{total_files} files")
+        print(f"Estimated remaining time: {remaining/60:.1f} minutes")
+        
+        # Clear CUDA cache after each batch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     # 1. Extract VAD-based prosodic features
     print("Extracting VAD-based prosodic features...")
     for idx, row in data_df.iterrows():
         file_path = row['file_path']
         # Resolve the audio path passed to the extraction functions
-        file_path = myFunctions.resolve_audio_path(file_path)
+        file_path = resolve_audio_path(file_path)
         try:
             prosodic = myAudio.extract_prosodic_features_vad(file_path)
             for i, feature in enumerate(myConfig.features):
@@ -478,7 +488,7 @@ def extract_gpu_features(data_df):
             for idx, row in batch_files.iterrows():
                 file_path = row['file_path']
                 # Resolve the audio path passed to the extraction functions
-                file_path = myFunctions.resolve_audio_path(file_path)
+                file_path = resolve_audio_path(file_path)
                 try:
                     wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
                     data_df.at[idx, 'wer'] = wer

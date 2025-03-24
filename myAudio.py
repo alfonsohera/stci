@@ -184,6 +184,103 @@ def separate_with_demucs(file_path, model, device, target_sr=16000):
     
     return 
 
+
+def process_batch_with_demucs(file_paths, model, device, target_sr=16000):
+    """Process multiple audio files in parallel with Demucs"""
+    import os
+    
+    # Group files by similar length to minimize padding waste
+    file_lengths = []
+    for file_path in file_paths:
+        try:
+            info = torchaudio.info(file_path)
+            file_lengths.append((file_path, info.num_frames))
+        except Exception as e:
+            print(f"Error getting info for {file_path}: {e}")
+            file_lengths.append((file_path, 0))
+    
+    # Sort by length and process in sub-batches of similar length files
+    file_lengths.sort(key=lambda x: x[1])
+    
+    # Use smaller sub-batches for better memory efficiency
+    sub_batch_size = 2  # Process just 2 files at a time for better memory management
+    
+    for i in range(0, len(file_lengths), sub_batch_size):
+        sub_batch_files = [f[0] for f in file_lengths[i:i+sub_batch_size]]
+        print(f"  Processing sub-batch {i//sub_batch_size + 1}/{(len(file_lengths) + sub_batch_size - 1)//sub_batch_size}")
+        
+        # Load sub-batch of files
+        waveforms = []
+        for file_path in sub_batch_files:
+            try:
+                waveform, sr = torchaudio.load(file_path)
+                
+                # Convert mono to stereo if needed
+                if waveform.size(0) == 1:
+                    waveform = waveform.repeat(2, 1)
+                    
+                if sr != model.samplerate:
+                    waveform = torchaudio.functional.resample(waveform, sr, model.samplerate)
+                    
+                waveforms.append(waveform)
+                
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
+        
+        if not waveforms:
+            continue
+            
+        try:
+            # Pad to same length if needed (within this smaller sub-batch)
+            max_length = max(w.shape[1] for w in waveforms)
+            padded_waveforms = []
+            
+            for waveform in waveforms:
+                if waveform.shape[1] < max_length:
+                    padding = torch.zeros(2, max_length - waveform.shape[1], device=waveform.device)
+                    padded_waveform = torch.cat([waveform, padding], dim=1)
+                    padded_waveforms.append(padded_waveform)
+                else:
+                    padded_waveforms.append(waveform)
+            
+            # Stack sub-batch
+            batch_waveforms = torch.stack(padded_waveforms).to(device)
+            
+            # Use mixed precision for faster processing
+            if device.type == 'cuda':
+                with torch.cuda.amp.autocast():
+                    sources = apply_model(model, batch_waveforms, device=device)
+            else:
+                sources = apply_model(model, batch_waveforms, device=device)
+                
+            # Process results and save files
+            for j, file_path in enumerate(sub_batch_files):
+                if j < len(sources):
+                    vocals = sources[j][model.sources.index('vocals')]
+                    
+                    # Convert to target sample rate if needed
+                    if model.samplerate != target_sr:
+                        vocals = torchaudio.functional.resample(vocals, model.samplerate, target_sr)
+                    
+                    # Save the separated vocals (convert to mono)
+                    vocals_numpy = vocals.cpu().numpy().mean(axis=0)
+                    sf.write(file_path, vocals_numpy, target_sr)
+                    
+            # Explicitly free memory
+            del batch_waveforms, sources, padded_waveforms
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+                
+        except Exception as e:
+            print(f"Error in sub-batch processing: {e}")
+            # Fall back to individual processing
+            for file_path in sub_batch_files:
+                try:
+                    separate_with_demucs(file_path, model, device)
+                except Exception as e:
+                    print(f"Error processing {file_path}: {e}")
+
+
 if __name__ == "__main__":
     file = "MCI-W-67-123"
     ext = ".wav"
