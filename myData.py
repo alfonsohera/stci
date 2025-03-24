@@ -14,12 +14,9 @@ from sklearn.preprocessing import StandardScaler
 from datasets import load_from_disk
 from tqdm import tqdm
 from datasets import Dataset, DatasetDict
-#drive.mount('/content/drive')
-#drive_path = '/content/drive/MyDrive/ModelCheckpoints'
-#os.makedirs(drive_path, exist_ok=True)
 
 
-numeric_cols = [
+extracted_features = [
     "Age",
     "duration",
     "num_pauses",
@@ -27,6 +24,11 @@ numeric_cols = [
     "phonation_time",
     "speech_rate",
     "dynamic_range_db"
+    "jitter_local",
+    "shimmer_local",
+    "skewness",
+    "centre_of_gravity",
+    "wer"
 ]
 
 
@@ -164,12 +166,12 @@ def ScaleDatasets(train_df, val_df, test_df):
     scaler = StandardScaler()
 
     # Fit scaler on TRAIN numeric columns only
-    scaler.fit(train_df[numeric_cols])
+    scaler.fit(train_df[extracted_features])
 
     # Transform train, val, and test numeric columns
-    train_df[numeric_cols] = scaler.transform(train_df[numeric_cols])
-    val_df[numeric_cols] = scaler.transform(val_df[numeric_cols])
-    test_df[numeric_cols] = scaler.transform(test_df[numeric_cols])
+    train_df[extracted_features] = scaler.transform(train_df[extracted_features])
+    val_df[extracted_features] = scaler.transform(val_df[extracted_features])
+    test_df[extracted_features] = scaler.transform(test_df[extracted_features])
     return train_df, val_df, test_df
 
 
@@ -199,7 +201,12 @@ def process_data(df):
             "total_pause_duration": row.total_pause_duration,
             "phonation_time": row.phonation_time,
             "speech_rate": row.speech_rate,
-            "dynamic_range_db": row.dynamic_range_db
+            "dynamic_range_db": row.dynamic_range_db,
+            "jitter_local": row.jitter_local,
+            "shimmer_local": row.shimmer_local,
+            "skewness": row.skewness,
+            "centre_of_gravity": row.centre_of_gravity,
+            "wer": row.wer
         })
     return data
 

@@ -18,14 +18,12 @@ def preprocess_function(example):
     # Wav2Vec2 processing
     _, processor, _  = myModel.getModelDefinitions()
     inputs = processor(example["audio"]["array"], sampling_rate=example["audio"]["sampling_rate"], return_tensors="pt")
-    
+
     # Build prosodic features including jitter and shimmer
-    numeric_cols = ["Age", "duration", "num_pauses", "total_pause_duration", 
+    extracted_features = ["Age", "duration", "num_pauses", "total_pause_duration", 
                    "phonation_time", "speech_rate", "dynamic_range_db", 
-                   "jitter_local", "shimmer_apq11", "skewness", "centre_of_gravity"]  
-                
-                   
-    feats = [example[col] for col in numeric_cols]
+                   "jitter_local", "shimmer_local", "skewness", "centre_of_gravity", "wer"]
+    feats = [example[col] for col in extracted_features]
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
     inputs["label"] = example["label"]
     return inputs

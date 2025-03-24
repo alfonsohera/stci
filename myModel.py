@@ -15,7 +15,7 @@ from bitsandbytes.optim import Adam8bit
 
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
-    def __init__(self, base_model, num_labels, config=None, prosodic_dim=7):
+    def __init__(self, base_model, num_labels, config=None, prosodic_dim=12): # prosodic_dim needs to match the length of myData.extracted_features!
         super().__init__()
         self.wav2vec2 = Wav2Vec2ForSequenceClassification.from_pretrained(
             base_model,
@@ -26,7 +26,6 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
         else:
             self.config = config or self.wav2vec2.config
             
-        # Rest of your initialization code remains the same
         self.prosody_mlp = nn.Sequential(
             nn.Linear(prosodic_dim, 32),
             nn.ReLU(),
