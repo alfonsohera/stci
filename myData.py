@@ -23,7 +23,7 @@ extracted_features = [
     "total_pause_duration",
     "phonation_time",
     "speech_rate",
-    "dynamic_range_db"
+    "dynamic_range_db",
     "jitter_local",
     "shimmer_local",
     "skewness",
