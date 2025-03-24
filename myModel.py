@@ -152,7 +152,7 @@ def loadModel(model_name):
     # Apply freezing strategy
     model.freeze_base_model(
         freeze_feature_extractor=True,  # Freeze feature extractor
-        num_encoder_layers_to_freeze=12  # Freeze first 12 encoder layers (12/24)
+        #num_encoder_layers_to_freeze=12  # Freeze first 12 encoder layers (12/24)
     )
     
     model.gradient_checkpointing_enable()

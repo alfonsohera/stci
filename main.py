@@ -112,8 +112,7 @@ def main_fn():
     _, weights_tensor = myFunctions.setWeightedCELoss()
     # Feature engineering    
     
-    
-    if not os.path.exists(myConfig.OUTPUT_PATH):
+    if not os.path.exists(myConfig.OUTPUT_PATH) or (os.path.exists(myConfig.OUTPUT_PATH) and len(os.listdir(myConfig.OUTPUT_PATH)) == 0):
         # Data splits
         train_df, val_df, test_df = myData.datasetSplit(data_df)
         # Apply standard scaling to the splits
