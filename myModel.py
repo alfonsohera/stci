@@ -15,7 +15,7 @@ from bitsandbytes.optim import Adam8bit
 
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
-    def __init__(self, base_model, num_labels, config, prosodic_dim=7):
+    def __init__(self, base_model, num_labels, config=None, prosodic_dim=7):
         super().__init__()
         self.wav2vec2 = Wav2Vec2ForSequenceClassification.from_pretrained(
             base_model,
@@ -24,18 +24,47 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
         if myConfig.training_from_scratch:
             self.config = self.wav2vec2.config  # base model config
         else:
-            self.config = config
+            self.config = config or self.wav2vec2.config
+            
+        # Rest of your initialization code remains the same
         self.prosody_mlp = nn.Sequential(
-            nn.Linear(prosodic_dim, 32),  # Increase intermediate representation
+            nn.Linear(prosodic_dim, 32),
             nn.ReLU(),
-            nn.Linear(32, 16),  # Final projection before concatenation
+            nn.Linear(32, 16),
             nn.ReLU()
         )
 
         hidden_size = self.wav2vec2.config.hidden_size
         self.fc_combined = nn.Linear(hidden_size + 16, num_labels)
-
-        self.dropout = nn.Dropout(0.1)  # Regularization
+        self.dropout = nn.Dropout(0.1)
+    
+    def freeze_feature_extractor(self):
+        """Freeze the feature extractor part of the model"""
+        for param in self.wav2vec2.wav2vec2.feature_extractor.parameters():
+            param.requires_grad = False
+        print("Feature extractor frozen")
+            
+    def freeze_encoder_layers(self, num_layers_to_freeze):
+        """Freeze a specified number of encoder layers from the bottom"""
+        if num_layers_to_freeze <= 0:
+            return
+            
+        total_layers = len(self.wav2vec2.wav2vec2.encoder.layers)
+        freeze_until = min(num_layers_to_freeze, total_layers)
+        
+        for i in range(freeze_until):
+            for param in self.wav2vec2.wav2vec2.encoder.layers[i].parameters():
+                param.requires_grad = False
+                
+        print(f"First {freeze_until} encoder layers frozen out of {total_layers} total layers")
+    
+    def freeze_base_model(self, freeze_feature_extractor=True, num_encoder_layers_to_freeze=0):
+        """Freeze parts of the base model"""
+        if freeze_feature_extractor:
+            self.freeze_feature_extractor()
+            
+        if num_encoder_layers_to_freeze > 0:
+            self.freeze_encoder_layers(num_encoder_layers_to_freeze)
 
     def forward(self, input_values, prosodic_features, attention_mask=None, labels=None, **kwargs):
         outputs = self.wav2vec2(
@@ -118,8 +147,15 @@ def loadModel(model_name):
         # Load trained weights from .safetensors
         state_dict = load_file(f"{myConfig.checkpoint_dir}/model.safetensors")
         model.load_state_dict(state_dict)
-        model.gradient_checkpointing_enable()
-        optimizer = Adam8bit(model.parameters(), lr=2e-5)
+        
+    # Apply freezing strategy
+    model.freeze_base_model(
+        freeze_feature_extractor=True,  # Freeze feature extractor
+        num_encoder_layers_to_freeze=12  # Freeze first 12 encoder layers (12/24)
+    )
+    
+    model.gradient_checkpointing_enable()
+    optimizer = Adam8bit(model.parameters(), lr=2e-5)
     return model, optimizer
 
 
