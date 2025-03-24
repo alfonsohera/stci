@@ -115,7 +115,7 @@ def main_fn():
     # Load HF's dataset
     dataset = myData.loadHFDataset()
     # Load model
-    model, optimizer = myModel.loadModel()
+    model, optimizer = myModel.loadModel(model_name)
     # Create trainer
     trainer = myModel.createTrainer(model, optimizer, dataset, weights_tensor)
     trainer.train()

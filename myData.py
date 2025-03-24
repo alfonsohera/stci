@@ -233,9 +233,12 @@ def createHFDatasets(train_df, val_df, test_df):
         "validation": Dataset.from_list(val_data),
         "test": Dataset.from_list(test_data),
     })
-
-    # Example chunking or any other map-based transforms
-    dataset = dataset.map(myFunctions.chunk_input_sample)
+   
+    dataset = dataset.map(
+        myFunctions.chunk_input_sample,
+        num_proc=os.cpu_count()-1,  # Use multiple CPU cores
+        desc="Chunking audio samples"
+    )
 
     # Finally, save to disk    
     dataset.save_to_disk(myConfig.OUTPUT_PATH)
