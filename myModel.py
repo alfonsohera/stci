@@ -12,6 +12,7 @@ from transformers import (
 from transformers.modeling_outputs import SequenceClassifierOutput
 from safetensors.torch import load_file
 from bitsandbytes.optim import Adam8bit
+from torch.nn.utils.rnn import pad_sequence
 
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
@@ -117,7 +118,8 @@ def getModelDefinitions():
     return model_name, processor, base_model
 
 
-def data_collator_fn(processor, features):
+def data_collator_fn(features):
+    _, processor, _  = getModelDefinitions()
     waveforms = [torch.tensor(f["audio"]["array"]) for f in features]
     prosodic_features = torch.stack([
         torch.tensor(f["prosodic_features"], dtype=torch.float) for f in features

@@ -9,7 +9,6 @@ import my_Speech2text
 import os
 from parselmouth.praat import call
 from sklearn.metrics import classification_report, confusion_matrix
-from torch.nn.utils.rnn import pad_sequence
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 import gc

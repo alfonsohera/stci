@@ -106,12 +106,15 @@ def main_fn():
         print(f"Created and saved dataframe to {data_file_path}")
     _, weights_tensor = myFunctions.setWeightedCELoss()
     # Feature engineering    
-    # Data splits
-    train_df, val_df, test_df = myData.datasetSplit(data_df)
-    # Apply standard scaling to the splits
-    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
-    # Create HF's dataset
-    myData.createHFDatasets(train_df, val_df, test_df)
+    
+    
+    if not os.path.exists(myConfig.OUTPUT_PATH):
+        # Data splits
+        train_df, val_df, test_df = myData.datasetSplit(data_df)
+        # Apply standard scaling to the splits
+        train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+        # Create HF's dataset
+        myData.createHFDatasets(train_df, val_df, test_df)    
     # Load HF's dataset
     dataset = myData.loadHFDataset()
     # Load model
