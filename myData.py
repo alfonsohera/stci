@@ -235,7 +235,7 @@ def createHFDatasets(train_df, val_df, test_df):
     })
 
     # Example chunking or any other map-based transforms
-    dataset = dataset.map(myFunctions.chuchunk_input_sample)
+    dataset = dataset.map(myFunctions.chunk_input_sample)
 
     # Finally, save to disk    
     dataset.save_to_disk(myConfig.OUTPUT_PATH)
