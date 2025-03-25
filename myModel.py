@@ -14,6 +14,10 @@ from safetensors.torch import load_file
 from bitsandbytes.optim import Adam8bit
 from torch.nn.utils.rnn import pad_sequence
 from sklearn.metrics import classification_report, confusion_matrix
+from transformers.integrations import WandbCallback
+import wandb
+import os
+from pathlib import Path
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
     def __init__(self, base_model, num_labels, config=None, prosodic_dim=12): # prosodic_dim needs to match the length of myData.extracted_features!
@@ -159,12 +163,13 @@ def loadModel(model_name):
     )
     
     model.gradient_checkpointing_enable()
-    optimizer = Adam8bit(model.parameters(), lr=2e-5)
+    lr = myConfig.training_args.learning_rate
+    optimizer = Adam8bit(model.parameters(), lr=lr)
     return model, optimizer
 
 
 class CustomTrainer(Trainer):
-    def __init__(self, model, args, train_dataset, eval_dataset, data_collator, optimizers, class_weights, compute_metrics=None):
+    def __init__(self, model, args, train_dataset, eval_dataset, data_collator, optimizers, class_weights, compute_metrics=None, callbacks=None):
         super().__init__(
             model=model,
             args=args,
@@ -172,7 +177,8 @@ class CustomTrainer(Trainer):
             eval_dataset=eval_dataset,
             data_collator=data_collator,
             optimizers=optimizers,
-            compute_metrics=compute_metrics
+            compute_metrics=compute_metrics,
+            callbacks=callbacks  
         )
         # Ensure class_weights are on same device as model
         device = next(model.parameters()).device
@@ -277,6 +283,27 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         num_training_steps=num_training_steps
     )
 
+    # Initialize wandb if not running offline
+    if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
+        import wandb
+        wandb.init(
+            project=myConfig.wandb_project,
+            entity=myConfig.wandb_entity,
+            name=myConfig.wandb_run_name,
+            config={
+                "model_name": model.__class__.__name__,
+                "total_params": sum(p.numel() for p in model.parameters()),
+                "trainable_params": sum(p.numel() for p in model.parameters() if p.requires_grad),
+                "batch_size": myConfig.training_args.per_device_train_batch_size * myConfig.training_args.gradient_accumulation_steps,
+                "num_epochs": myConfig.training_args.num_train_epochs,
+            }
+        )
+        # Create custom wandb callback
+        wandb_callback = CustomWandbCallback()
+        callbacks = [wandb_callback]
+    else:
+        callbacks = []
+
     # Update Trainer initialization
     trainer = CustomTrainer(
         model=model,
@@ -286,7 +313,66 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         compute_metrics=compute_metrics,
         data_collator=data_collator_fn,
         optimizers=(optimizer, lr_scheduler),
-        class_weights=weights_tensor  # Pass class weights
+        class_weights=weights_tensor,  # Pass class weights
+        callbacks=callbacks  
     )
     return trainer
+
+
+class CustomWandbCallback(WandbCallback):
+    """Enhanced W&B callback with model artifact logging"""
+    
+    def on_train_begin(self, args, state, control, model=None, **kwargs):
+        """Initialize wandb run and watch model if configured"""
+        if self._wandb is None:
+            return
+        
+        # Initialize wandb if not already done
+        if not wandb.run:
+            self._init_wandb(args, state, model)
+            
+        # Watch model architecture and gradients
+        if myConfig.wandb_watch_model and model is not None:
+            wandb.watch(model, log="all", log_freq=100)
+            
+        # Log hyperparameters
+        config = {
+            "batch_size": args.per_device_train_batch_size * args.gradient_accumulation_steps,
+            "learning_rate": args.learning_rate,
+            "epochs": args.num_train_epochs,
+            "model_name": model.__class__.__name__,
+            "optimizer": kwargs.get("optimizer", "Adam8bit"),
+        }
+        wandb.config.update(config)
+    
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """Log evaluation metrics and best model if applicable"""
+        super().on_evaluate(args, state, control, metrics, **kwargs)
+        
+        # Check if this is the best model so far
+        if state.best_model_checkpoint is not None and metrics and metrics.get(args.metric_for_best_model, 0) == state.best_metric:
+            # Log the best model checkpoint as an artifact
+            self._log_best_model(state.best_model_checkpoint)
+    
+    def _log_best_model(self, checkpoint_dir):
+        """Log the best model as a wandb artifact"""
+        if not myConfig.wandb_log_model:
+            return
+            
+        # Create model artifact
+        artifact_name = f"model-{wandb.run.id}"
+        artifact = wandb.Artifact(
+            artifact_name, 
+            type="model", 
+            description=f"Best model checkpoint with {myConfig.training_args.metric_for_best_model}={wandb.run.summary.get(f'eval/{myConfig.training_args.metric_for_best_model}', 0):.4f}"
+        )
+            
+        # Add files to artifact
+        for path in Path(checkpoint_dir).glob("**/*"):
+            if path.is_file():
+                artifact.add_file(str(path), name=str(path.relative_to(checkpoint_dir)))
+            
+        # Log the artifact
+        wandb.log_artifact(artifact)
+        wandb.run.summary["best_model_artifact"] = artifact_name
 

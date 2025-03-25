@@ -126,11 +126,43 @@ def main_fn():
     # Create trainer
     trainer = myModel.createTrainer(model, optimizer, dataset, weights_tensor)
     trainer.train()
-    torch.save(model.state_dict(), "./wav2vec2_classification/model.pth")
-    processor.save_pretrained("./wav2vec2_classification")
+    
+    # Save model and processor
+    output_dir = os.path.join(myConfig.training_args.output_dir, "final-model")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save model state dict
+    torch.save(model.state_dict(), os.path.join(output_dir, "model.pth"))
+    
+    # Save model in safetensors format
+    from safetensors.torch import save_file
+    save_file(model.state_dict(), os.path.join(output_dir, "model.safetensors"))
+    
+    # Save processor
+    processor.save_pretrained(output_dir)
+    
+    # Save config
     if myConfig.training_from_scratch:
         model.config.save_pretrained(myConfig.checkpoint_dir)
-    print("Training complete! Model saved to ./wav2vec2_classification")
+    
+    # Log final model to wandb if enabled
+    if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
+        import wandb
+        if wandb.run and myConfig.wandb_log_model:
+            artifact = wandb.Artifact(
+                f"final-model-{wandb.run.id}", 
+                type="model",
+                description="Final trained model"
+            )
+            
+            # Add files to artifact
+            artifact.add_dir(output_dir)
+            wandb.log_artifact(artifact)
+            
+            # Mark run as complete
+            wandb.run.finish()
+    
+    print("Training complete! Model saved to", output_dir)
 
 
 def test():

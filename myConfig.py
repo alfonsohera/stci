@@ -1,4 +1,5 @@
 import os
+import wandb
 from transformers import TrainingArguments
 
 # Dynamic path configuration
@@ -74,20 +75,37 @@ CLASS_COLORS = {
     "AD": "#C0392B"    # Red for Alzheimer's Disease
 }
 
+# Read batch sizes from environment variables if available
+per_device_train_batch_size = int(os.environ.get('BATCH_SIZE_TRAIN', 4))
+per_device_eval_batch_size = int(os.environ.get('BATCH_SIZE_EVAL', 4))
+train_epochs_num = int(os.environ.get('TRAIN_EPOCHS_VAL', 10))
+
+# Existing wandb configuration
+wandb_project = os.environ.get('WANDB_PROJECT', 'cognitive-classifier')
+wandb_entity = os.environ.get('WANDB_ENTITY', None)
+wandb_run_name = os.environ.get('WANDB_RUN_NAME', f"wav2vec2-prosodic-cls-{os.environ.get('RUN_ID', 'default')}")
+
+# Add new wandb configuration options
+wandb_log_model = os.environ.get('WANDB_LOG_MODEL', 'true').lower() == 'true'
+wandb_watch_model = os.environ.get('WANDB_WATCH', 'false').lower() == 'true'
+
+# Update training arguments to include model logging
 training_args = TrainingArguments(
     output_dir="./wav2vec2_classification",
     evaluation_strategy="epoch",
     save_strategy="epoch",
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    num_train_epochs=10,
+    per_device_train_batch_size=per_device_train_batch_size,
+    per_device_eval_batch_size=per_device_eval_batch_size,
+    num_train_epochs=train_epochs_num,
     weight_decay=0.2,
     logging_dir="./logs",
     logging_steps=10,
-    report_to="none",
+    report_to="wandb", 
     bf16=True,
     remove_unused_columns=False,
-    gradient_accumulation_steps=4,
+    gradient_accumulation_steps=2,
     load_best_model_at_end=True,
-    auto_find_batch_size=True
+    metric_for_best_model="macro_f1",
+    greater_is_better=True,
+    auto_find_batch_size=True,    
 )
