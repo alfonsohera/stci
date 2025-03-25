@@ -1,5 +1,5 @@
-# Base image with PyTorch 2.1.0 and CUDA 11.8 (verified existing tag)
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+# Start with a minimal base image that includes conda
+FROM continuumio/miniconda3:latest
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,18 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /workspace
 
-# Copy requirements.txt first for better caching
-COPY ./requirements.txt .
+# Copy environment.yml first for better caching
+COPY ./environment.yml .
 
-# Install specific PyTorch versions with CUDA support
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu118 \
-    torch==2.6.0+cu118 \
-    torchaudio==2.6.0+cu118 \
-    torchvision==0.21.0+cu118
+# Create conda environment from yml file
+RUN conda env create -f environment.yml && \
+    conda clean -afy
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir bitsandbytes==0.45.3 demucs soundfile wandb
+# Make RUN commands use the new environment
+SHELL ["conda", "run", "-n", "stci", "/bin/bash", "-c"]
 
 # Set cache directory for Hugging Face
 ENV HF_HOME=/workspace/.cache/huggingface
@@ -43,30 +40,14 @@ COPY ./ /workspace/
 # Create necessary directories
 RUN mkdir -p /workspace/Data /workspace/ProcessedFiles /workspace/checkpoints
 
-# Update entrypoint script to handle wandb authentication
-RUN echo '#!/bin/bash\n\
-if [ ! -z "$HF_TOKEN" ]; then\n\
-  echo "Setting up Hugging Face credentials..."\n\
-  huggingface-cli login --token $HF_TOKEN\n\
-  echo "Credentials configured."\n\
-fi\n\
-\n\
-if [ ! -z "$WANDB_API_KEY" ]; then\n\
-  echo "Setting up Weights & Biases credentials..."\n\
-  wandb login $WANDB_API_KEY\n\
-  echo "W&B credentials configured."\n\
-fi\n\
-\n\
-# Execute the command passed to the container\n\
-if [ "$#" -eq 0 ]; then\n\
-  # Default command if none provided\n\
-  python /workspace/main.py\n\
-else\n\
-  # Execute the command provided\n\
-  exec "$@"\n\
-fi' > /entrypoint.sh
+# Copy the entrypoint script to the root directory
+COPY ./entrypoint.sh /entrypoint.sh
 
+# Ensure the script is executable
 RUN chmod +x /entrypoint.sh
+
+# Modify the entrypoint script to also activate conda
+RUN sed -i '1a source /opt/conda/etc/profile.d/conda.sh\nconda activate stci' /entrypoint.sh
 
 # Set the entrypoint
 ENTRYPOINT ["/entrypoint.sh"]
