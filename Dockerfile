@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     ffmpeg \
     libavcodec-extra \
+    nano \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
