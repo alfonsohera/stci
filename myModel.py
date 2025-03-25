@@ -156,11 +156,20 @@ def loadModel(model_name):
         model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    # Apply freezing strategy
-    model.freeze_base_model(
-        freeze_feature_extractor=True,  # Freeze feature extractor
-        #num_encoder_layers_to_freeze=12  # Freeze first 12 encoder layers (12/24)
-    )
+    # Apply freezing strategy: Freeze all parameters in the model
+    for name, param in model.named_parameters():
+        param.requires_grad = False
+
+    # Unfreeze the classifier head parameters: prosody_mlp and fc_combined
+    for name, param in model.prosody_mlp.named_parameters():
+        param.requires_grad = True
+
+    for name, param in model.fc_combined.named_parameters():
+        param.requires_grad = True
+
+    # Optionally, verify which parameters are trainable
+    trainable_params = [name for name, param in model.named_parameters() if param.requires_grad]
+    print("Trainable parameters:", trainable_params)
     
     model.gradient_checkpointing_enable()
     lr = myConfig.training_args.learning_rate
