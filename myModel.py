@@ -148,7 +148,8 @@ def loadModel(model_name):
         # Load trained weights from .safetensors
         state_dict = load_file(f"{myConfig.checkpoint_dir}/model.safetensors")
         model.load_state_dict(state_dict)
-        
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
     # Apply freezing strategy
     model.freeze_base_model(
         freeze_feature_extractor=True,  # Freeze feature extractor
