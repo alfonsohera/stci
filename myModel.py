@@ -123,7 +123,7 @@ def data_collator_fn(features):
     waveforms = [torch.tensor(f["audio"]["array"]) for f in features]
     prosodic_features = torch.stack([
         torch.tensor(f["prosodic_features"], dtype=torch.float) for f in features
-    ])  # Now each prosodic_features is converted to a tensor
+    ])
     labels = torch.tensor([f["label"] for f in features])
 
     input_values = pad_sequence(waveforms, batch_first=True, padding_value=0)
@@ -135,7 +135,9 @@ def data_collator_fn(features):
         return_tensors="pt"
     )
     inputs["labels"] = labels
-    inputs["prosodic_features"] = prosodic_features  # Add prosodic features
+    inputs["prosodic_features"] = prosodic_features
+    
+    # We don't move tensors to device here - Trainer will handle this later
     return inputs
 
 
@@ -172,23 +174,41 @@ class CustomTrainer(Trainer):
             optimizers=optimizers,
             compute_metrics=compute_metrics
         )
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights)  # Set the weighted loss
+        # Ensure class_weights are on same device as model
+        device = next(model.parameters()).device
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels = inputs.pop("labels")
-        prosodic_features = inputs.pop("prosodic_features")
-        outputs = model(input_values=inputs["input_values"], prosodic_features=prosodic_features, labels=labels)
+        # Get model's device
+        device = next(model.parameters()).device
+        
+        # Extract and move inputs to correct device
+        labels = inputs.pop("labels").to(device)
+        prosodic_features = inputs.pop("prosodic_features").to(device)
+        input_values = inputs["input_values"].to(device)
+        
+        # Forward pass with all tensors on same device
+        outputs = model(input_values=input_values, prosodic_features=prosodic_features, labels=labels)
         logits = outputs.logits
+        
         # Use the weighted loss function
         loss = self.criterion(logits, labels)
         return (loss, outputs) if return_outputs else loss
     
     def prediction_step(self, model, inputs, prediction_loss_only=False, ignore_keys=None):
-        labels = inputs.pop("labels", None)  # Remove labels from inputs
-        prosodic_features = inputs.pop("prosodic_features")
+        # Get model's device
+        device = next(model.parameters()).device
+        
+        # Extract and move inputs to correct device
+        labels = inputs.pop("labels", None)
+        if labels is not None:
+            labels = labels.to(device)
+            
+        prosodic_features = inputs.pop("prosodic_features").to(device)
+        input_values = inputs["input_values"].to(device)
 
         with torch.no_grad():
-            outputs = model(input_values=inputs["input_values"], prosodic_features=prosodic_features, labels=labels)
+            outputs = model(input_values=input_values, prosodic_features=prosodic_features, labels=labels)
 
         loss = outputs.loss if outputs.loss is not None else None
         logits = outputs.logits
@@ -200,6 +220,12 @@ class CustomTrainer(Trainer):
 
 def compute_metrics(eval_preds):
     logits, labels = eval_preds
+    # Use CPU for metrics computation
+    if isinstance(logits, torch.Tensor):
+        logits = logits.detach().cpu()
+    if isinstance(labels, torch.Tensor):
+        labels = labels.detach().cpu()
+        
     # Ensure predictions and labels are NumPy arrays
     preds = torch.argmax(torch.tensor(logits), dim=-1).numpy()
 
