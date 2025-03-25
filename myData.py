@@ -235,8 +235,7 @@ def createHFDatasets(train_df, val_df, test_df):
     })
    
     dataset = dataset.map(
-        myFunctions.chunk_input_sample,
-        num_proc=os.cpu_count()-1,  # Use multiple CPU cores
+        myFunctions.chunk_input_sample,        
         desc="Chunking audio samples"
     )
 

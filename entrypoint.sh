@@ -1,4 +1,7 @@
 #!/bin/bash
+source /opt/conda/etc/profile.d/conda.sh
+conda activate stci
+
 if [ ! -z "$HF_TOKEN" ]; then
   echo "Setting up Hugging Face credentials..."
   huggingface-cli login --token $HF_TOKEN
@@ -13,9 +16,9 @@ fi
 
 # Execute the command passed to the container
 if [ "$#" -eq 0 ]; then
-  # Default to shell if no command provided
-  echo "No command provided. Starting shell..."
-  exec /bin/bash
+  echo "No command provided. Keeping container alive..."
+  # Keep the container running without exiting
+  tail -f /dev/null
 else
   # Execute the command provided
   exec "$@"
