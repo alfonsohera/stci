@@ -13,8 +13,9 @@ fi
 
 # Execute the command passed to the container
 if [ "$#" -eq 0 ]; then
-  # Default command if none provided
-  python /workspace/main.py
+  # Default to shell if no command provided
+  echo "No command provided. Starting shell..."
+  exec /bin/bash
 else
   # Execute the command provided
   exec "$@"
