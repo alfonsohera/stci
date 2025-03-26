@@ -19,8 +19,9 @@ import wandb
 import os
 from pathlib import Path
 
+
 class Wav2Vec2ProsodicClassifier(nn.Module):
-    def __init__(self, base_model, num_labels, config=None, prosodic_dim=12): # prosodic_dim needs to match the length of myData.extracted_features!
+    def __init__(self, base_model, num_labels, config=None, prosodic_dim=None):
         super().__init__()
         self.wav2vec2 = Wav2Vec2ForSequenceClassification.from_pretrained(
             base_model,
@@ -30,7 +31,8 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
             self.config = self.wav2vec2.config  # base model config
         else:
             self.config = config or self.wav2vec2.config
-            
+        if prosodic_dim is None:
+            prosodic_dim = myConfig.num_extracted_features
         self.prosody_mlp = nn.Sequential(
             nn.Linear(prosodic_dim, 32),
             nn.ReLU(),

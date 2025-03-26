@@ -60,6 +60,12 @@ features = [
 jitter_shimmer_features = ["jitter_local", "shimmer_local"]
 spectral_features = ["skewness", "centre_of_gravity"]
 speech2text_features = ["wer"]
+# The following features were selected after doing feature importance analysis
+selected_features = [
+    "num_pauses", "total_pause_duration", "phonation_time",
+    "shimmer_local", "skewness", "centre_of_gravity", "wer"
+]
+num_extracted_features = len(selected_features)
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {

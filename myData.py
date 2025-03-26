@@ -16,15 +16,10 @@ from tqdm import tqdm
 from datasets import Dataset, DatasetDict
 
 
-extracted_features = [
-    "Age",
-    "duration",
+extracted_features = [        
     "num_pauses",
     "total_pause_duration",
     "phonation_time",
-    "speech_rate",
-    "dynamic_range_db",
-    "jitter_local",
     "shimmer_local",
     "skewness",
     "centre_of_gravity",
@@ -205,15 +200,10 @@ def process_data(df):
                 "path": file_path
             },
             "label": label,
-            # For each numeric feature, store the standardized value
-            "Age": row.Age,
-            "duration": row.duration,
+            # For each numeric feature, store the standardized value            
             "num_pauses": row.num_pauses,
             "total_pause_duration": row.total_pause_duration,
             "phonation_time": row.phonation_time,
-            "speech_rate": row.speech_rate,
-            "dynamic_range_db": row.dynamic_range_db,
-            "jitter_local": row.jitter_local,
             "shimmer_local": row.shimmer_local,
             "skewness": row.skewness,
             "centre_of_gravity": row.centre_of_gravity,
