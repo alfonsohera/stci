@@ -158,10 +158,8 @@ def loadModel(model_name):
         model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-        
-    # Optionally, verify which parameters are trainable
-    trainable_params = [name for name, param in model.named_parameters() if param.requires_grad]
-    print("Trainable parameters:", trainable_params)
+    model.freeze_base_model(
+        freeze_feature_extractor=True)    
     
     model.gradient_checkpointing_enable()
     lr = myConfig.training_args.learning_rate
