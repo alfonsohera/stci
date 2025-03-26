@@ -1,10 +1,9 @@
-#from google.colab import drive
-import sys
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import sys
 import warnings
 from zipfile import ZipFile
 import torch
-torch.cuda.set_allocator_settings("expandable_segments:True")
 import pandas as pd
 from transformers import logging
 # <local imports>
