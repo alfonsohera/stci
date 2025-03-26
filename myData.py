@@ -232,3 +232,35 @@ def createHFDatasets(train_df, val_df, test_df):
     # Finally, save to disk    
     dataset.save_to_disk(myConfig.OUTPUT_PATH)
     print(f"Dataset saved to {myConfig.OUTPUT_PATH}")
+
+
+def prepare_for_cnn_rnn(example):
+    """Prepares dataset examples for CNN+RNN model"""
+    
+    # Extract manually extracted features
+    manual_features = torch.tensor([
+        example["num_pauses"],
+        example["total_pause_duration"],
+        example["phonation_time"],
+        example["shimmer_local"],
+        example["skewness"],
+        example["centre_of_gravity"],
+        example["wer"]
+    ], dtype=torch.float32)
+    
+    # Use raw audio (already loaded)
+    audio = torch.tensor(example["audio"]["array"], dtype=torch.float32)
+    
+    # Add padding/truncation logic
+    max_length = 16000 * 10  # 10 seconds max
+    if len(audio) > max_length:
+        audio = audio[:max_length]
+    elif len(audio) < max_length:
+        padding = torch.zeros(max_length - len(audio))
+        audio = torch.cat([audio, padding])
+    
+    return {
+        "audio": audio,
+        "manual_features": manual_features,
+        "label": example["label"]
+    }
