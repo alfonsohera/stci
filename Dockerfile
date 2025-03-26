@@ -35,8 +35,10 @@ SHELL ["conda", "run", "-n", "stci", "/bin/bash", "-c"]
 # Set cache directory for Hugging Face
 ENV HF_HOME=/workspace/.cache/huggingface
 
-# Copy the project code
-COPY ./ /workspace/
+# Copy only essential configuration files instead of the full project
+# COPY ./ /workspace/
+COPY ./environment.yml /workspace/
+COPY ./entrypoint.sh /workspace/
 
 # Create necessary directories
 RUN mkdir -p /workspace/Data /workspace/ProcessedFiles /workspace/checkpoints
