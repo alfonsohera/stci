@@ -16,8 +16,8 @@ from torch.nn.utils.rnn import pad_sequence
 from sklearn.metrics import classification_report, confusion_matrix
 from transformers.integrations import WandbCallback
 import wandb
-import os
 from pathlib import Path
+from torch.optim.lr_scheduler import OneCycleLR
 
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
@@ -276,15 +276,21 @@ def compute_metrics(eval_preds):
 def createTrainer(model, optimizer, dataset, weights_tensor):
     # Define the learning rate scheduler
     num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
-
-    lr_scheduler = get_scheduler(
-        name="cosine",
-        optimizer=optimizer,
-        num_warmup_steps=100,  # Gradual warmup phase
-        num_training_steps=num_training_steps
+    
+    # Get the default learning rate from training_args (default is 5e-5 if not set)
+    base_lr = myConfig.training_args.learning_rate
+        
+    lr_scheduler = OneCycleLR(
+        optimizer,
+        max_lr=base_lr * 10,  # Peak at 10x base learning rate
+        total_steps=num_training_steps,
+        pct_start=0.3,  # Use 30% of training for warmup
+        div_factor=25,  # Initial LR = max_lr/25 (starts low)
+        final_div_factor=1e4,  # Final LR = max_lr/10000 (ends very low)
+        anneal_strategy='cos',
+        three_phase=False
     )
 
-    # Initialize wandb if not running offline
     if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
         import wandb
         wandb.init(
