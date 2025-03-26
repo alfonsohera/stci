@@ -4,6 +4,7 @@ import os
 import warnings
 from zipfile import ZipFile
 import torch
+torch.cuda.set_allocator_settings("expandable_segments:True")
 import pandas as pd
 from transformers import logging
 # <local imports>
@@ -16,6 +17,7 @@ import myModel
 from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
+
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")

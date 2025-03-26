@@ -164,6 +164,9 @@ def loadModel(model_name):
     model.gradient_checkpointing_enable()
     lr = myConfig.training_args.learning_rate
     optimizer = Adam8bit(model.parameters(), lr=lr)
+    # Clear CUDA cache
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return model, optimizer
 
 
@@ -198,6 +201,11 @@ class CustomTrainer(Trainer):
         
         # Use the weighted loss function
         loss = self.criterion(logits, labels)
+        
+        # Explicitly clear some tensors to free memory
+        del outputs.hidden_states, outputs.attentions
+        torch.cuda.empty_cache()
+        
         return (loss, outputs) if return_outputs else loss
     
     def prediction_step(self, model, inputs, prediction_loss_only=False, ignore_keys=None):
