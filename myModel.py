@@ -233,6 +233,14 @@ class CustomTrainer(Trainer):
             return (loss, None, None)
         return (loss, logits, labels)
 
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, scheduler, **kwargs):
+        # Execute optimizer step
+        optimizer.step()
+        # Step scheduler _after_ optimizer.step() so that OneCycleLR works as intended.
+        if scheduler is not None:
+            scheduler.step()
+        optimizer.zero_grad()
+
 
 def compute_metrics(eval_preds):
     logits, labels = eval_preds
@@ -282,18 +290,6 @@ def compute_metrics(eval_preds):
     return results
 
 
-class OneCycleLRCallback(TrainerCallback):
-    def __init__(self, lr_scheduler):
-        super().__init__()
-        self.lr_scheduler = lr_scheduler
-        self.last_global_step = -1
-        
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.global_step != self.last_global_step:
-            self.lr_scheduler.step()
-            self.last_global_step = state.global_step
-
-
 def createTrainer(model, optimizer, dataset, weights_tensor):    
     # Number of batches per epoch
     num_batches = len(dataset["train"]) // myConfig.training_args.per_device_train_batch_size
@@ -317,16 +313,15 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         optimizer,
         max_lr=max_lr,
         total_steps=num_training_steps,
-        pct_start=3/num_epochs,
+        pct_start=6/num_epochs,
         div_factor=25,
         final_div_factor=10000,
         anneal_strategy='cos',
         three_phase=False
     )
 
-    # Initialize callbacks list with the 1CycleLR callback
-    callbacks = [OneCycleLRCallback(lr_scheduler)]
-
+    # Initialize callbacks list 
+    callbacks = []
     # Initialize wandb if not running offline
     if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
         import wandb
