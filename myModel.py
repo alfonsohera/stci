@@ -297,9 +297,18 @@ class OneCycleLRCallback(TrainerCallback):
 
 
 def createTrainer(model, optimizer, dataset, weights_tensor):
-    # Define the learning rate scheduler
-    num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
+    # Calculate steps correctly considering batch size
+    batch_size = myConfig.training_args.per_device_train_batch_size  
+    steps_per_epoch = len(dataset["train"]) // batch_size
+    if len(dataset["train"]) % batch_size != 0:
+        steps_per_epoch += 1  # Account for partial batch
     
+    # Account for gradient accumulation
+    effective_steps_per_epoch = steps_per_epoch // myConfig.training_args.gradient_accumulation_steps
+    if steps_per_epoch % myConfig.training_args.gradient_accumulation_steps != 0:
+        effective_steps_per_epoch += 1
+        
+    num_training_steps = int(myConfig.training_args.num_train_epochs * effective_steps_per_epoch)
     # Import PyTorch's 1CycleLR
     from torch.optim.lr_scheduler import OneCycleLR
     
@@ -351,7 +360,7 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         eval_dataset=dataset["validation"],
         compute_metrics=compute_metrics,
         data_collator=data_collator_fn,
-        optimizers=(optimizer, lr_scheduler),
+        optimizers=(optimizer, None),
         class_weights=weights_tensor,
         callbacks=callbacks
     )
