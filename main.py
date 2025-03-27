@@ -5,7 +5,7 @@ import warnings
 from zipfile import ZipFile
 import torch
 import pandas as pd
-import numpy as np
+import numpy
 from transformers import logging
 # <local imports>
 import myConfig
