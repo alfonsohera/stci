@@ -313,7 +313,7 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         optimizer,
         max_lr=max_lr,
         total_steps=num_training_steps,
-        pct_start=6/num_epochs,
+        pct_start=3/num_epochs,
         div_factor=25,
         final_div_factor=10000,
         anneal_strategy='cos',
