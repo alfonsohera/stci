@@ -1,6 +1,6 @@
-#from google.colab import drive
-import sys
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import sys
 import warnings
 from zipfile import ZipFile
 import torch
@@ -17,6 +17,7 @@ from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
 from torch.utils.data import DataLoader
 from torch import nn
+
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
@@ -352,28 +353,89 @@ def main_fn():
 
 
 def test():
-    model, _ = myModel.loadModel()
+    model_name, _, _ = myModel.getModelDefinitions()
+    model, _ = myModel.loadModel(model_name)
     dataset = myData.loadHFDataset()
     testModel(model, dataset)
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]
-    myConfig.running_offline = True if len(args) == 0 or args[0] == 'offline' else False
+def test_cnn_rnn(use_manual_features=True):
+    # Import the CNN+RNN model
+    from myCnnRnnModel import DualPathAudioClassifier
+
+    # Load data
+    myData.DownloadAndExtract()
     
-    if len(args) > 1:
-        if args[1] == 'cnn_rnn':
-            # Check if a third argument specifies manual features usage
-            use_manual = True
-            if len(args) > 2 and args[2] == 'no_manual':
-                use_manual = False
-            
-            # Import the CNN-RNN model
+    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")
+    if os.path.exists(data_file_path):
+        data_df = pd.read_csv(data_file_path)
+        print(f"Loaded existing dataframe from {data_file_path}")
+    else:
+        data_df = myFunctions.createDataframe()
+        data_df = myFunctions.featureEngineering(data_df)
+        os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
+        data_df.to_csv(data_file_path, index=False)
+        print(f"Created and saved dataframe to {data_file_path}")
+    
+    # Split and prepare data for CNN+RNN model
+    train_df, val_df, test_df = myData.datasetSplit(data_df)
+    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+    dataset = myData.createHFDatasets(train_df, val_df, test_df)
+    dataset = dataset.map(myData.prepare_for_cnn_rnn)
+    
+    # Create the CNN+RNN model
+    model = DualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        use_manual_features=use_manual_features,
+        manual_features_dim=len(myData.extracted_features)
+    )
+    
+    # Evaluate the model using the existing test function for cnn_rnn
+    test_cnn_rnn_model(model, dataset, use_manual_features=use_manual_features)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Cognitive Impairment Detection Model")
+    parser.add_argument("mode", choices=["train", "finetune", "test"],
+                        help="Mode of operation: train (from scratch), finetune (existing model) or test (evaluate model)")
+    parser.add_argument("--pipeline", choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
+                        help="Specify the pipeline to use")
+    parser.add_argument("--online", action="store_true", help="Run with online services (WandB logging)")
+    parser.add_argument("--no_manual", action="store_true",
+                        help="Disable manual features for cnn_rnn pipeline")
+    
+    args = parser.parse_args()
+    
+    myConfig.running_offline = not args.online
+
+    if args.pipeline == "wav2vec2":
+        if args.mode in ["train", "finetune"]:
+            if args.mode == "train":
+                myConfig.training_from_scratch = True
+                print("Starting training from scratch (Wav2Vec2 pipeline)...")
+            else:
+                myConfig.training_from_scratch = False
+                print("Starting fine-tuning (Wav2Vec2 pipeline)...")
+            main_fn()
+        elif args.mode == "test":
+            myConfig.training_from_scratch = False
+            print("Running model evaluation (Wav2Vec2 pipeline)...")
+            test()
+    elif args.pipeline == "cnn_rnn":
+        use_manual = not args.no_manual
+        if args.mode in ["train", "finetune"]:
+            if args.mode == "train":
+                myConfig.training_from_scratch = True
+                print("Starting training from scratch (CNN+RNN pipeline)...")
+            else:
+                myConfig.training_from_scratch = False
+                print("Starting fine-tuning (CNN+RNN pipeline)...")
+            # Import the CNN+RNN model locally
             from myCnnRnnModel import DualPathAudioClassifier
             main_cnn_rnn(use_manual_features=use_manual)
-        else:
-            print("Running original Wav2Vec2 pipeline")
-            main_fn()
-    else:
-        print("Running original Wav2Vec2 pipeline")
-        main_fn()
+        elif args.mode == "test":
+            myConfig.training_from_scratch = False
+            print("Running model evaluation (CNN+RNN pipeline)...")
+            test_cnn_rnn(use_manual_features=use_manual)

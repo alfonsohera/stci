@@ -18,7 +18,8 @@ from transformers.integrations import WandbCallback
 import wandb
 import os
 from pathlib import Path
-
+from transformers.trainer_callback import TrainerCallback
+from torch.optim.lr_scheduler import OneCycleLR
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
     def __init__(self, base_model, num_labels, config=None, prosodic_dim=None):
@@ -158,14 +159,17 @@ def loadModel(model_name):
         model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-        
-    # Optionally, verify which parameters are trainable
-    trainable_params = [name for name, param in model.named_parameters() if param.requires_grad]
-    print("Trainable parameters:", trainable_params)
-    
-    model.gradient_checkpointing_enable()
-    lr = myConfig.training_args.learning_rate
+    if myConfig.training_from_scratch:
+        lr = myConfig.training_args.learning_rate
+    else:
+        model.freeze_feature_extractor()
+        model.freeze_encoder_layers(12) 
+        lr = myConfig.training_args.learning_rate * 0.5
+    model.gradient_checkpointing_enable()    
     optimizer = Adam8bit(model.parameters(), lr=lr)
+    # Clear CUDA cache
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return model, optimizer
 
 
@@ -200,6 +204,11 @@ class CustomTrainer(Trainer):
         
         # Use the weighted loss function
         loss = self.criterion(logits, labels)
+        
+        # Explicitly clear some tensors to free memory
+        del outputs.hidden_states, outputs.attentions
+        torch.cuda.empty_cache()
+        
         return (loss, outputs) if return_outputs else loss
     
     def prediction_step(self, model, inputs, prediction_loss_only=False, ignore_keys=None):
@@ -223,6 +232,14 @@ class CustomTrainer(Trainer):
         if prediction_loss_only:
             return (loss, None, None)
         return (loss, logits, labels)
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, scheduler, **kwargs):
+        # Execute optimizer step
+        optimizer.step()
+        # Step scheduler _after_ optimizer.step() so that OneCycleLR works as intended.
+        if scheduler is not None:
+            scheduler.step()
+        optimizer.zero_grad()
 
 
 def compute_metrics(eval_preds):
@@ -273,17 +290,38 @@ def compute_metrics(eval_preds):
     return results
 
 
-def createTrainer(model, optimizer, dataset, weights_tensor):
-    # Define the learning rate scheduler
-    num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
+def createTrainer(model, optimizer, dataset, weights_tensor):    
+    # Number of batches per epoch
+    num_batches = len(dataset["train"]) // myConfig.training_args.per_device_train_batch_size
+    if len(dataset["train"]) % myConfig.training_args.per_device_train_batch_size:
+        num_batches += 1
+    
+    from math import ceil
 
-    lr_scheduler = get_scheduler(
-        name="cosine",
-        optimizer=optimizer,
-        num_warmup_steps=100,  # Gradual warmup phase
-        num_training_steps=num_training_steps
+    num_epochs = myConfig.training_args.num_train_epochs
+    batch_size = myConfig.training_args.per_device_train_batch_size
+    grad_accum = myConfig.training_args.gradient_accumulation_steps
+    train_samples = len(dataset["train"])
+
+    # Exact calculation used by Hugging Face internally:
+    optimization_steps_per_epoch = ceil(train_samples / (batch_size * grad_accum))
+    num_training_steps = optimization_steps_per_epoch * num_epochs
+    
+    # Create the 1CycleLR scheduler with exact step count
+    max_lr = 3.5e-4
+    lr_scheduler = OneCycleLR(
+        optimizer,
+        max_lr=max_lr,
+        total_steps=num_training_steps,
+        pct_start=3/num_epochs,
+        div_factor=25,
+        final_div_factor=10000,
+        anneal_strategy='cos',
+        three_phase=False
     )
 
+    # Initialize callbacks list 
+    callbacks = []
     # Initialize wandb if not running offline
     if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
         import wandb
@@ -297,15 +335,18 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
                 "trainable_params": sum(p.numel() for p in model.parameters() if p.requires_grad),
                 "batch_size": myConfig.training_args.per_device_train_batch_size * myConfig.training_args.gradient_accumulation_steps,
                 "num_epochs": myConfig.training_args.num_train_epochs,
+                "lr_scheduler": "OneCycleLR",  # Add this to track scheduler type
+                "max_lr": max_lr,
+                "pct_start": 0.3,
+                "div_factor": 25,
+                "final_div_factor": 10000
             }
         )
         # Create custom wandb callback
         wandb_callback = CustomWandbCallback()
-        callbacks = [wandb_callback]
-    else:
-        callbacks = []
+        callbacks.append(wandb_callback)
 
-    # Update Trainer initialization
+    # Update Trainer initialization - KEEP both optimizer and scheduler
     trainer = CustomTrainer(
         model=model,
         args=myConfig.training_args,
@@ -314,8 +355,8 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         compute_metrics=compute_metrics,
         data_collator=data_collator_fn,
         optimizers=(optimizer, lr_scheduler),
-        class_weights=weights_tensor,  # Pass class weights
-        callbacks=callbacks  
+        class_weights=weights_tensor,
+        callbacks=callbacks
     )
     return trainer
 
@@ -376,4 +417,5 @@ class CustomWandbCallback(WandbCallback):
         # Log the artifact
         wandb.log_artifact(artifact)
         wandb.run.summary["best_model_artifact"] = artifact_name
+
 
