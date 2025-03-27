@@ -84,7 +84,7 @@ CLASS_COLORS = {
 # Read batch sizes from environment variables if available
 per_device_train_batch_size = int(os.environ.get('BATCH_SIZE_TRAIN', 4))
 per_device_eval_batch_size = int(os.environ.get('BATCH_SIZE_EVAL', 4))
-train_epochs_num = int(os.environ.get('TRAIN_EPOCHS_VAL', 20))
+train_epochs_num = int(os.environ.get('TRAIN_EPOCHS_VAL', 10))
 
 # Existing wandb configuration
 wandb_project = os.environ.get('WANDB_PROJECT', 'cognitive-classifier')
