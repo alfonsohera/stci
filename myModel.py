@@ -299,24 +299,35 @@ class OneCycleLRCallback(TrainerCallback):
 
 
 def createTrainer(model, optimizer, dataset, weights_tensor):
-    # Direct calculation of optimizer steps that will actually occur in training
+    # Calculate steps based on the actual training behavior
     train_dataloader = torch.utils.data.DataLoader(
         dataset["train"],
         batch_size=myConfig.training_args.per_device_train_batch_size,
         shuffle=True
     )
     
-    # Calculate actual number of batches that will be processed
+    # Number of batches per epoch
     num_batches = len(train_dataloader)
     
-    # Calculate actual number of optimizer steps (accounting for gradient accumulation)
-    num_optimization_steps = (num_batches + myConfig.training_args.gradient_accumulation_steps - 1) // myConfig.training_args.gradient_accumulation_steps
+    # Calculate the actual optimizer steps considering gradient accumulation
+    grad_accum = myConfig.training_args.gradient_accumulation_steps
     
-    # Total steps across all epochs
-    num_training_steps = int(num_optimization_steps * myConfig.training_args.num_train_epochs)
+    # Calculate optimizer steps per epoch correctly
+    optimization_steps_per_epoch = num_batches // grad_accum
+    if num_batches % grad_accum > 0:
+        optimization_steps_per_epoch += 1
     
-    # Import PyTorch's 1CycleLR
-    from torch.optim.lr_scheduler import OneCycleLR
+    # Double the total steps to make peak occur at desired epoch
+    # If you want peak at epoch 3 in a 10 epoch training, you need peak at 30% of steps
+    num_epochs = myConfig.training_args.num_train_epochs
+    num_training_steps = optimization_steps_per_epoch * num_epochs
+    
+    print(f"Batch size: {myConfig.training_args.per_device_train_batch_size}")
+    print(f"Grad accum: {grad_accum}")
+    print(f"Num batches: {num_batches}")
+    print(f"Optimizer steps per epoch: {optimization_steps_per_epoch}")
+    print(f"Total training steps: {num_training_steps}")
+    print(f"Peak will occur at step {int(0.3 * num_training_steps)}")
     
     # Create the 1CycleLR scheduler with exact step count
     max_lr = 3.5e-4
@@ -366,7 +377,7 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         eval_dataset=dataset["validation"],
         compute_metrics=compute_metrics,
         data_collator=data_collator_fn,
-        optimizers=(optimizer, None),
+        optimizers=(optimizer, lr_scheduler),
         class_weights=weights_tensor,
         callbacks=callbacks
     )
