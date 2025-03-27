@@ -167,19 +167,36 @@ def main_fn():
 
 
 def test():
-    model, _ = myModel.loadModel()
+    model_name, _, _ = myModel.getModelDefinitions()
+    model, _ = myModel.loadModel(model_name)
     dataset = myData.loadHFDataset()
     testModel(model, dataset)
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    if len(args) > 0:
-        mode = args[0]
-        if mode == 'offline':
-            myConfig.running_offline = True
-        else:
-            myConfig.running_offline = False
-    else:
-        myConfig.running_offline = True
-    main_fn()
+    import argparse
+    
+    # Create argument parser
+    parser = argparse.ArgumentParser(description="Cognitive Impairment Detection Model")
+    parser.add_argument("mode", choices=["train", "finetune", "test"], 
+                        help="Mode of operation: train (from scratch), finetune (existing model), or test (evaluate model)")
+    parser.add_argument("--online", action="store_true", help="Run with online services (WandB logging)")
+    
+    args = parser.parse_args()
+    
+    # Configure offline/online mode
+    myConfig.running_offline = not args.online
+    
+    # Set training mode and call appropriate function
+    if args.mode == "train":
+        myConfig.training_from_scratch = True
+        print("Starting training from scratch...")
+        main_fn()
+    elif args.mode == "finetune":
+        myConfig.training_from_scratch = False
+        print("Starting fine-tuning of existing model...")
+        main_fn()
+    elif args.mode == "test":
+        myConfig.training_from_scratch = False
+        print("Running model evaluation...")
+        test()
