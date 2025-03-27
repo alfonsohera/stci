@@ -18,6 +18,7 @@ from transformers.integrations import WandbCallback
 import wandb
 import os
 from pathlib import Path
+from transformers.trainer_callback import TrainerCallback
 
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
@@ -281,20 +282,42 @@ def compute_metrics(eval_preds):
     return results
 
 
+class OneCycleLRCallback(TrainerCallback):
+    """Custom callback for ensuring 1CycleLR is stepped properly"""
+    
+    def __init__(self, lr_scheduler):
+        super().__init__()
+        self.lr_scheduler = lr_scheduler
+        
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        """Called after each optimizer step"""
+        # This ensures the scheduler is stepped after every batch,
+        # regardless of how the Trainer itself handles the scheduler
+        self.lr_scheduler.step()
+
+
 def createTrainer(model, optimizer, dataset, weights_tensor):
     # Define the learning rate scheduler
     num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
-    if myConfig.training_from_scratch:
-        steps = 100
-    else:
-        steps = 50  # shorter warmup for fine-tuning
-
-    lr_scheduler = get_scheduler(
-        name="cosine",
-        optimizer=optimizer,
-        num_warmup_steps=steps,
-        num_training_steps=num_training_steps
+    
+    # Import PyTorch's 1CycleLR
+    from torch.optim.lr_scheduler import OneCycleLR
+    
+    # Create the 1CycleLR scheduler
+    max_lr = 3.5e-4
+    lr_scheduler = OneCycleLR(
+        optimizer,
+        max_lr=max_lr,
+        total_steps=num_training_steps,
+        pct_start=0.3,  # Spend 30% of steps increasing LR
+        div_factor=25,  # Initial LR will be max_lr/25
+        final_div_factor=10000,  # Final LR will be initial_lr/10000
+        anneal_strategy='cos',  # Use cosine annealing
+        three_phase=False  # Use two-phase (up then down) policy
     )
+
+    # Initialize callbacks list with the 1CycleLR callback
+    callbacks = [OneCycleLRCallback(lr_scheduler)]
 
     # Initialize wandb if not running offline
     if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
@@ -309,15 +332,18 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
                 "trainable_params": sum(p.numel() for p in model.parameters() if p.requires_grad),
                 "batch_size": myConfig.training_args.per_device_train_batch_size * myConfig.training_args.gradient_accumulation_steps,
                 "num_epochs": myConfig.training_args.num_train_epochs,
+                "lr_scheduler": "OneCycleLR",  # Add this to track scheduler type
+                "max_lr": max_lr,
+                "pct_start": 0.3,
+                "div_factor": 25,
+                "final_div_factor": 10000
             }
         )
         # Create custom wandb callback
         wandb_callback = CustomWandbCallback()
-        callbacks = [wandb_callback]
-    else:
-        callbacks = []
+        callbacks.append(wandb_callback)
 
-    # Update Trainer initialization
+    # Update Trainer initialization - KEEP both optimizer and scheduler
     trainer = CustomTrainer(
         model=model,
         args=myConfig.training_args,
@@ -326,8 +352,8 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         compute_metrics=compute_metrics,
         data_collator=data_collator_fn,
         optimizers=(optimizer, lr_scheduler),
-        class_weights=weights_tensor,  # Pass class weights
-        callbacks=callbacks  
+        class_weights=weights_tensor,
+        callbacks=callbacks
     )
     return trainer
 
@@ -388,4 +414,5 @@ class CustomWandbCallback(WandbCallback):
         # Log the artifact
         wandb.log_artifact(artifact)
         wandb.run.summary["best_model_artifact"] = artifact_name
+
 
