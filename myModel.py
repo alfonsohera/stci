@@ -288,7 +288,10 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
     lr_scheduler = get_scheduler(
         name="cosine",
         optimizer=optimizer,
-        num_warmup_steps=100,  # Gradual warmup phase
+        if myConfig.training_from_scratch:
+            num_warmup_steps=100, 
+        else:
+            num_warmup_steps=50,  # shorter warmup for fine-tuning
         num_training_steps=num_training_steps
     )
 
