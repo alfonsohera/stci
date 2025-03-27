@@ -281,33 +281,24 @@ def compute_metrics(eval_preds):
     }
     return results
 
-
 class OneCycleLRCallback(TrainerCallback):
-    """Custom callback for correctly stepping the 1CycleLR scheduler"""
     
     def __init__(self, lr_scheduler):
         super().__init__()
         self.lr_scheduler = lr_scheduler
-        self.last_global_step = 0
+        self.last_global_step = -1
         
-    def on_step_begin(self, args, state, control, **kwargs):
-        """Make sure we only step the scheduler once per actual optimizer step"""
-        # We step at the beginning to ensure the correct LR is used for the step
-        if state.global_step > self.last_global_step:
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step != self.last_global_step:
             self.lr_scheduler.step()
             self.last_global_step = state.global_step
 
 
-def createTrainer(model, optimizer, dataset, weights_tensor):
-    # Calculate steps based on the actual training behavior
-    train_dataloader = torch.utils.data.DataLoader(
-        dataset["train"],
-        batch_size=myConfig.training_args.per_device_train_batch_size,
-        shuffle=True
-    )
-    
+def createTrainer(model, optimizer, dataset, weights_tensor):    
     # Number of batches per epoch
-    num_batches = len(train_dataloader)
+    num_batches = len(dataset["train"]) // myConfig.training_args.per_device_train_batch_size
+    if len(dataset["train"]) % myConfig.training_args.per_device_train_batch_size:
+        num_batches += 1
     
     # Calculate the actual optimizer steps considering gradient accumulation
     grad_accum = myConfig.training_args.gradient_accumulation_steps
