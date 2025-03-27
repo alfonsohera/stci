@@ -283,46 +283,52 @@ def compute_metrics(eval_preds):
 
 
 class OneCycleLRCallback(TrainerCallback):
-    """Custom callback for ensuring 1CycleLR is stepped properly"""
+    """Custom callback for correctly stepping the 1CycleLR scheduler"""
     
     def __init__(self, lr_scheduler):
         super().__init__()
         self.lr_scheduler = lr_scheduler
+        self.last_global_step = 0
         
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        """Called after each optimizer step"""
-        # This ensures the scheduler is stepped after every batch,
-        # regardless of how the Trainer itself handles the scheduler
-        self.lr_scheduler.step()
+    def on_step_begin(self, args, state, control, **kwargs):
+        """Make sure we only step the scheduler once per actual optimizer step"""
+        # We step at the beginning to ensure the correct LR is used for the step
+        if state.global_step > self.last_global_step:
+            self.lr_scheduler.step()
+            self.last_global_step = state.global_step
 
 
 def createTrainer(model, optimizer, dataset, weights_tensor):
-    # Calculate steps correctly considering batch size
-    batch_size = myConfig.training_args.per_device_train_batch_size  
-    steps_per_epoch = len(dataset["train"]) // batch_size
-    if len(dataset["train"]) % batch_size != 0:
-        steps_per_epoch += 1  # Account for partial batch
+    # Direct calculation of optimizer steps that will actually occur in training
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset["train"],
+        batch_size=myConfig.training_args.per_device_train_batch_size,
+        shuffle=True
+    )
     
-    # Account for gradient accumulation
-    effective_steps_per_epoch = steps_per_epoch // myConfig.training_args.gradient_accumulation_steps
-    if steps_per_epoch % myConfig.training_args.gradient_accumulation_steps != 0:
-        effective_steps_per_epoch += 1
-        
-    num_training_steps = int(myConfig.training_args.num_train_epochs * effective_steps_per_epoch)
+    # Calculate actual number of batches that will be processed
+    num_batches = len(train_dataloader)
+    
+    # Calculate actual number of optimizer steps (accounting for gradient accumulation)
+    num_optimization_steps = (num_batches + myConfig.training_args.gradient_accumulation_steps - 1) // myConfig.training_args.gradient_accumulation_steps
+    
+    # Total steps across all epochs
+    num_training_steps = int(num_optimization_steps * myConfig.training_args.num_train_epochs)
+    
     # Import PyTorch's 1CycleLR
     from torch.optim.lr_scheduler import OneCycleLR
     
-    # Create the 1CycleLR scheduler
+    # Create the 1CycleLR scheduler with exact step count
     max_lr = 3.5e-4
     lr_scheduler = OneCycleLR(
         optimizer,
         max_lr=max_lr,
         total_steps=num_training_steps,
-        pct_start=0.3,  # Spend 30% of steps increasing LR
-        div_factor=25,  # Initial LR will be max_lr/25
-        final_div_factor=10000,  # Final LR will be initial_lr/10000
-        anneal_strategy='cos',  # Use cosine annealing
-        three_phase=False  # Use two-phase (up then down) policy
+        pct_start=0.3,
+        div_factor=25,
+        final_div_factor=10000,
+        anneal_strategy='cos',
+        three_phase=False
     )
 
     # Initialize callbacks list with the 1CycleLR callback
