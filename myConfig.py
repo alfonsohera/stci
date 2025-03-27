@@ -102,6 +102,7 @@ training_args = TrainingArguments(
     save_strategy="epoch",
     per_device_train_batch_size=per_device_train_batch_size,
     per_device_eval_batch_size=per_device_eval_batch_size,
+    learning_rate=5e-4,
     dataloader_num_workers=2,
     dataloader_pin_memory=True, 
     num_train_epochs=train_epochs_num,

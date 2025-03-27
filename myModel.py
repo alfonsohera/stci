@@ -158,8 +158,13 @@ def loadModel(model_name):
         model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    model.gradient_checkpointing_enable()
-    lr = myConfig.training_args.learning_rate
+    if myConfig.training_from_scratch:
+        lr = myConfig.training_args.learning_rate
+    else:
+        model.freeze_feature_extractor()
+        model.freeze_encoder_layers(12) 
+        lr = myConfig.training_args.learning_rate * 0.5
+    model.gradient_checkpointing_enable()    
     optimizer = Adam8bit(model.parameters(), lr=lr)
     # Clear CUDA cache
     if torch.cuda.is_available():
