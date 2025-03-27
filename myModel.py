@@ -284,14 +284,15 @@ def compute_metrics(eval_preds):
 def createTrainer(model, optimizer, dataset, weights_tensor):
     # Define the learning rate scheduler
     num_training_steps = myConfig.training_args.num_train_epochs * len(dataset["train"]) // myConfig.training_args.gradient_accumulation_steps
+    if myConfig.training_from_scratch:
+        steps = 100
+    else:
+        steps = 50  # shorter warmup for fine-tuning
 
     lr_scheduler = get_scheduler(
         name="cosine",
         optimizer=optimizer,
-        if myConfig.training_from_scratch:
-            num_warmup_steps=100, 
-        else:
-            num_warmup_steps=50,  # shorter warmup for fine-tuning
+        num_warmup_steps=steps,
         num_training_steps=num_training_steps
     )
 
