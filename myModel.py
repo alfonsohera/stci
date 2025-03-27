@@ -281,8 +281,8 @@ def compute_metrics(eval_preds):
     }
     return results
 
+
 class OneCycleLRCallback(TrainerCallback):
-    
     def __init__(self, lr_scheduler):
         super().__init__()
         self.lr_scheduler = lr_scheduler
@@ -300,25 +300,16 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
     if len(dataset["train"]) % myConfig.training_args.per_device_train_batch_size:
         num_batches += 1
     
-    # Calculate the actual optimizer steps considering gradient accumulation
-    grad_accum = myConfig.training_args.gradient_accumulation_steps
-    
-    # Calculate optimizer steps per epoch correctly
-    optimization_steps_per_epoch = num_batches // grad_accum
-    if num_batches % grad_accum > 0:
-        optimization_steps_per_epoch += 1
-    
-    # Double the total steps to make peak occur at desired epoch
-    # If you want peak at epoch 3 in a 10 epoch training, you need peak at 30% of steps
+    from math import ceil
+
     num_epochs = myConfig.training_args.num_train_epochs
+    batch_size = myConfig.training_args.per_device_train_batch_size
+    grad_accum = myConfig.training_args.gradient_accumulation_steps
+    train_samples = len(dataset["train"])
+
+    # Exact calculation used by Hugging Face internally:
+    optimization_steps_per_epoch = ceil(train_samples / (batch_size * grad_accum))
     num_training_steps = optimization_steps_per_epoch * num_epochs
-    
-    print(f"Batch size: {myConfig.training_args.per_device_train_batch_size}")
-    print(f"Grad accum: {grad_accum}")
-    print(f"Num batches: {num_batches}")
-    print(f"Optimizer steps per epoch: {optimization_steps_per_epoch}")
-    print(f"Total training steps: {num_training_steps}")
-    print(f"Peak will occur at step {int(0.3 * num_training_steps)}")
     
     # Create the 1CycleLR scheduler with exact step count
     max_lr = 3.5e-4
@@ -326,7 +317,7 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
         optimizer,
         max_lr=max_lr,
         total_steps=num_training_steps,
-        pct_start=0.3,
+        pct_start=3/num_epochs,
         div_factor=25,
         final_div_factor=10000,
         anneal_strategy='cos',
