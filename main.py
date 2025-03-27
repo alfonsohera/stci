@@ -16,6 +16,7 @@ import myModel
 # </local imports>
 from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 from torch import nn
 
@@ -24,6 +25,18 @@ from torch import nn
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
 logging.set_verbosity_error()  # Set transformers logging to show only errors
 
+
+class FocalLoss(nn.Module):
+        def __init__(self, gamma=2, weight=None):
+            super(FocalLoss, self).__init__()
+            self.gamma = gamma
+            self.weight = weight
+            
+        def forward(self, input, target):
+            ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+            pt = torch.exp(-ce_loss)
+            focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+            return focal_loss.mean()
 
 def collate_fn_cnn_rnn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -44,11 +57,8 @@ def collate_fn_cnn_rnn(batch):
         "labels": torch.tensor([item["label"] for item in batch]).to(device)
     }
     
-    # Important change: Take manual features directly from the model creation argument
-    # instead of checking if they exist in the dataset
     manual_features_exist = "manual_features" in batch[0] and all(isinstance(item["manual_features"], torch.Tensor) for item in batch)
-    if manual_features_exist:
-        # This guarantees they're all tensors already
+    if manual_features_exist:        
         manual_features_list = [item["manual_features"] for item in batch]
         try:
             result["manual_features"] = torch.stack(manual_features_list).to(device)
@@ -89,31 +99,42 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
     
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    
+    
+
+    # Calculate weights
+    y_train = [item["label"] for item in dataset["train"]]
+    class_weights = compute_class_weight(
+        class_weight="balanced", 
+        classes=np.unique(y_train), 
+        y=y_train
+    )
+    class_weights = torch.FloatTensor(class_weights).to(device)
+    criterion = FocalLoss(gamma=2, weight=class_weights)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     
     # Calculate total steps for 1cycle scheduler
     total_steps = len(train_loader) * num_epochs
     
-    # 1cycle LR scheduler instead of ReduceLROnPlateau
+    # 1cycle LR scheduler 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-4,  # Peak learning rate
+        max_lr=5e-5,  # Reduced from 1e-4
         total_steps=total_steps,
-        pct_start=0.3,  # Percentage of steps used for warmup
-        div_factor=25,  # Initial LR = max_lr / div_factor
-        final_div_factor=1000  # Final LR = initial_lr / final_div_factor
+        pct_start=0.3,  
+        div_factor=25,  
+        final_div_factor=1000  
     )
     
-    # Create CNN+RNN specific output directory
+    # Create output directory for CNN+RNN model
     cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
     os.makedirs(cnn_rnn_output_dir, exist_ok=True)
     
+    # Move model to device
     model.to(device)
     
     # Tracking variables
-    best_f1_macro = 0.0  # Track best F1 macro instead of validation loss
+    best_f1_macro = 0.0  
     
     for epoch in range(num_epochs):
         # Training phase
@@ -121,22 +142,25 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         train_loss = 0.0
         
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
-            optimizer.zero_grad()
-            
-            # Check if both conditions are met: we want manual features AND they exist in batch
+            # Zero gradients
+            optimizer.zero_grad()                        
             if use_manual_features and "manual_features" in batch:
+                # Forward pass
                 logits = model(batch["audio"], batch["manual_features"])
             else:
+                # Forward pass
                 logits = model(batch["audio"])
-                
+            # Calculate loss                
             loss = criterion(logits, batch["labels"])
-            
+            # Backpropagation
             loss.backward()
+            # Update weights
             optimizer.step()
+            # Update LR
             scheduler.step()  # Update scheduler after each batch with 1cycle
-            
+            # Track loss
             train_loss += loss.item()
-        
+        # Calculate average loss
         avg_train_loss = train_loss / len(train_loader)
         
         # Validation phase
@@ -148,15 +172,20 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
                 if use_manual_features:
+                    # Forward pass
                     logits = model(batch["audio"], batch["manual_features"])
                 else:
+                    # Forward pass
                     logits = model(batch["audio"])
-                
+                # Calculate loss
                 loss = criterion(logits, batch["labels"])
+                # Track loss
                 val_loss += loss.item()
-                
+                # Get predictions
                 preds = torch.argmax(logits, dim=-1)
+                # Track predictions and labels
                 all_preds.extend(preds.cpu().numpy())
+                # Convert labels to numpy and extend
                 all_labels.extend(batch["labels"].cpu().numpy())
         
         # Calculate metrics

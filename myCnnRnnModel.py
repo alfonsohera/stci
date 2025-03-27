@@ -60,10 +60,10 @@ class DualPathAudioClassifier(nn.Module):
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, 256),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.4),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.3),
             nn.Linear(128, num_classes)
         )
         
