@@ -19,7 +19,7 @@ import wandb
 import os
 from pathlib import Path
 from transformers.trainer_callback import TrainerCallback
-
+from torch.optim.lr_scheduler import OneCycleLR
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
     def __init__(self, base_model, num_labels, config=None, prosodic_dim=None):
