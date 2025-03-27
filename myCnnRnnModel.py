@@ -33,9 +33,9 @@ class DualPathAudioClassifier(nn.Module):
         self.cnn_dim_reducer = nn.Linear(1280, 256)
         
         # RNN path for raw audio
-        self.audio_downsample = nn.Conv1d(1, 1, kernel_size=50, stride=50)
+        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)  # Change output channels to 8
         self.rnn = nn.GRU(
-            input_size=sample_rate//50,  # Downsampled audio length
+            input_size=8,  # Changed from sample_rate//50 to match Conv1d output channels
             hidden_size=128,
             num_layers=2,
             batch_first=True,
@@ -68,44 +68,35 @@ class DualPathAudioClassifier(nn.Module):
         )
         
     def forward(self, audio, manual_features=None):
-        batch_size = audio.shape[0]
+        # Start with processing the audio through the CNN
+        # If the audio is just a single channel, expand to [B, 1, T]
+        if len(audio.shape) == 2:
+            audio = audio.unsqueeze(1)  # Add channel dimension
         
-        # ===== CNN Path =====
-        # Convert to spectrogram
-        with torch.no_grad():
-            spec = self.mel_spec(audio)
-            spec = self.amplitude_to_db(spec)
-            spec = spec.unsqueeze(1)  # [batch, 1, n_mels, time]
-            
-            # Extract CNN features (frozen)
-            cnn_features = self.cnn_extractor(spec)  # [batch, 1280]
+        # Generate mel spectrogram
+        mel = self.mel_spec(audio.squeeze(1))
+        mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
         
-        # Reduce CNN feature dimensions
+        # Pass through CNN backbone
+        cnn_features = self.cnn_extractor(mel_db)
         cnn_features = self.cnn_dim_reducer(cnn_features)
         
-        # ===== RNN Path =====
-        # Process raw audio
-        audio_reshaped = audio.unsqueeze(1)  # [batch, 1, time]
-        audio_downsampled = self.audio_downsample(audio_reshaped)
-        audio_downsampled = audio_downsampled.transpose(1, 2)  # [batch, time, 1]
+        # Process audio for RNN path
+        audio_downsampled = self.audio_downsample(audio)
+        audio_downsampled = audio_downsampled.transpose(1, 2)  # B, T, C
         
-        # RNN processing
+        # Pass through RNN
         rnn_output, _ = self.rnn(audio_downsampled)
+        rnn_features = rnn_output[:, -1, :]  # Take final state
         
-        # Get bidirectional features
-        rnn_features = torch.cat([
-            rnn_output[:, -1, :128],  # Forward final
-            rnn_output[:, 0, 128:]    # Backward final
-        ], dim=1)  # [batch, 256]
+        # Combine CNN and RNN features
+        combined_features = torch.cat([cnn_features, rnn_features], dim=1)
         
-        # ===== Feature Fusion =====
-        if self.use_manual_features and manual_features is not None:
+        # Add manual features if available and enabled
+        if manual_features is not None and self.use_manual_features:
             manual_features_processed = self.manual_feature_mlp(manual_features)
-            combined = torch.cat([cnn_features, rnn_features, manual_features_processed], dim=1)
-        else:
-            combined = torch.cat([cnn_features, rnn_features], dim=1)
+            combined_features = torch.cat([combined_features, manual_features_processed], dim=1)
         
         # Final classification
-        logits = self.fusion(combined)
-        
-        return logits
+        output = self.fusion(combined_features)
+        return output

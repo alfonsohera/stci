@@ -5,6 +5,9 @@ import myConfig
 import myFunctions
 import myAudio
 import numpy as np
+import psutil
+import gc
+import torch
 
 from zipfile import ZipFile
 #from google.colab import drive
@@ -25,6 +28,25 @@ extracted_features = [
     "centre_of_gravity",
     "wer"
 ]
+
+# Add memory monitoring function
+def log_memory_usage(label):
+    """Log current memory usage with a descriptive label"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    
+    # Convert to GB for readability
+    rss_gb = memory_info.rss / (1024 * 1024 * 1024)
+    vms_gb = memory_info.vms / (1024 * 1024 * 1024)
+    
+    print(f"MEMORY [{label}] - RSS: {rss_gb:.2f} GB, VMS: {vms_gb:.2f} GB")
+    
+    # Log if we're approaching system limits
+    total_memory = psutil.virtual_memory().total / (1024 * 1024 * 1024)
+    percent_used = (memory_info.rss / psutil.virtual_memory().total) * 100
+    print(f"MEMORY [{label}] - Using {percent_used:.1f}% of total system memory ({total_memory:.1f} GB)")
+    
+    return memory_info
 
 
 def DownloadAndExtract():
@@ -213,9 +235,13 @@ def process_data(df):
 
 
 def createHFDatasets(train_df, val_df, test_df):
+    log_memory_usage("Before process_data")
     train_data = process_data(train_df)
+    log_memory_usage("After train process_data")
     val_data = process_data(val_df)
+    log_memory_usage("After val process_data")
     test_data = process_data(test_df)
+    log_memory_usage("After test process_data")
 
     # Build HF Datasets from lists
     dataset = DatasetDict({
@@ -223,15 +249,32 @@ def createHFDatasets(train_df, val_df, test_df):
         "validation": Dataset.from_list(val_data),
         "test": Dataset.from_list(test_data),
     })
-   
-    dataset = dataset.map(
-        myFunctions.chunk_input_sample,        
-        desc="Chunking audio samples"
-    )
+    
+    log_memory_usage("Before chunking")
+    # Try cleaning up before chunking
+    del train_data, val_data, test_data
+    gc.collect()
+    log_memory_usage("After cleanup, before chunking")
+    
+    # Monitor chunking in batches to see where it fails
+    try:
+        dataset = dataset.map(
+            myFunctions.chunk_input_sample,
+            desc="Chunking audio samples",
+            batch_size=8  # Process in smaller batches
+        )
+        log_memory_usage("After chunking")
+    except Exception as e:
+        log_memory_usage("Chunking failed")
+        print(f"Chunking error: {e}")
+        raise
 
     # Finally, save to disk    
     dataset.save_to_disk(myConfig.OUTPUT_PATH)
+    log_memory_usage("After saving dataset")
     print(f"Dataset saved to {myConfig.OUTPUT_PATH}")
+    
+    return dataset
 
 
 def prepare_for_cnn_rnn(example):
@@ -249,7 +292,12 @@ def prepare_for_cnn_rnn(example):
     ], dtype=torch.float32)
     
     # Use raw audio (already loaded)
-    audio = torch.tensor(example["audio"]["array"], dtype=torch.float32)
+    # Convert to tensor if it's a numpy array
+    if isinstance(example["audio"]["array"], np.ndarray):
+        audio = torch.tensor(example["audio"]["array"], dtype=torch.float32)
+    else:
+        # It's already a tensor
+        audio = example["audio"]["array"]
     
     # Add padding/truncation logic
     max_length = 16000 * 10  # 10 seconds max
@@ -259,6 +307,7 @@ def prepare_for_cnn_rnn(example):
         padding = torch.zeros(max_length - len(audio))
         audio = torch.cat([audio, padding])
     
+    # Return with separate manual_features key, not flattened into example
     return {
         "audio": audio,
         "manual_features": manual_features,

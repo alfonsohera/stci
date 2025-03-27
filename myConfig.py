@@ -97,7 +97,7 @@ wandb_watch_model = os.environ.get('WANDB_WATCH', 'false').lower() == 'true'
 
 # Update training arguments to include model logging
 training_args = TrainingArguments(
-    output_dir="./wav2vec2_classification",
+    output_dir="./training_output",
     evaluation_strategy="epoch",
     save_strategy="epoch",
     per_device_train_batch_size=per_device_train_batch_size,

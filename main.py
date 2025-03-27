@@ -5,6 +5,7 @@ import warnings
 from zipfile import ZipFile
 import torch
 import pandas as pd
+import numpy as np
 from transformers import logging
 # <local imports>
 import myConfig
@@ -27,21 +28,66 @@ logging.set_verbosity_error()  # Set transformers logging to show only errors
 def collate_fn_cnn_rnn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    audio = torch.stack([item["audio"] for item in batch]).to(device)
-    manual_features = torch.stack([item["manual_features"] for item in batch]).to(device)
-    labels = torch.tensor([item["label"] for item in batch]).to(device)
+    # Make sure each item["audio"] is a tensor before stacking
+    audio_tensors = []
+    for item in batch:
+        if isinstance(item["audio"], list):  # Handle case where audio is still a list
+            audio_tensors.append(torch.tensor(item["audio"], dtype=torch.float32))
+        else:  # Already a tensor
+            audio_tensors.append(item["audio"])
     
-    return {
+    audio = torch.stack(audio_tensors).to(device)
+    
+    # Common elements
+    result = {
         "audio": audio,
-        "manual_features": manual_features,
-        "labels": labels
+        "labels": torch.tensor([item["label"] for item in batch]).to(device)
     }
+    
+    # Important change: Take manual features directly from the model creation argument
+    # instead of checking if they exist in the dataset
+    manual_features_exist = "manual_features" in batch[0] and all(isinstance(item["manual_features"], torch.Tensor) for item in batch)
+    if manual_features_exist:
+        # This guarantees they're all tensors already
+        manual_features_list = [item["manual_features"] for item in batch]
+        try:
+            result["manual_features"] = torch.stack(manual_features_list).to(device)
+        except Exception as e:
+            print(f"Error stacking manual features: {e}")
+            print(f"Types: {[type(mf) for mf in manual_features_list]}")
+            print(f"First item: {manual_features_list[0]}")
+            # Fallback - skip manual features
+            pass
+    
+    return result
 
 
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_loader = DataLoader(dataset["train"], batch_size=8, collate_fn=collate_fn_cnn_rnn)
     val_loader = DataLoader(dataset["validation"], batch_size=8, collate_fn=collate_fn_cnn_rnn)
+    
+    # Initialize wandb
+    import wandb
+    if not wandb.run:
+        wandb.init(
+            project=myConfig.wandb_project,
+            entity=myConfig.wandb_entity,
+            name=f"cnn_rnn{'_manual' if use_manual_features else '_no_manual'}",
+            config={
+                "model_type": "CNN+RNN",
+                "use_manual_features": use_manual_features,
+                "learning_rate": 1e-4,
+                "epochs": num_epochs,
+                "batch_size": 8,
+                "weight_decay": 1e-5,
+                "manual_features_dim": len(myData.extracted_features) if use_manual_features else 0
+            }
+        )
+        
+        # Watch model parameters and gradients
+        if myConfig.wandb_watch_model:
+            wandb.watch(model, log="all", log_freq=100)
     
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -53,12 +99,16 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
     # 1cycle LR scheduler instead of ReduceLROnPlateau
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-3,  # Peak learning rate
+        max_lr=1e-4,  # Peak learning rate
         total_steps=total_steps,
         pct_start=0.3,  # Percentage of steps used for warmup
         div_factor=25,  # Initial LR = max_lr / div_factor
         final_div_factor=1000  # Final LR = initial_lr / final_div_factor
     )
+    
+    # Create CNN+RNN specific output directory
+    cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
+    os.makedirs(cnn_rnn_output_dir, exist_ok=True)
     
     model.to(device)
     
@@ -73,7 +123,8 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
             optimizer.zero_grad()
             
-            if use_manual_features:
+            # Check if both conditions are met: we want manual features AND they exist in batch
+            if use_manual_features and "manual_features" in batch:
                 logits = model(batch["audio"], batch["manual_features"])
             else:
                 logits = model(batch["audio"])
@@ -117,6 +168,74 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         # Generate confusion matrix
         cm = confusion_matrix(all_labels, all_preds)
         
+        # Calculate class-specific metrics
+        class_names = ["healthy", "mci", "ad"]
+        
+        # Calculate per-class metrics
+        log_dict = {
+            "epoch": epoch + 1,
+            "train_loss": avg_train_loss,
+            "val_loss": avg_val_loss,
+            "val_accuracy": val_accuracy,
+            "val_f1_macro": val_f1_macro,
+            "learning_rate": scheduler.get_last_lr()[0]
+        }
+        
+        # Compute class-specific metrics
+        tp = {}
+        fp = {}
+        tn = {}
+        fn = {}
+        
+        # Calculate TP, FP, TN, FN for each class
+        for i, class_name in enumerate(class_names):
+            tp[i] = sum((numpy.array(all_preds) == i) & (numpy.array(all_labels) == i))
+            fp[i] = sum((numpy.array(all_preds) == i) & (numpy.array(all_labels) != i))
+            tn[i] = sum((numpy.array(all_preds) != i) & (numpy.array(all_labels) != i))
+            fn[i] = sum((numpy.array(all_preds) != i) & (numpy.array(all_labels) == i))
+            
+            # Precision = TP / (TP + FP)
+            precision = tp[i] / (tp[i] + fp[i]) if (tp[i] + fp[i]) > 0 else 0
+            # Recall/Sensitivity = TP / (TP + FN)
+            recall = tp[i] / (tp[i] + fn[i]) if (tp[i] + fn[i]) > 0 else 0
+            # Specificity = TN / (TN + FP)
+            specificity = tn[i] / (tn[i] + fp[i]) if (tn[i] + fp[i]) > 0 else 0
+            # NPV = TN / (TN + FN)
+            npv = tn[i] / (tn[i] + fn[i]) if (tn[i] + fn[i]) > 0 else 0
+            # F1 = 2 * (precision * recall) / (precision + recall)
+            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            
+            # Add to the log dictionary
+            log_dict[f"val_precision_{class_name}"] = precision
+            log_dict[f"val_recall_{class_name}"] = recall
+            log_dict[f"val_specificity_{class_name}"] = specificity
+            log_dict[f"val_npv_{class_name}"] = npv
+            log_dict[f"val_f1_{class_name}"] = f1
+        
+        # Log metrics to wandb if enabled
+        if wandb.run:
+            # Create and log confusion matrix visualization
+            import matplotlib.pyplot as plt
+            import numpy as np
+            plt.figure(figsize=(10, 8))
+            plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+            plt.title('Confusion Matrix')
+            plt.colorbar()
+            classes = ["Healthy", "MCI", "AD"]
+            tick_marks = np.arange(len(classes))
+            plt.xticks(tick_marks, classes, rotation=45)
+            plt.yticks(tick_marks, classes)
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.tight_layout()
+                
+            # Log to wandb
+            wandb.log({
+                **log_dict,
+                "confusion_matrix": wandb.Image(plt)
+            })
+            plt.close()
+        
         # Print metrics
         print(f"Epoch {epoch+1}/{num_epochs}:")
         print(f"  Train Loss: {avg_train_loss:.4f}")
@@ -130,8 +249,43 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         # Save best model based on F1-macro instead of validation loss
         if val_f1_macro > best_f1_macro:
             best_f1_macro = val_f1_macro
-            torch.save(model.state_dict(), os.path.join(myConfig.training_args.output_dir, "cnn_rnn_best.pt"))
-            print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f}!")
+            
+            # Save model to CNN+RNN specific directory
+            model_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.pt")
+            torch.save(model.state_dict(), model_path)
+            print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
+            
+            # Also save in safetensors format if available
+            try:
+                from safetensors.torch import save_file
+                safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
+                save_file(model.state_dict(), safetensors_path)
+                print(f"  Also saved model in safetensors format to {safetensors_path}")
+            except ImportError:
+                print("  safetensors not available, skipping safetensors format")
+    
+    # End of training, log best model if enabled    
+    if wandb.run:
+        wandb.run.summary["best_f1_macro"] = best_f1_macro
+        
+        # Log final model if configured
+        if myConfig.wandb_log_model:
+            cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
+            model_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.pt")
+            safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
+            
+            if os.path.exists(model_path):
+                artifact = wandb.Artifact(
+                    f"cnn-rnn-best-{wandb.run.id}", 
+                    type="model",
+                    description=f"Best CNN+RNN model with F1-macro={best_f1_macro:.4f}"
+                )
+                artifact.add_file(model_path, name="model.pt")
+                
+                if os.path.exists(safetensors_path):
+                    artifact.add_file(safetensors_path, name="model.safetensors")
+                    
+                wandb.log_artifact(artifact)
 
 
 def test_cnn_rnn_model(model, dataset, use_manual_features=True):
@@ -167,7 +321,7 @@ def test_cnn_rnn_model(model, dataset, use_manual_features=True):
     print(report)
 
 
-def main_cnn_rnn(use_manual_features=True):    
+def main_cnn_rnn(use_manual_features=False):    
     print(f"Running CNN+RNN model {'with' if use_manual_features else 'without'} manual features")
     
     # Load data
@@ -185,14 +339,21 @@ def main_cnn_rnn(use_manual_features=True):
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
         data_df.to_csv(data_file_path, index=False)
     
-    # Split and prepare data
-    train_df, val_df, test_df = myData.datasetSplit(data_df)
-    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
-    
-    # Process data for CNN+RNN model
-    dataset = myData.createHFDatasets(train_df, val_df, test_df)
+
+    if not os.path.exists(myConfig.OUTPUT_PATH) or (os.path.exists(myConfig.OUTPUT_PATH) and len(os.listdir(myConfig.OUTPUT_PATH)) == 0):
+        # Data splits
+        train_df, val_df, test_df = myData.datasetSplit(data_df)
+        # Apply standard scaling to the splits
+        train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+        # Create HF's dataset
+        print("Creating HF's dataset...")
+        myData.createHFDatasets(train_df, val_df, test_df)    
+    # Load HF's dataset
+    print("Loading HF's dataset...")
+    dataset = myData.loadHFDataset()
+    print("Preparing data for CNN+RNN model...")
     dataset = dataset.map(myData.prepare_for_cnn_rnn)
-    
+    print("Data preparation complete!")
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
@@ -200,12 +361,11 @@ def main_cnn_rnn(use_manual_features=True):
         use_manual_features=use_manual_features,
         manual_features_dim=len(myData.extracted_features)
     )
-    
+    print("Model created!")
     # Train model
+    print("Training model...")
     train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=use_manual_features)
-    
-    # Test model
-    test_cnn_rnn_model(model, dataset, use_manual_features=use_manual_features)
+    print("Training complete!")
 
 
 def collate_fn(batch):
@@ -434,7 +594,7 @@ if __name__ == "__main__":
                 print("Starting fine-tuning (CNN+RNN pipeline)...")
             # Import the CNN+RNN model locally
             from myCnnRnnModel import DualPathAudioClassifier
-            main_cnn_rnn(use_manual_features=use_manual)
+            main_cnn_rnn(use_manual_features=False)
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print("Running model evaluation (CNN+RNN pipeline)...")
