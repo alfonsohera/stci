@@ -19,6 +19,7 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
 from torch import nn
+import torch.nn.functional as F 
 
 
 # Suppress specific warnings
@@ -74,8 +75,8 @@ def collate_fn_cnn_rnn(batch):
 
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    train_loader = DataLoader(dataset["train"], batch_size=8, collate_fn=collate_fn_cnn_rnn)
-    val_loader = DataLoader(dataset["validation"], batch_size=8, collate_fn=collate_fn_cnn_rnn)
+    train_loader = DataLoader(dataset["train"], batch_size=16, collate_fn=collate_fn_cnn_rnn)
+    val_loader = DataLoader(dataset["validation"], batch_size=16, collate_fn=collate_fn_cnn_rnn)
     
     # Initialize wandb
     import wandb
@@ -89,7 +90,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
                 "use_manual_features": use_manual_features,
                 "learning_rate": 1e-4,
                 "epochs": num_epochs,
-                "batch_size": 8,
+                "batch_size": 16,
                 "weight_decay": 1e-5,
                 "manual_features_dim": len(myData.extracted_features) if use_manual_features else 0
             }
@@ -98,15 +99,12 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         # Watch model parameters and gradients
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
-    
-    
-    
 
     # Calculate weights
-    y_train = [item["label"] for item in dataset["train"]]
+    y_train = list(dataset["train"]["label"])
     class_weights = compute_class_weight(
         class_weight="balanced", 
-        classes=np.unique(y_train), 
+        classes=numpy.unique(y_train), 
         y=y_train
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
@@ -119,7 +117,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
     # 1cycle LR scheduler 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=5e-5,  # Reduced from 1e-4
+        max_lr=1e-4, 
         total_steps=total_steps,
         pct_start=0.3,  
         div_factor=25,  
@@ -393,7 +391,7 @@ def main_cnn_rnn(use_manual_features=False):
     print("Model created!")
     # Train model
     print("Training model...")
-    train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=use_manual_features)
+    train_cnn_rnn_model(model, dataset, num_epochs=20, use_manual_features=use_manual_features)
     print("Training complete!")
 
 
