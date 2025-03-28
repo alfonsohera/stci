@@ -309,15 +309,15 @@ def createTrainer(model, optimizer, dataset, weights_tensor):
     num_training_steps = optimization_steps_per_epoch * num_epochs
     
     # Create the 1CycleLR scheduler with exact step count
-    max_lr = 1.5e-4
+    max_lr = 1.0e-4
     lr_scheduler = OneCycleLR(
         optimizer,
         max_lr=max_lr,
         total_steps=num_training_steps,
-        pct_start=0.1,
-        div_factor=10,
-        final_div_factor=1000,
-        anneal_strategy='cos',
+        pct_start=0.3,
+        div_factor=25,
+        final_div_factor=10000,
+        anneal_strategy='linear',
         three_phase=False
     )
 
