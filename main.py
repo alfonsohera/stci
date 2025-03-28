@@ -91,7 +91,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
                 "learning_rate": 1e-4,
                 "epochs": num_epochs,
                 "batch_size": 16,
-                "weight_decay": 1e-5,
+                "weight_decay": 5e-4,
                 "manual_features_dim": len(myData.extracted_features) if use_manual_features else 0
             }
         )
@@ -109,7 +109,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
     criterion = FocalLoss(gamma=2, weight=class_weights)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=5e-4)
     
     # Calculate total steps for 1cycle scheduler
     total_steps = len(train_loader) * num_epochs
