@@ -206,7 +206,8 @@ class CustomTrainer(Trainer):
         ''' gamma=0: Equivalent to standard cross-entropy loss
             gamma=1-2: Moderate focus on hard examples
             gamma=3-5: Strong focus on hard examples'''
-        self.criterion = FocalLoss(gamma=2.0, weight=class_weights.to(device))        
+        gamma = 3.0
+        self.criterion = FocalLoss(gamma=gamma, weight=class_weights.to(device))        
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Get model's device
