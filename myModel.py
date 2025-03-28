@@ -5,8 +5,7 @@ import myConfig
 from transformers import (
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Processor,
-    Trainer,
-    get_scheduler,
+    Trainer,    
     AutoConfig
 )
 from transformers.modeling_outputs import SequenceClassifierOutput
@@ -16,10 +15,26 @@ from torch.nn.utils.rnn import pad_sequence
 from sklearn.metrics import classification_report, confusion_matrix
 from transformers.integrations import WandbCallback
 import wandb
-import os
 from pathlib import Path
-from transformers.trainer_callback import TrainerCallback
 from torch.optim.lr_scheduler import OneCycleLR
+import torch.nn.functional as F
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, weight=None):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.weight = weight
+        
+    def forward(self, input, target):
+        # Compute cross entropy with class weights if provided
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+        # Get prediction probabilities
+        pt = torch.exp(-ce_loss)
+        # Apply focal weighting
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
 
 class Wav2Vec2ProsodicClassifier(nn.Module):
     def __init__(self, base_model, num_labels, config=None, prosodic_dim=None):
@@ -188,7 +203,10 @@ class CustomTrainer(Trainer):
         )
         # Ensure class_weights are on same device as model
         device = next(model.parameters()).device
-        self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
+        ''' gamma=0: Equivalent to standard cross-entropy loss
+            gamma=1-2: Moderate focus on hard examples
+            gamma=3-5: Strong focus on hard examples'''
+        self.criterion = FocalLoss(gamma=2.0, weight=class_weights.to(device))        
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         # Get model's device
@@ -291,7 +309,22 @@ def compute_metrics(eval_preds):
     return results
 
 
-def createTrainer(model, optimizer, dataset, weights_tensor):    
+def setClassWeights(dataset):
+    from sklearn.utils.class_weight import compute_class_weight
+
+    y_train = list(dataset["train"]["label"])
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=np.unique(y_train),
+        y=y_train
+    )
+    weights_tensor = torch.tensor([class_weights[0], class_weights[1], class_weights[2]], dtype=torch.float)
+    return weights_tensor
+
+
+def createTrainer(model, optimizer, dataset):
+    # Create weights tensor for class balancing
+    weights_tensor = setClassWeights(dataset["train"])
     # Number of batches per epoch
     num_batches = len(dataset["train"]) // myConfig.training_args.per_device_train_batch_size
     if len(dataset["train"]) % myConfig.training_args.per_device_train_batch_size:

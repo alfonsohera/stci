@@ -109,8 +109,7 @@ def main_fn():
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
         # Save dataframe
         data_df.to_csv(data_file_path, index=False)
-        print(f"Created and saved dataframe to {data_file_path}")
-    _, weights_tensor = myFunctions.setWeightedCELoss()
+        print(f"Created and saved dataframe to {data_file_path}")    
     # Feature engineering    
     
     if not os.path.exists(myConfig.OUTPUT_PATH) or (os.path.exists(myConfig.OUTPUT_PATH) and len(os.listdir(myConfig.OUTPUT_PATH)) == 0):
@@ -125,7 +124,7 @@ def main_fn():
     # Load model
     model, optimizer = myModel.loadModel(model_name)
     # Create trainer
-    trainer = myModel.createTrainer(model, optimizer, dataset, weights_tensor)
+    trainer = myModel.createTrainer(model, optimizer, dataset)
     trainer.train()
     
     # Save model and processor
