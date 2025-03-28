@@ -312,7 +312,7 @@ def compute_metrics(eval_preds):
 def setClassWeights(dataset):
     from sklearn.utils.class_weight import compute_class_weight
 
-    y_train = list(dataset["train"]["label"])
+    y_train = list(dataset["label"])
     class_weights = compute_class_weight(
         class_weight="balanced",
         classes=np.unique(y_train),
