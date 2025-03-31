@@ -226,58 +226,53 @@ class BalancedAugmentedDataset(Dataset):
         self.augmentation_variants = augmentation_variants
         
         # Count samples per class in the original dataset
-        self.class_indices = [[] for _ in range(num_classes)]
-        for i in range(len(original_dataset)):
-            sample = original_dataset[i]
-            label = sample["label"] if isinstance(sample, dict) else sample[1]
-            self.class_indices[label].append(i)
+        import numpy as np
+
+        # Collect all labels first
+        all_labels = np.array([
+            sample["label"] if isinstance(sample, dict) else sample[1] 
+            for sample in original_dataset
+        ])        
+        self.class_indices = [np.where(all_labels == i)[0].tolist() for i in range(num_classes)]
         
         # Calculate original class counts
         self.original_class_counts = [len(indices) for indices in self.class_indices]
         print(f"Original class distribution: {self.original_class_counts}")
         
         # Generate augmentation mapping
-        self.sample_indices = []
-        self.augmentation_ids = []
-        
-        # First add all original samples without augmentation
+        # Pre-allocate lists based on final expected size
+        total_samples = len(original_dataset) + sum(max(0, target_samples_per_class - count) 
+                                                for count in self.original_class_counts)
+        self.sample_indices = [0] * total_samples
+        self.augmentation_ids = [None] * total_samples
+
+        # Then use indices to fill them instead of append
+        idx = 0
+        # Add original samples first
         for i in range(len(original_dataset)):
-            self.sample_indices.append(i)
-            self.augmentation_ids.append(None)  # No augmentation for original samples
-        
-        # Then add augmented samples for balancing
+            self.sample_indices[idx] = i
+            self.augmentation_ids[idx] = None
+            idx += 1
+
+        # Add augmented samples to balance the dataset
         for class_idx in range(num_classes):
             original_count = self.original_class_counts[class_idx]
-            # If we need more samples for this class
             if original_count < target_samples_per_class:
-                # How many more we need
                 samples_needed = target_samples_per_class - original_count
                 
-                # How many unique samples to draw (potentially with replacement)
-                # We'll create multiple augmentation variants for each
-                unique_samples_to_draw = (samples_needed + augmentation_variants - 1) // augmentation_variants
+                # Calculate how many of each original sample to use
+                repeats_per_sample = (samples_needed + len(self.class_indices[class_idx]) - 1) // len(self.class_indices[class_idx])
                 
-                # Sample with replacement if we need more than we have
-                original_indices = self.class_indices[class_idx]
-                sampled_indices = random.choices(original_indices, k=unique_samples_to_draw)
+                # Generate all augmentation indices and IDs in one go
+                original_indices = np.repeat(self.class_indices[class_idx], repeats_per_sample)[:samples_needed]
                 
-                # Add these indices with augmentation IDs
-                augmentations_added = 0
-                augmentation_cycle = 0
+                # Generate augmentation IDs vectorized
+                aug_variants = np.arange(len(original_indices)) % augmentation_variants
+                aug_ids = (class_idx * 100000) + (np.arange(len(original_indices)) * 1000) + aug_variants
                 
-                while augmentations_added < samples_needed:
-                    for i, idx in enumerate(sampled_indices):
-                        if augmentations_added >= samples_needed:
-                            break
-                            
-                        self.sample_indices.append(idx)
-                        # Use a deterministic but varied augmentation ID scheme
-                        # Class index * 100000 + sample index * 1000 + augmentation variant
-                        variant_id = (class_idx * 100000) + (i * 1000) + augmentation_cycle
-                        self.augmentation_ids.append(variant_id)
-                        augmentations_added += 1
-                    
-                    augmentation_cycle += 1
+                # Extend our lists
+                self.sample_indices.extend(original_indices.tolist())
+                self.augmentation_ids.extend(aug_ids.tolist())
         
         # Calculate final class distribution
         final_distribution = Counter()
@@ -297,6 +292,14 @@ class BalancedAugmentedDataset(Dataset):
         return len(self.sample_indices)
     
     def __getitem__(self, idx):
+        # Cache mechanism for frequently accessed augmented samples
+        if not hasattr(self, 'sample_cache'):
+            self.sample_cache = {}
+        
+        cache_key = (self.sample_indices[idx], self.augmentation_ids[idx])
+        if cache_key in self.sample_cache:
+            return self.sample_cache[cache_key]
+        
         # Get the original sample
         original_idx = self.sample_indices[idx]
         augmentation_id = self.augmentation_ids[idx]
@@ -318,4 +321,18 @@ class BalancedAugmentedDataset(Dataset):
                 audio, prosodic, label = sample
                 sample = (audio, prosodic, label, augmentation_id)
         
+        # Add result to cache before returning if it's an augmented sample
+        if self.augmentation_ids[idx] is not None:
+            self.sample_cache[cache_key] = sample
+        
         return sample
+
+    @property
+    def class_distribution(self):
+        if not hasattr(self, '_class_distribution'):
+            self._class_distribution = Counter()
+            for idx in self.sample_indices:
+                sample = self.original_dataset[idx]
+                label = sample["label"] if isinstance(sample, dict) else sample[1]
+                self._class_distribution[label] += 1
+        return self._class_distribution
