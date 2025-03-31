@@ -56,6 +56,19 @@ def collate_fn_cnn_rnn(batch):
         "labels": torch.tensor([item["label"] for item in batch]).to(device)
     }
     
+    # Extract augmentation IDs if present
+    augmentation_ids = []
+    has_augmentation = False
+    for item in batch:
+        if "augmentation_id" in item:
+            augmentation_ids.append(item["augmentation_id"])
+            has_augmentation = True
+        else:
+            augmentation_ids.append(None)
+    
+    if has_augmentation:
+        result["augmentation_id"] = augmentation_ids
+    
     if "prosodic_features" in batch[0]:
         # Convert to tensor if necessary
         features_list = []
@@ -376,13 +389,33 @@ def main_cnn_rnn(use_prosodic_features=False):
         # Create HF's dataset
         print("Creating HF's dataset...")
         myData.createHFDatasets(train_df, val_df, test_df)    
+    
     # Load HF's dataset
     print("Loading HF's dataset...")
     dataset = myData.loadHFDataset()
     print("Preparing data for CNN+RNN model...")
     dataset = dataset.map(myData.prepare_for_cnn_rnn)
+    
+    # Create balanced training dataset
+    print("Creating balanced training dataset with augmentations...")
+    from myCnnRnnModel import BalancedAugmentedDataset
+    balanced_train_dataset = BalancedAugmentedDataset(
+        original_dataset=dataset["train"],
+        target_samples_per_class=1000,  # Target 1000 samples per class
+        num_classes=3
+    )
+    
+    # Replace the training set with the balanced version
+    balanced_dataset = {
+        "train": balanced_train_dataset,
+        "validation": dataset["validation"],
+        "test": dataset["test"]
+    }
+    
     print("Data preparation complete!")
+    
     # Create model
+    from myCnnRnnModel import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -390,9 +423,10 @@ def main_cnn_rnn(use_prosodic_features=False):
         prosodic_features_dim=len(myData.extracted_features)
     )
     print("Model created!")
+    
     # Train model
     print("Training model...")
-    train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=use_prosodic_features)
+    train_cnn_rnn_model(model, balanced_dataset, num_epochs=10, use_prosodic_features=use_prosodic_features)
     print("Training complete!")
 
 
