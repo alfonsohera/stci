@@ -6,7 +6,7 @@ import torchvision.models as vision_models
 
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 use_manual_features=True, manual_features_dim=7):
+                 use_prosodic_features=True, prosodic_features_dim=7):
         super().__init__()
         
         # Spectrogram transform for CNN path
@@ -43,16 +43,16 @@ class DualPathAudioClassifier(nn.Module):
             dropout=0.3
         )
         
-        # Manual features processing
-        self.use_manual_features = use_manual_features
-        if use_manual_features:
-            self.manual_feature_mlp = nn.Sequential(
-                nn.Linear(manual_features_dim, 64),
+        # Prosodic features processing
+        self.use_prosodic_features = use_prosodic_features
+        if use_prosodic_features:
+            self.prosodic_feature_mlp = nn.Sequential(
+                nn.Linear(prosodic_features_dim, 64),
                 nn.ReLU(),
                 nn.Dropout(0.2),
                 nn.Linear(64, 32)
             )
-            fusion_input_dim = 256 + 256 + 32  # CNN + RNN + Manual
+            fusion_input_dim = 256 + 256 + 32  # CNN + RNN + prosodic
         else:
             fusion_input_dim = 256 + 256  # CNN + RNN only
         
@@ -67,7 +67,7 @@ class DualPathAudioClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
         
-    def forward(self, audio, manual_features=None):
+    def forward(self, audio, prosodic_features=None):
         # Start with processing the audio through the CNN
         # If the audio is just a single channel, expand to [B, 1, T]
         if len(audio.shape) == 2:
@@ -92,10 +92,12 @@ class DualPathAudioClassifier(nn.Module):
         # Combine CNN and RNN features
         combined_features = torch.cat([cnn_features, rnn_features], dim=1)
         
-        # Add manual features if available and enabled
-        if manual_features is not None and self.use_manual_features:
-            manual_features_processed = self.manual_feature_mlp(manual_features)
-            combined_features = torch.cat([combined_features, manual_features_processed], dim=1)
+        # Add prosodic features if available and enabled
+        if self.use_prosodic_features:
+            if prosodic_features is None:
+                raise ValueError("Prosodic features are enabled but not provided to the model")
+            processed = self.prosodic_feature_mlp(prosodic_features)
+            combined_features = torch.cat([combined_features, processed], dim=1)
         
         # Final classification
         output = self.fusion(combined_features)

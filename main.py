@@ -39,41 +39,42 @@ class FocalLoss(nn.Module):
             focal_loss = ((1 - pt) ** self.gamma) * ce_loss
             return focal_loss.mean()
 
+
 def collate_fn_cnn_rnn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Make sure each item["audio"] is a tensor before stacking
     audio_tensors = []
     for item in batch:
-        if isinstance(item["audio"], list):  # Handle case where audio is still a list
+        if isinstance(item["audio"], list):
             audio_tensors.append(torch.tensor(item["audio"], dtype=torch.float32))
-        else:  # Already a tensor
+        else:
             audio_tensors.append(item["audio"])
-    
     audio = torch.stack(audio_tensors).to(device)
     
-    # Common elements
     result = {
         "audio": audio,
         "labels": torch.tensor([item["label"] for item in batch]).to(device)
     }
     
-    manual_features_exist = "manual_features" in batch[0] and all(isinstance(item["manual_features"], torch.Tensor) for item in batch)
-    if manual_features_exist:        
-        manual_features_list = [item["manual_features"] for item in batch]
+    if "prosodic_features" in batch[0]:
+        # Convert to tensor if necessary
+        features_list = []
+        for item in batch:
+            pf = item["prosodic_features"]
+            if not isinstance(pf, torch.Tensor):
+                pf = torch.tensor(pf, dtype=torch.float32)
+            features_list.append(pf)
         try:
-            result["manual_features"] = torch.stack(manual_features_list).to(device)
+            result["prosodic_features"] = torch.stack(features_list).to(device)
         except Exception as e:
-            print(f"Error stacking manual features: {e}")
-            print(f"Types: {[type(mf) for mf in manual_features_list]}")
-            print(f"First item: {manual_features_list[0]}")
-            # Fallback - skip manual features
-            pass
-    
+            print(f"Error stacking prosodic features: {e}")
+            batch_size = len(batch)
+            feature_dim = features_list[0].shape[0]
+            result["prosodic_features"] = torch.zeros(batch_size, feature_dim).to(device)
     return result
 
 
-def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True):
+def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train_loader = DataLoader(dataset["train"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
     val_loader = DataLoader(dataset["validation"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
@@ -84,15 +85,15 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         wandb.init(
             project=myConfig.wandb_project,
             entity=myConfig.wandb_entity,
-            name=f"cnn_rnn{'_manual' if use_manual_features else '_no_manual'}",
+            name=f"cnn_rnn{'_manual' if use_prosodic_features else '_no_manual'}",
             config={
                 "model_type": "CNN+RNN",
-                "use_manual_features": use_manual_features,
+                "use_prosodic_features": use_prosodic_features,
                 "learning_rate": 1e-4,
                 "epochs": num_epochs,
                 "batch_size": 16,
                 "weight_decay": 5e-4,
-                "manual_features_dim": len(myData.extracted_features) if use_manual_features else 0
+                "prosodic_features_dim": len(myData.extracted_features) if use_prosodic_features else 0
             }
         )
         
@@ -108,7 +109,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         y=y_train
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
-    criterion = FocalLoss(gamma=5, weight=None)
+    criterion = FocalLoss(gamma=0, weight=class_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=5e-4)
     
     # Calculate total steps for 1cycle scheduler
@@ -142,11 +143,11 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
             # Zero gradients
             optimizer.zero_grad()                        
-            if use_manual_features and "manual_features" in batch:
-                # Forward pass
-                logits = model(batch["audio"], batch["manual_features"])
+            if use_prosodic_features and "prosodic_features" in batch:
+                # Forward pass with manual features
+                logits = model(batch["audio"], batch["prosodic_features"])
             else:
-                # Forward pass
+                # Forward pass without manual features
                 logits = model(batch["audio"])
             # Calculate loss                
             loss = criterion(logits, batch["labels"])
@@ -169,9 +170,9 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         
         with torch.no_grad():
             for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
-                if use_manual_features:
+                if use_prosodic_features:
                     # Forward pass
-                    logits = model(batch["audio"], batch["manual_features"])
+                    logits = model(batch["audio"], batch["prosodic_features"])
                 else:
                     # Forward pass
                     logits = model(batch["audio"])
@@ -315,7 +316,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, dataset, use_manual_features=True):
+def test_cnn_rnn_model(model, dataset, use_prosodic_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     test_loader = DataLoader(dataset["test"], batch_size=8, collate_fn=collate_fn_cnn_rnn)
     
@@ -327,8 +328,8 @@ def test_cnn_rnn_model(model, dataset, use_manual_features=True):
     
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Testing"):
-            if use_manual_features:
-                logits = model(batch["audio"], batch["manual_features"])
+            if use_prosodic_features:
+                logits = model(batch["audio"], batch["prosodic_features"])
             else:
                 logits = model(batch["audio"])
                 
@@ -348,8 +349,8 @@ def test_cnn_rnn_model(model, dataset, use_manual_features=True):
     print(report)
 
 
-def main_cnn_rnn(use_manual_features=False):    
-    print(f"Running CNN+RNN model {'with' if use_manual_features else 'without'} manual features")
+def main_cnn_rnn(use_prosodic_features=False):    
+    print(f"Running CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features")
     
     # Load data
     myData.DownloadAndExtract()
@@ -385,13 +386,13 @@ def main_cnn_rnn(use_manual_features=False):
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_manual_features=use_manual_features,
-        manual_features_dim=len(myData.extracted_features)
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features)
     )
     print("Model created!")
     # Train model
     print("Training model...")
-    train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=use_manual_features)
+    train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=use_prosodic_features)
     print("Training complete!")
 
 
@@ -546,7 +547,7 @@ def test():
     testModel(model, dataset)
 
 
-def test_cnn_rnn(use_manual_features=True):
+def test_cnn_rnn(use_prosodic_features=True):
     # Import the CNN+RNN model
     from myCnnRnnModel import DualPathAudioClassifier
 
@@ -574,12 +575,12 @@ def test_cnn_rnn(use_manual_features=True):
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_manual_features=use_manual_features,
-        manual_features_dim=len(myData.extracted_features)
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features)
     )
     
     # Evaluate the model using the existing test function for cnn_rnn
-    test_cnn_rnn_model(model, dataset, use_manual_features=use_manual_features)
+    test_cnn_rnn_model(model, dataset, use_prosodic_features=use_prosodic_features)
 
 
 if __name__ == "__main__":
@@ -621,8 +622,8 @@ if __name__ == "__main__":
                 print("Starting fine-tuning (CNN+RNN pipeline)...")
             # Import the CNN+RNN model locally
             from myCnnRnnModel import DualPathAudioClassifier
-            main_cnn_rnn(use_manual_features=False)
+            main_cnn_rnn(use_prosodic_features=use_manual)
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print("Running model evaluation (CNN+RNN pipeline)...")
-            test_cnn_rnn(use_manual_features=use_manual)
+            test_cnn_rnn(use_prosodic_features=use_manual)
