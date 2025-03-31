@@ -75,8 +75,8 @@ def collate_fn_cnn_rnn(batch):
 
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    train_loader = DataLoader(dataset["train"], batch_size=16, collate_fn=collate_fn_cnn_rnn)
-    val_loader = DataLoader(dataset["validation"], batch_size=16, collate_fn=collate_fn_cnn_rnn)
+    train_loader = DataLoader(dataset["train"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
+    val_loader = DataLoader(dataset["validation"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
     
     # Initialize wandb
     import wandb
@@ -108,7 +108,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=True)
         y=y_train
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
-    criterion = FocalLoss(gamma=2, weight=class_weights)
+    criterion = FocalLoss(gamma=5, weight=None)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=5e-4)
     
     # Calculate total steps for 1cycle scheduler
@@ -391,7 +391,7 @@ def main_cnn_rnn(use_manual_features=False):
     print("Model created!")
     # Train model
     print("Training model...")
-    train_cnn_rnn_model(model, dataset, num_epochs=20, use_manual_features=use_manual_features)
+    train_cnn_rnn_model(model, dataset, num_epochs=10, use_manual_features=use_manual_features)
     print("Training complete!")
 
 
