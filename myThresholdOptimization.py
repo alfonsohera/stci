@@ -13,6 +13,13 @@ import pandas as pd
 import seaborn as sns
 from typing import Dict, Tuple, List, Any, Optional, Union
 import wandb
+import argparse
+import myConfig
+import myData
+import myModel
+from torch.utils.data import DataLoader
+from myThresholdOptimization import optimize_thresholds_for_model
+from safetensors.torch import load_file
 
 
 def get_predictions(
@@ -476,19 +483,12 @@ def optimize_thresholds_for_model(
     
     return best_youden_thresholds, best_f1_thresholds
 
-import argparse
-import os
-import torch
-import myConfig
-import myData
-from torch.utils.data import DataLoader
-from myThresholdOptimization import optimize_thresholds_for_model
 
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description="Optimize classification thresholds")
     parser.add_argument("--model_path", type=str, required=True, 
-                        help="Path to the trained model")
+                        help="Path to the trained model (.pth or .safetensors)")
     parser.add_argument("--model_type", type=str, choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
                         help="Type of model architecture")
     parser.add_argument("--use_manual", action="store_true", 
@@ -516,6 +516,23 @@ def main():
     print("Loading dataset...")
     dataset = myData.loadHFDataset()
     
+    # Safe loading function that handles both .pth and .safetensors formats
+    def safe_load_model_weights(model, path):
+        print(f"Loading model weights from {path}...")
+        if path.endswith('.safetensors'):
+            state_dict = load_file(path)
+            model.load_state_dict(state_dict)
+        else:
+            # For .pth files, we need to handle the PyTorch 2.6+ change in weights_only default
+            try:
+                state_dict = torch.load(path)
+                model.load_state_dict(state_dict)
+            except Exception as e:
+                print(f"Failed to load with default settings, trying with weights_only=False: {e}")
+                state_dict = torch.load(path, weights_only=False)
+                model.load_state_dict(state_dict)
+        return model
+    
     # Prepare collate function and dataset based on model type
     if args.model_type == "wav2vec2":
         from main import collate_fn
@@ -531,7 +548,7 @@ def main():
         
         # Load model weights if specified
         if args.model_path:
-            model.load_state_dict(torch.load(args.model_path))
+            model = safe_load_model_weights(model, args.model_path)
         
         # Optimize thresholds
         optimize_thresholds_for_model(
@@ -545,8 +562,13 @@ def main():
         )
     
     elif args.model_type == "cnn_rnn":
-        from main import collate_fn_cnn_rnn
-        from myCnnRnnModel import DualPathAudioClassifier
+        # Import here to avoid issues if the module doesn't exist
+        try:
+            from main import collate_fn_cnn_rnn
+            from myCnnRnnModel import DualPathAudioClassifier
+        except ImportError:
+            print("Error: Could not import CNN+RNN model. Make sure myCnnRnnModel.py exists and contains the DualPathAudioClassifier class.")
+            return
         
         # Prepare dataset for CNN+RNN model
         print("Preparing dataset for CNN+RNN model...")
@@ -569,8 +591,7 @@ def main():
         
         # Load model weights if specified
         if args.model_path:
-            print(f"Loading model weights from {args.model_path}...")
-            model.load_state_dict(torch.load(args.model_path))
+            model = safe_load_model_weights(model, args.model_path)
         
         # Optimize thresholds
         optimize_thresholds_for_model(
@@ -582,7 +603,6 @@ def main():
             is_cnn_rnn=True,
             log_to_wandb=args.log_wandb
         )
-
 if __name__ == "__main__":
     import myModel  # Import here to avoid circular imports
     main()
