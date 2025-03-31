@@ -7,6 +7,8 @@ import numpy as np
 from typing import Optional, Tuple
 from torch.utils.data import Dataset
 from collections import Counter
+import torch.nn.functional as F
+from torchvision import transforms
 
 class SpecAugment(nn.Module):
     """SpecAugment for mel spectrograms as described in the paper:
@@ -64,6 +66,8 @@ class DualPathAudioClassifier(nn.Module):
             n_mels=n_mels
         )
         self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB()
+        self.target_size = (384, 384)  # Expected size for EfficientNetV2
+        self.normalize = transforms.Normalize(mean=[0.485], std=[0.229])  # Single channel version
         
         # SpecAugment for training (only applied when in training mode)
         self.apply_specaugment = apply_specaugment
@@ -170,7 +174,11 @@ class DualPathAudioClassifier(nn.Module):
                 # No augmentation IDs provided, apply regular probabilistic augmentation
                 mel_db = self.spec_augment(mel_db, force_apply=False)
         
-        # Rest of forward method remains unchanged
+        # First apply SpecAugment, then resize and normalize to match EfficientNetV2 input
+        mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
+        mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-6)  # Scale to [0,1]
+        mel_db = self.normalize(mel_db)  # Apply ImageNet normalization
+
         # Pass through CNN 
         cnn_features = self.cnn_extractor(mel_db)
         cnn_features = self.cnn_dim_reducer(cnn_features)
