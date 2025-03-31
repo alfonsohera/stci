@@ -29,13 +29,13 @@ class DualPathAudioClassifier(nn.Module):
         for param in self.cnn_extractor.parameters():
             param.requires_grad = False
             
-        # Dimensionality reduction for CNN features
+        # Dimensionality reduction of the outputs of the feature extractor
         self.cnn_dim_reducer = nn.Linear(1280, 256)
         
         # RNN path for raw audio
-        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)  # Change output channels to 8
+        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)  
         self.rnn = nn.GRU(
-            input_size=8,  # Changed from sample_rate//50 to match Conv1d output channels
+            input_size=8,
             hidden_size=128,
             num_layers=2,
             batch_first=True,
@@ -77,7 +77,7 @@ class DualPathAudioClassifier(nn.Module):
         mel = self.mel_spec(audio.squeeze(1))
         mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
         
-        # Pass through CNN backbone
+        # Pass through CNN 
         cnn_features = self.cnn_extractor(mel_db)
         cnn_features = self.cnn_dim_reducer(cnn_features)
         
@@ -87,7 +87,7 @@ class DualPathAudioClassifier(nn.Module):
         
         # Pass through RNN
         rnn_output, _ = self.rnn(audio_downsampled)
-        rnn_features = rnn_output[:, -1, :]  # Take final state
+        rnn_features = rnn_output[:, -1, :]  
         
         # Combine CNN and RNN features
         combined_features = torch.cat([cnn_features, rnn_features], dim=1)

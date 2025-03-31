@@ -110,7 +110,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
     criterion = FocalLoss(gamma=0, weight=class_weights)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-5, weight_decay=1e-4)
     
     # Calculate total steps for 1cycle scheduler
     total_steps = len(train_loader) * num_epochs
@@ -118,7 +118,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     # 1cycle LR scheduler 
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-4, 
+        max_lr=1e-5, 
         total_steps=total_steps,
         pct_start=0.3,  
         div_factor=25,  
