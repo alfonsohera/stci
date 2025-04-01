@@ -40,12 +40,18 @@ class SpecAugment(nn.Module):
         if not force_apply and random.random() > self.apply_prob:
             return spec
         
-        # Get the device from input and ensure transforms use it
+        # Get the device from input
         device = spec.device
-        if self.freq_mask.device != device:
+        
+        # Move transforms to device if needed        
+        freq_mask_device = next(self.freq_mask.parameters(), torch.empty(0)).device
+        time_mask_device = next(self.time_mask.parameters(), torch.empty(0)).device
+        
+        if freq_mask_device != device:
             self.freq_mask = self.freq_mask.to(device)
+        if time_mask_device != device:
             self.time_mask = self.time_mask.to(device)
-    
+        
         augmented = spec.clone()
         
         # Apply frequency masks
@@ -147,9 +153,7 @@ class DualPathAudioClassifier(nn.Module):
             self.normalize = self.normalize.to(device)
             
             if self.apply_specaugment:
-                self.spec_augment = self.spec_augment.to(device)
-                self.spec_augment.freq_mask = self.spec_augment.freq_mask.to(device)
-                self.spec_augment.time_mask = self.spec_augment.time_mask.to(device)
+                self.spec_augment = self.spec_augment.to(device)                
                 
             self._device = device
         
