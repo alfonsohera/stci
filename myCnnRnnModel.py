@@ -14,11 +14,11 @@ class SpecAugment(nn.Module):
     """
     def __init__(
         self,
-        freq_mask_param: int = 30,
-        time_mask_param: int = 30,
-        n_freq_masks: int = 1,
-        n_time_masks: int = 1,
-        apply_prob: float = 0.8,
+        freq_mask_param: int = 50,
+        time_mask_param: int = 50,
+        n_freq_masks: int = 2,
+        n_time_masks: int = 2,
+        apply_prob: float = 0.5,
     ):
         super().__init__()
         self.freq_mask_param = freq_mask_param
