@@ -176,10 +176,9 @@ class DualPathAudioClassifier(nn.Module):
         # Process the entire batch at once
         if len(audio.shape) == 2:
             audio = audio.unsqueeze(1)  # Add channel dimension
-       
-        with torch.amp.autocast("cuda"):
-            mel = self.mel_spec(audio.squeeze(1))
-            mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
+               
+        mel = self.mel_spec(audio.squeeze(1))
+        mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
         
         # Apply SpecAugment based on augmentation_id
         if self.training and self.apply_specaugment:            

@@ -751,22 +751,22 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         print("\nInterpretation Guide:")
         feature_sim_mean = np.mean(feature_similarities)
         if feature_sim_mean > 0.95:
-            print("⚠️ Your augmentations appear very similar in feature space (>0.95 similarity)")
+            print("⚠️ Augmentations appear very similar in feature space (>0.95 similarity)")
             print("   Consider increasing mask parameters or using multiple augmentations")
         elif feature_sim_mean < 0.5:
-            print("⚠️ Your augmentations appear extremely different (similarity <0.5)")
+            print("⚠️ Augmentations appear extremely different (similarity <0.5)")
             print("   The masking might be too aggressive, consider reducing parameters")
         else:
-            print("✓ Your augmentations create good diversity in feature space")
+            print("✓ Augmentations create good diversity in feature space")
         
         # Compare pixel vs feature similarity
         pixel_feature_diff = np.mean(pixel_similarities) - np.mean(feature_similarities)
         if pixel_feature_diff > 0.3:
             print("✓ Feature similarity is much lower than pixel similarity")
-            print("   This suggests your CNN is sensitive to the masked regions")
+            print("   This suggests the CNN is sensitive to the masked regions")
         elif pixel_feature_diff < 0.1:
             print("⚠️ Feature similarity is close to pixel similarity")
-            print("   Your CNN might not be focusing enough on the masked regions")
+            print("   The CNN might not be focusing enough on the masked regions")
             
     except Exception as e:
         print(f"Error during augmentation analysis: {e}")
