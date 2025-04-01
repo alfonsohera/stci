@@ -478,7 +478,7 @@ def main_cnn_rnn(use_prosodic_features=False):
         total_target_samples=1000,
         num_classes=3
     )
-    
+    balanced_train_dataset.print_distribution_stats()
     # Replace the training set with the balanced version
     balanced_dataset = {
         "train": balanced_train_dataset,

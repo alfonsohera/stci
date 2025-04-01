@@ -454,3 +454,27 @@ class BalancedAugmentedDataset(Dataset):
             self._cached_distribution = counts
             
         return self._cached_distribution
+
+    def print_distribution_stats(self):
+        """Print class distribution statistics before and after augmentation."""
+        print("\n=== Class Distribution Statistics ===")
+        
+        print("Original distribution:")
+        total_orig = sum(self.class_counts.values())
+        for class_id in sorted(self.class_counts.keys()):
+            count = self.class_counts.get(class_id, 0)
+            percentage = (count / total_orig * 100) if total_orig > 0 else 0
+            print(f"  Class {class_id}: {count} samples ({percentage:.1f}%)")
+        
+        print("\nAfter augmentation:")
+        final_dist = self.class_distribution  # Uses the property
+        total_final = sum(final_dist.values())
+        for class_id in sorted(final_dist.keys()):
+            orig_count = self.class_counts.get(class_id, 0)
+            final_count = final_dist[class_id]
+            aug_count = final_count - orig_count
+            percentage = (final_count / total_final * 100) if total_final > 0 else 0
+            print(f"  Class {class_id}: {final_count} samples ({percentage:.1f}%) - Added {aug_count} augmented samples")
+        
+        print(f"\nTotal samples: {total_orig} → {total_final} (+{total_final-total_orig})")
+        print("=====================================\n")

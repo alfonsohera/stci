@@ -585,8 +585,18 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
             # Scale to [0,1] range and apply normalization as in your model
             orig_mel_db = (orig_mel_db - orig_mel_db.min()) / (orig_mel_db.max() - orig_mel_db.min() + 1e-6)
             
+            # Apply the same transformations as in the model's forward pass
+            # Resize to target size (ensure model.target_size is accessible)
+            orig_mel_db = F.interpolate(orig_mel_db, size=(384, 384),  # Expected size for EfficientNetV2 
+                                        mode='bilinear', align_corners=False)
+            
+            # Normalize with mean and standard deviation
+            orig_mel_db = (orig_mel_db - orig_mel_db.mean()) / (orig_mel_db.std() + 1e-5)
+            
+            # Apply ImageNet normalization
+            orig_mel_db = model.normalize(orig_mel_db)
+            
             # Pass through CNN feature extractor only
-            # We'll use model.cnn_extractor directly to get the features before the classifier
             original_features = model.cnn_extractor(orig_mel_db).flatten().cpu().numpy()
             
             # Extract features for each augmented version
@@ -595,8 +605,14 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
                 # Convert back to tensor
                 aug_tensor = torch.from_numpy(aug_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
                 
-                # Scale to [0,1] range and apply normalization
+                # Scale to [0,1] range
                 aug_tensor = (aug_tensor - aug_tensor.min()) / (aug_tensor.max() - aug_tensor.min() + 1e-6)
+                
+                # Apply the same transformations as in the model's forward pass
+                aug_tensor = F.interpolate(aug_tensor, size=model.target_size, 
+                                          mode='bilinear', align_corners=False)
+                aug_tensor = (aug_tensor - aug_tensor.mean()) / (aug_tensor.std() + 1e-5)
+                aug_tensor = model.normalize(aug_tensor)
                 
                 # Extract features
                 aug_features = model.cnn_extractor(aug_tensor).flatten().cpu().numpy()
@@ -761,10 +777,10 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         
         # Compare pixel vs feature similarity
         pixel_feature_diff = np.mean(pixel_similarities) - np.mean(feature_similarities)
-        if pixel_feature_diff > 0.3:
+        if (pixel_feature_diff > 0.3):
             print("✓ Feature similarity is much lower than pixel similarity")
             print("   This suggests the CNN is sensitive to the masked regions")
-        elif pixel_feature_diff < 0.1:
+        elif (pixel_feature_diff < 0.1):
             print("⚠️ Feature similarity is close to pixel similarity")
             print("   The CNN might not be focusing enough on the masked regions")
             
