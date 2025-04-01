@@ -439,21 +439,18 @@ class BalancedAugmentedDataset(Dataset):
     
     @property
     def class_distribution(self):
-        """Calculate class distribution on demand"""        
+        """Calculate class distribution without actually accessing samples"""        
         
-        if not hasattr(self, '_cached_distribution'):
-            # Count samples by class
-            counts = {i: 0 for i in range(self.num_classes)}
-            
-            for i in range(len(self.sample_indices)):
-                idx = self.sample_indices[i]
-                sample = self.original_dataset[idx]
-                label = sample["label"] if isinstance(sample, dict) else sample[1]
-                counts[label] += 1
+        # Use the class counts and augmentations needed to directly calculate
+        # the final distribution 
+        
+        counts = {}
+        for class_id in range(self.num_classes):
+            original_count = self.class_counts.get(class_id, 0)
+            augmented_count = self.augmentations_needed.get(class_id, 0)
+            counts[class_id] = original_count + augmented_count
                 
-            self._cached_distribution = counts
-            
-        return self._cached_distribution
+        return counts
 
     def print_distribution_stats(self):
         """Print class distribution statistics before and after augmentation."""
@@ -467,7 +464,7 @@ class BalancedAugmentedDataset(Dataset):
             print(f"  Class {class_id}: {count} samples ({percentage:.1f}%)")
         
         print("\nAfter augmentation:")
-        final_dist = self.class_distribution  # Uses the property
+        final_dist = self.class_distribution  
         total_final = sum(final_dist.values())
         for class_id in sorted(final_dist.keys()):
             orig_count = self.class_counts.get(class_id, 0)
