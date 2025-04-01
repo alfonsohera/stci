@@ -127,6 +127,7 @@ class DualPathAudioClassifier(nn.Module):
         # Fusion layer
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.4),
             nn.Linear(256, 128),
@@ -181,8 +182,7 @@ class DualPathAudioClassifier(nn.Module):
             mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
         
         # Apply SpecAugment based on augmentation_id
-        if self.training and self.apply_specaugment:
-            # OPTIMIZATION: Avoid repeated seed setting by using batch processing
+        if self.training and self.apply_specaugment:            
             if isinstance(augmentation_id, list) and any(aid is not None for aid in augmentation_id):
                 # Create a mask of which samples to augment with deterministic seeds
                 to_augment = [i for i, aid in enumerate(augmentation_id) if aid is not None]
@@ -215,7 +215,7 @@ class DualPathAudioClassifier(nn.Module):
             mel_db = F.interpolate(mel_db, size=self.target_size, mode='nearest')
         else:
             mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
-        mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-6)  # Scale to [0,1]
+        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5) 
         mel_db = self.normalize(mel_db)  # Apply ImageNet normalization
 
         
