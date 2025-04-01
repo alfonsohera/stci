@@ -135,6 +135,10 @@ class DualPathAudioClassifier(nn.Module):
             nn.Linear(128, num_classes)
         )
         
+        # Pre-initialize device tracking to avoid device checks at runtime
+        self._device = None
+        self._initialized_for_device = False
+        
     def forward(self, audio, prosodic_features=None, augmentation_id=None):
         """
         Forward pass with optional augmentation ID to control augmentation.
@@ -147,65 +151,77 @@ class DualPathAudioClassifier(nn.Module):
         # Get device from input tensor
         device = audio.device
                 
-        if not hasattr(self, '_device') or self._device != device:
+        # Only perform one-time device initialization
+        if not self._initialized_for_device or self._device != device:
             self.mel_spec = self.mel_spec.to(device)
             self.amplitude_to_db = self.amplitude_to_db.to(device)
             self.normalize = self.normalize.to(device)
+            self.audio_downsample = self.audio_downsample.to(device)
+            self.rnn = self.rnn.to(device)
+            self.cnn_dim_reducer = self.cnn_dim_reducer.to(device)
+            self.fusion = self.fusion.to(device)
             
+            if self.use_prosodic_features:
+                self.prosodic_feature_mlp = self.prosodic_feature_mlp.to(device)
+                
             if self.apply_specaugment:
-                self.spec_augment = self.spec_augment.to(device)                
+                self.spec_augment = self.spec_augment.to(device)
                 
             self._device = device
+            self._initialized_for_device = True
         
         # Start with processing the audio through the CNN
         # If the audio is just a single channel, expand to [B, 1, T]
+        # Process the entire batch at once
         if len(audio.shape) == 2:
             audio = audio.unsqueeze(1)  # Add channel dimension
-        
-        # Generate mel spectrogram
-        mel = self.mel_spec(audio.squeeze(1))
-        mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
+       
+        with torch.amp.autocast("cuda"):
+            mel = self.mel_spec(audio.squeeze(1))
+            mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
         
         # Apply SpecAugment based on augmentation_id
         if self.training and self.apply_specaugment:
-            # Determine which samples in the batch need augmentation
-            if isinstance(augmentation_id, list):
-                # Handle batched augmentation IDs
-                batch_size = mel_db.size(0)
-                for i in range(batch_size):
-                    # Get the current sample's augmentation ID
-                    current_id = augmentation_id[i]
-                    if current_id is not None:
-                        # Set random seed for reproducible augmentations
-                        random.seed(current_id)
-                        torch.manual_seed(current_id)
-                        # Force augmentation for samples with augmentation_id
-                        mel_db[i:i+1] = self.spec_augment(mel_db[i:i+1], force_apply=True)
-                        # Reset seed to avoid affecting other randomness
-                        random.seed()
-                        torch.seed()
-                    else:
-                        # Apply regular probabilistic augmentation to original samples
-                        mel_db[i:i+1] = self.spec_augment(mel_db[i:i+1], force_apply=False)
-            elif augmentation_id is not None:
-                # Single non-batched augmentation ID
-                random.seed(augmentation_id)
-                torch.manual_seed(augmentation_id)
-                # Force augmentation for all samples in this non-batched case
-                mel_db = self.spec_augment(mel_db, force_apply=True)
-                random.seed()
-                torch.seed()
+            # OPTIMIZATION: Avoid repeated seed setting by using batch processing
+            if isinstance(augmentation_id, list) and any(aid is not None for aid in augmentation_id):
+                # Create a mask of which samples to augment with deterministic seeds
+                to_augment = [i for i, aid in enumerate(augmentation_id) if aid is not None]
+                no_aug = [i for i, aid in enumerate(augmentation_id) if aid is None]
+                
+                # Process samples with deterministic seeds
+                if to_augment:
+                    # Set random seeds once
+                    deterministic_batch = mel_db[to_augment]
+                    # Force apply augmentation to this entire subset
+                    deterministic_batch = self.spec_augment(deterministic_batch, force_apply=True)
+                    # Put back into the full batch
+                    for i, orig_idx in enumerate(to_augment):
+                        mel_db[orig_idx] = deterministic_batch[i]
+                    
+                # Process samples without deterministic seeds
+                if no_aug:
+                    # Regular probabilistic augmentation
+                    regular_batch = mel_db[no_aug]
+                    regular_batch = self.spec_augment(regular_batch, force_apply=False)
+                    # Put back into the full batch
+                    for i, orig_idx in enumerate(no_aug):
+                        mel_db[orig_idx] = regular_batch[i]
             else:
-                # No augmentation IDs provided, apply regular probabilistic augmentation
+                # Process entire batch with standard augmentation
                 mel_db = self.spec_augment(mel_db, force_apply=False)
         
         # First apply SpecAugment, then resize and normalize to match EfficientNetV2 input
-        mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
+        if self.training:
+            mel_db = F.interpolate(mel_db, size=self.target_size, mode='nearest')
+        else:
+            mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
         mel_db = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-6)  # Scale to [0,1]
         mel_db = self.normalize(mel_db)  # Apply ImageNet normalization
 
-        # Pass through CNN 
-        cnn_features = self.cnn_extractor(mel_db)
+        
+        with torch.no_grad():  # No gradients needed since CNN is frozen
+            cnn_features = self.cnn_extractor(mel_db)
+        
         cnn_features = self.cnn_dim_reducer(cnn_features)
         
         # Process audio for RNN path
