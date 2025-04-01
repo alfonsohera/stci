@@ -98,15 +98,89 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
+def train_epoch(model, train_loader, optimizer, criterion, device, use_prosodic_features=True):
+    import gc
+    model.train()
+    train_loss = 0.0
+    
+    for i, batch in enumerate(tqdm(train_loader, desc="Training")):
+        # Move batch to GPU if available
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        
+        # Zero gradients more efficiently
+        optimizer.zero_grad()
+        
+        # Forward pass
+        if use_prosodic_features and "prosodic_features" in batch:
+            logits = model(batch["audio"], batch["prosodic_features"], batch.get("augmentation_id"))
+        else:
+            logits = model(batch["audio"], augmentation_id=batch.get("augmentation_id"))
+            
+        # Calculate loss                
+        loss = criterion(logits, batch["labels"].to(device))
+        
+        # Backpropagation
+        loss.backward()                        
+        # Update weights
+        optimizer.step()        
+        
+        # Track loss 
+        train_loss += loss.item()        
+        # cleanup of tensors and loss
+        logits_detached = logits.detach()        
+        del logits, loss, batch
+        del logits_detached
+        
+        # Periodic garbage collection 
+        if i % 10 == 0:  # Less frequent to reduce overhead
+            gc.collect()
+            
+    # Explicit cleanup after training phase
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    # Calculate average loss
+    avg_train_loss = train_loss / len(train_loader)
+    
+    return avg_train_loss
+
+
+def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
+    model.eval()
+    val_loss = 0.0
+    all_preds = []
+    all_labels = []
+    
+    with torch.inference_mode():
+        for batch in tqdm(val_loader, desc="Validation"):
+            if use_prosodic_features:
+                # Forward pass
+                logits = model(batch["audio"].to(device), batch["prosodic_features"].to(device))
+            else:
+                # Forward pass
+                logits = model(batch["audio"].to(device))
+            # Calculate loss
+            loss = criterion(logits, batch["labels"].to(device))
+            # Track loss
+            val_loss += loss.item()
+            # Get predictions
+            preds = torch.argmax(logits, dim=-1)
+            # Track predictions and labels
+            all_preds.extend(preds.cpu().numpy())
+            # Convert labels to numpy and extend
+            all_labels.extend(batch["labels"].cpu().numpy())
+    return val_loss, all_labels, all_preds
+
+
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Optimize DataLoader for CPU memory 
     train_loader = DataLoader(
         dataset["train"], 
-        batch_size=64,  # 
+        batch_size=64,  
         collate_fn=collate_fn_cnn_rnn,
-        num_workers=0,  # 
+        num_workers=0,  
         pin_memory=True,  
         persistent_workers=False  
     )
@@ -149,19 +223,26 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     )
     class_weights = torch.FloatTensor(class_weights).to(device)
     criterion = FocalLoss(gamma=0, weight=None)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=2e-5,            # Starting LR (will be scaled by OneCycleLR)
+        weight_decay=0.01,  # L2 regularization
+        betas=(0.9, 0.999)  # Default Adam betas
+    )
     
     # Calculate total steps for 1cycle scheduler
     total_steps = len(train_loader) * num_epochs
     
-    # 1cycle LR scheduler 
+    # 1cycle LR scheduler with optimized parameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-3, 
+        max_lr=5e-4,           
         total_steps=total_steps,
-        pct_start=0.3,  
-        div_factor=2,  
-        final_div_factor=2
+        pct_start=0.3,          # Warm up for 30% of training
+        div_factor=25,          # Initial LR = max_lr/25
+        final_div_factor=1000,  # Final LR = max_lr/1000
+        anneal_strategy='cos',  # Cosine annealing
+        three_phase=False       # Use standard two-phase schedule
     )
     
     # Create output directory for CNN+RNN model
@@ -173,97 +254,21 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     
     # Tracking variables
     best_f1_macro = 0.0  
-    
-    # 3. Modify the training loop with explicit garbage collection
+        
+    # Training loop
     import gc
-
     for epoch in range(num_epochs):
         torch.cuda.empty_cache()
         gc.collect()
         log_memory_usage(f"Epoch {epoch+1} start")
         
         # Training phase
-        model.train()
-        train_loss = 0.0
-        
-        for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training")):
-            # Move batch to GPU if available
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            
-            # Zero gradients more efficiently
-            optimizer.zero_grad(set_to_none=True)
-            
-            # Forward pass
-            if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(batch["audio"], batch["prosodic_features"], batch.get("augmentation_id"))
-            else:
-                logits = model(batch["audio"], augmentation_id=batch.get("augmentation_id"))
-                
-            # Calculate loss                
-            loss = criterion(logits, batch["labels"].to(device))
-            
-            # Backpropagation
-            loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            # Update weights
-            optimizer.step()
-            
-            # Update LR
-            scheduler.step()
-            
-            # Track loss (use item() to detach from graph)
-            train_loss += loss.item()
-            
-            # Explicit cleanup of tensors - with detach to ensure no graph references 
-            logits_detached = logits.detach()
-            loss_value = loss.item()
-            del logits, loss, batch
-            del logits_detached
-            
-            # Periodic garbage collection 
-            if i % 10 == 0:  # Less frequent to reduce overhead
-                gc.collect()
-                
-                # Monitor memory every 50 batches
-                if i % 50 == 0:
-                    log_memory_usage(f"Epoch {epoch+1}, batch {i}")
-                
-        # Explicit cleanup after training phase
-        torch.cuda.empty_cache()
-        gc.collect()
-        log_memory_usage(f"Epoch {epoch+1} end")
-        
-        # Calculate average loss
-        avg_train_loss = train_loss / len(train_loader)
-        
+        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, scheduler, device, use_prosodic_features)
         # Validation phase
-        model.eval()
-        val_loss = 0.0
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
-                if use_prosodic_features:
-                    # Forward pass
-                    logits = model(batch["audio"].to(device), batch["prosodic_features"].to(device))
-                else:
-                    # Forward pass
-                    logits = model(batch["audio"].to(device))
-                # Calculate loss
-                loss = criterion(logits, batch["labels"].to(device))
-                # Track loss
-                val_loss += loss.item()
-                # Get predictions
-                preds = torch.argmax(logits, dim=-1)
-                # Track predictions and labels
-                all_preds.extend(preds.cpu().numpy())
-                # Convert labels to numpy and extend
-                all_labels.extend(batch["labels"].cpu().numpy())
-        
+        val_loss, all_labels, all_preds = evaluate(model, val_loader, criterion, device, use_prosodic_features)
+        # Update LR
+        scheduler.step()
+                       
         # Calculate metrics
         avg_val_loss = val_loss / len(val_loader)
         val_accuracy = accuracy_score(all_labels, all_preds)

@@ -86,20 +86,46 @@ class DualPathAudioClassifier(nn.Module):
         if apply_specaugment:
             self.spec_augment = SpecAugment()
         
-        # CNN path (using EfficientNetV2-S pretrained)
-        self.cnn_extractor = vision_models.efficientnet_v2_s(weights="IMAGENET1K_V1")
-        # Modify first layer for single-channel input
-        self.cnn_extractor.features[0][0] = nn.Conv2d(1, 24, kernel_size=(3, 3), 
-                                                      stride=(2, 2), padding=(1, 1), bias=False)
-        # Remove classifier
-        self.cnn_extractor.classifier = nn.Identity()
-        # Freeze CNN weights for feature extraction
-        for param in self.cnn_extractor.parameters():
-            param.requires_grad = False
+        # CNN path for mel spectrograms
+        self.cnn_extractor = nn.Sequential(
+            # First convolutional block
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.2),
             
-        # Dimensionality reduction of the outputs of the feature extractor
-        self.cnn_dim_reducer = nn.Linear(1280, 256)
-        
+            # Second convolutional block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.2),
+            
+            # Third convolutional block
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(), 
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.3),
+            
+            # Fourth convolutional block - added for deeper feature extraction
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.3),
+            
+            # Global average pooling instead of flattening
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            
+            # Feature dimension reducer
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Dropout(0.4)
+        )
+       
         # RNN path for raw audio
         self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)  
         self.rnn = nn.GRU(
@@ -158,8 +184,7 @@ class DualPathAudioClassifier(nn.Module):
             self.amplitude_to_db = self.amplitude_to_db.to(device)
             self.normalize = self.normalize.to(device)
             self.audio_downsample = self.audio_downsample.to(device)
-            self.rnn = self.rnn.to(device)
-            self.cnn_dim_reducer = self.cnn_dim_reducer.to(device)
+            self.rnn = self.rnn.to(device)            
             self.fusion = self.fusion.to(device)
             
             if self.use_prosodic_features:
@@ -216,12 +241,8 @@ class DualPathAudioClassifier(nn.Module):
             mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
         mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5) 
         mel_db = self.normalize(mel_db)  # Apply ImageNet normalization
-
         
-        with torch.no_grad():  # No gradients needed since CNN is frozen
-            cnn_features = self.cnn_extractor(mel_db)
-        
-        cnn_features = self.cnn_dim_reducer(cnn_features)
+        cnn_features = self.cnn_extractor(mel_db)
         
         # Process audio for RNN path
         audio_downsampled = self.audio_downsample(audio)
