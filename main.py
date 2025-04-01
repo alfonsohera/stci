@@ -22,6 +22,29 @@ from torch import nn
 import torch.nn.functional as F 
 
 
+# Add this function to your main.py at the top level
+def log_memory_usage(label):
+    import psutil
+    import gc
+    
+    # Force garbage collection before measurement
+    gc.collect()
+    
+    # Get process memory info
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    
+    # Calculate CPU memory usage
+    rss_mb = mem_info.rss / (1024 * 1024)
+    vms_mb = mem_info.vms / (1024 * 1024)
+    
+    # System memory info
+    sys_mem = psutil.virtual_memory()
+    sys_percent = sys_mem.percent
+    
+    print(f"[{label}] CPU Memory: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB, System={sys_percent}%")
+
+
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
 logging.set_verbosity_error()  # Set transformers logging to show only errors
@@ -43,61 +66,72 @@ class FocalLoss(nn.Module):
 def collate_fn_cnn_rnn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    # Process audio more efficiently with less memory copying
     audio_tensors = []
     for item in batch:
         if isinstance(item["audio"], list):
+            # Convert to tensor without copying
             audio_tensors.append(torch.tensor(item["audio"], dtype=torch.float32))
         else:
-            audio_tensors.append(item["audio"])
-    audio = torch.stack(audio_tensors).to(device)
+            # Avoid creating new tensor if already a tensor
+            if not item["audio"].requires_grad:
+                audio_tensors.append(item["audio"])
+            else:
+                audio_tensors.append(item["audio"].detach())
+    
+    # Stack on CPU, move to device once
+    audio = torch.stack(audio_tensors)
+    labels = torch.tensor([item["label"] for item in batch])
     
     result = {
-        "audio": audio,
-        "labels": torch.tensor([item["label"] for item in batch]).to(device)
+        "audio": audio.to(device),
+        "labels": labels.to(device)
     }
     
-    # Extract augmentation IDs if present
-    augmentation_ids = []
-    has_augmentation = False
-    for item in batch:
-        if "augmentation_id" in item:
-            augmentation_ids.append(item["augmentation_id"])
-            has_augmentation = True
-        else:
-            augmentation_ids.append(None)
-    
-    if has_augmentation:
-        result["augmentation_id"] = augmentation_ids
-    
+    # Process prosodic features with minimal copying
     if "prosodic_features" in batch[0]:
-        # Convert to tensor if necessary
         features_list = []
         for item in batch:
             pf = item["prosodic_features"]
             if not isinstance(pf, torch.Tensor):
                 pf = torch.tensor(pf, dtype=torch.float32)
-            features_list.append(pf)
-        try:
-            result["prosodic_features"] = torch.stack(features_list).to(device)
-        except Exception as e:
-            print(f"Error stacking prosodic features: {e}")
-            batch_size = len(batch)
-            feature_dim = features_list[0].shape[0]
-            result["prosodic_features"] = torch.zeros(batch_size, feature_dim).to(device)
+            # Avoid gradient history
+            if not pf.requires_grad:
+                features_list.append(pf)
+            else:
+                features_list.append(pf.detach())
+        
+        # Single movement to device
+        features = torch.stack(features_list)
+        result["prosodic_features"] = features.to(device)
+    
+    # Explicitly clean up
+    del audio_tensors
+    if "prosodic_features" in batch[0]:
+        del features_list
+    
     return result
 
 
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Optimize DataLoader for CPU memory 
     train_loader = DataLoader(
         dataset["train"], 
-        batch_size=32,
+        batch_size=16,  # 
         collate_fn=collate_fn_cnn_rnn,
-        num_workers=2,  # Enable multiprocessing
-        pin_memory=True,  # More efficient memory transfer
-        prefetch_factor=2  # Prefetch batches
+        num_workers=0,  # 
+        pin_memory=False,  
+        persistent_workers=False  
     )
-    val_loader = DataLoader(dataset["validation"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
+    
+    val_loader = DataLoader(
+        dataset["validation"], 
+        batch_size=16,  
+        collate_fn=collate_fn_cnn_rnn,
+        num_workers=0  
+    )
     
     # Initialize wandb
     import wandb
@@ -159,7 +193,8 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     import gc
 
     for epoch in range(num_epochs):
-        # Log memory at epoch start
+        torch.cuda.empty_cache()
+        gc.collect()
         log_memory_usage(f"Epoch {epoch+1} start")
         
         # Training phase
@@ -167,8 +202,8 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         train_loss = 0.0
         
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training")):
-            # Zero gradients
-            optimizer.zero_grad()
+            # Zero gradients more efficiently
+            optimizer.zero_grad(set_to_none=True)
             
             # Forward pass
             if use_prosodic_features and "prosodic_features" in batch:
@@ -188,18 +223,27 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             # Update LR
             scheduler.step()
             
-            # Track loss
+            # Track loss (use item() to detach from graph)
             train_loss += loss.item()
             
-            # Explicit cleanup of tensors
-            del logits, loss
+            # Explicit cleanup of tensors - with detach to ensure no graph references 
+            logits_detached = logits.detach()
+            loss_value = loss.item()
+            del logits, loss, batch
+            del logits_detached
             
-            # Periodic garbage collection
-            if i % 5 == 0:  # Every 5 batches
+            # Periodic garbage collection 
+            if i % 10 == 0:  # Less frequent to reduce overhead
                 gc.collect()
                 
+                # Monitor memory every 50 batches
+                if i % 50 == 0:
+                    log_memory_usage(f"Epoch {epoch+1}, batch {i}")
+                
         # Explicit cleanup after training phase
+        torch.cuda.empty_cache()
         gc.collect()
+        log_memory_usage(f"Epoch {epoch+1} end")
         
         # Calculate average loss
         avg_train_loss = train_loss / len(train_loader)
@@ -282,15 +326,17 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             log_dict[f"val_npv_{class_name}"] = npv
             log_dict[f"val_f1_{class_name}"] = f1
         
-        # Replace the confusion matrix visualization with this simpler version
-        # Only create confusion matrix visualization on best model or final epoch
-        if val_f1_macro > best_f1_macro or epoch == num_epochs - 1:
+        
+        # Simplify the validation visualization - only log at end of training
+        if epoch == num_epochs - 1:  # Only in final epoch
+            """ import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
             import matplotlib.pyplot as plt
             import numpy as np
             
-            plt.figure(figsize=(8, 6), dpi=80)  # Lower resolution
+            plt.figure(figsize=(6, 4), dpi=72)  # Even lower resolution
             plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-            plt.title('Confusion Matrix')
+            plt.title('Final Confusion Matrix')
             plt.colorbar()
             classes = ["Healthy", "MCI", "AD"]
             tick_marks = np.arange(len(classes))
@@ -300,15 +346,17 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             plt.ylabel('True Label')
             plt.tight_layout()
             
-            # Log to wandb
+            # Log to wandb (if applicable)
             if wandb.run:
                 wandb.log({
                     **log_dict,
                     "confusion_matrix": wandb.Image(plt)
                 })
-            plt.close('all')  # Close ALL figures to prevent leaks
+            
+            # Close figure immediately
+            plt.close('all') """
         else:
-            # Just log metrics without confusion matrix
+            # Just log metrics for all other epochs
             if wandb.run:
                 wandb.log(log_dict)
         
@@ -319,7 +367,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         print(f"  Val Accuracy: {val_accuracy:.4f}")
         print(f"  Val F1-Macro: {val_f1_macro:.4f}")
         print(f"  Val F1 per class: {val_f1_per_class}")
-        print("  Confusion Matrix:")
+        #print("  Confusion Matrix:")
         print(cm)
         
         # Save best model based on F1-macro instead of validation loss
