@@ -210,129 +210,301 @@ class BalancedAugmentedDataset(Dataset):
     A dataset wrapper that balances classes by augmenting underrepresented samples
     with different CNN spectrograms while keeping RNN and prosodic features intact.
     """
-    def __init__(self, original_dataset, target_samples_per_class=1000, num_classes=3, 
-                 augmentation_variants=3):
+    def __init__(self, original_dataset, target_samples_per_class=None, total_target_samples=1000, 
+                 num_classes=3, augmentation_variants=3, cache_size=1000):
         """
         Args:
             original_dataset: The dataset to balance
-            target_samples_per_class: Target number of samples per class
+            target_samples_per_class: Target number of samples per class (if None, derived from total_target_samples)
+            total_target_samples: Total target samples for the dataset (ignored if target_samples_per_class is set)
             num_classes: Number of classes in the dataset
             augmentation_variants: How many different augmentation variants to create
                                    for each sample when balancing
+            cache_size: Maximum number of augmented samples to cache (0 = no cache)
         """
+        import numpy as np
+        
         self.original_dataset = original_dataset
-        self.target_samples_per_class = target_samples_per_class
         self.num_classes = num_classes
         self.augmentation_variants = augmentation_variants
+        self.max_cache_size = cache_size
+        self.sample_cache = {}  # Initialize cache
         
-        # Count samples per class in the original dataset
-        import numpy as np
-
-        # Collect all labels first
+        # Extract label information
         all_labels = np.array([
             sample["label"] if isinstance(sample, dict) else sample[1] 
             for sample in original_dataset
-        ])        
-        self.class_indices = [np.where(all_labels == i)[0].tolist() for i in range(num_classes)]
+        ])
+        
+        # Create class indices using numpy for speed
+        self.class_indices = [np.where(all_labels == i)[0].tolist() for i in range(self.num_classes)]
         
         # Calculate original class counts
         self.original_class_counts = [len(indices) for indices in self.class_indices]
-        print(f"Original class distribution: {self.original_class_counts}")
+        original_total = sum(self.original_class_counts)
         
-        # Generate augmentation mapping
-        # Pre-allocate lists based on final expected size
-        total_samples = len(original_dataset) + sum(max(0, target_samples_per_class - count) 
-                                                for count in self.original_class_counts)
-        self.sample_indices = [0] * total_samples
-        self.augmentation_ids = [None] * total_samples
-
-        # Then use indices to fill them instead of append
-        idx = 0
-        # Add original samples first
-        for i in range(len(original_dataset)):
-            self.sample_indices[idx] = i
-            self.augmentation_ids[idx] = None
-            idx += 1
-
-        # Add augmented samples to balance the dataset
-        for class_idx in range(num_classes):
+        # Determine target samples per class
+        if target_samples_per_class is None:
+            # Set target per class based on total samples divided across classes
+            samples_per_class = total_target_samples // num_classes
+            self.target_samples_per_class = [samples_per_class] * num_classes
+            
+            # Ensure we don't create a dataset beyond the total_target_samples
+            if sum(self.target_samples_per_class) > total_target_samples:
+                # Reduce the last class slightly if needed for exact fit
+                self.target_samples_per_class[-1] -= (sum(self.target_samples_per_class) - total_target_samples)
+        else:
+            # Use specified target per class but ensure we don't exceed total_target_samples
+            self.target_samples_per_class = [min(target_samples_per_class, total_target_samples // num_classes)] * num_classes
+        
+        # Build sample mapping 
+        self._build_sample_mapping()
+        
+        # Log information about the dataset
+        self._log_dataset_info()
+    
+    def _build_sample_mapping(self):
+        """Build sample indices and augmentation IDs efficiently"""
+        import numpy as np
+        
+        # Calculate total samples (just use the original calculation)
+        total_samples = sum(self.target_samples_per_class)
+        
+        # Pre-allocate arrays for indices and augmentation IDs 
+        self.sample_indices = np.zeros(total_samples, dtype=np.int32)
+        self.augmentation_ids = np.array([None] * total_samples, dtype=object)
+        
+        # Fill arrays class by class (more efficient implementation)
+        current_idx = 0
+        for class_idx in range(self.num_classes):
             original_count = self.original_class_counts[class_idx]
-            if original_count < target_samples_per_class:
-                samples_needed = target_samples_per_class - original_count
+            target_count = self.target_samples_per_class[class_idx]
+            source_indices = np.array(self.class_indices[class_idx])
+            
+            if original_count >= target_count:
+                # If we have enough original samples, randomly select subset
+                selected_indices = np.random.choice(source_indices, target_count, replace=False)
+                end_idx = current_idx + target_count
+                self.sample_indices[current_idx:end_idx] = selected_indices
+                # self.augmentation_ids already initialized to None
+            else:
+                # Add all original samples
+                end_idx = current_idx + original_count
+                self.sample_indices[current_idx:end_idx] = source_indices
                 
-                # Calculate how many of each original sample to use
-                repeats_per_sample = (samples_needed + len(self.class_indices[class_idx]) - 1) // len(self.class_indices[class_idx])
-                
-                # Generate all augmentation indices and IDs in one go
-                original_indices = np.repeat(self.class_indices[class_idx], repeats_per_sample)[:samples_needed]
-                
-                # Generate augmentation IDs vectorized
-                aug_variants = np.arange(len(original_indices)) % augmentation_variants
-                aug_ids = (class_idx * 100000) + (np.arange(len(original_indices)) * 1000) + aug_variants
-                
-                # Extend our lists
-                self.sample_indices.extend(original_indices.tolist())
-                self.augmentation_ids.extend(aug_ids.tolist())
+                # Add augmented samples if needed
+                samples_needed = target_count - original_count
+                if samples_needed > 0:
+                    # Generate augmentation
+                    repeats = (samples_needed + original_count - 1) // original_count
+                    aug_indices = np.repeat(source_indices, repeats)[:samples_needed]
+                    aug_variants = np.arange(samples_needed) % self.augmentation_variants
+                    aug_ids = (class_idx * 100000) + (np.arange(samples_needed) * 1000) + aug_variants
+                    
+                    # Store in arrays
+                    aug_end_idx = end_idx + samples_needed
+                    self.sample_indices[end_idx:aug_end_idx] = aug_indices
+                    self.augmentation_ids[end_idx:aug_end_idx] = aug_ids
+                    end_idx = aug_end_idx
+            
+            current_idx = end_idx
+        
+        # Trim arrays if needed
+        if current_idx < total_samples:
+            self.sample_indices = self.sample_indices[:current_idx]
+            self.augmentation_ids = self.augmentation_ids[:current_idx]
+    
+    def _log_dataset_info(self):
+        """Log information about the dataset with detailed class breakdown"""
+        import numpy as np
         
         # Calculate final class distribution
-        final_distribution = Counter()
-        for idx in self.sample_indices:
-            sample = original_dataset[idx]
-            label = sample["label"] if isinstance(sample, dict) else sample[1]
-            final_distribution[label] += 1
+        class_counts = np.zeros(self.num_classes, dtype=np.int32)
+        original_per_class = np.zeros(self.num_classes, dtype=np.int32)
+        augmented_per_class = np.zeros(self.num_classes, dtype=np.int32)
         
-        # Count how many samples have augmentation IDs
-        augmented_count = sum(1 for aid in self.augmentation_ids if aid is not None)
+        # Count original samples per class
+        for i in range(self.num_classes):
+            original_per_class[i] = self.original_class_counts[i]
         
-        print(f"Balanced class distribution: {[final_distribution[i] for i in range(num_classes)]}")
-        print(f"Total samples after balancing: {len(self.sample_indices)}")
-        print(f"Original samples: {len(original_dataset)}, Augmented samples: {augmented_count}")
+        # Count augmented samples per class
+        non_none_mask = self.augmentation_ids != None
+        if np.any(non_none_mask):
+            valid_ids = self.augmentation_ids[non_none_mask]
+            for i in range(self.num_classes):
+                class_mask = valid_ids // 100000 == i
+                augmented_per_class[i] = np.sum(class_mask)
+        
+        # Calculate total counts
+        for i in range(self.num_classes):
+            class_counts[i] = original_per_class[i] + augmented_per_class[i]
+        
+        # Calculate percentages
+        total_samples = len(self.sample_indices)
+        original_total = len(self.original_dataset)
+        augmented_total = np.sum(self.augmentation_ids != None)
+        
+        # Print detailed information
+        print("=" * 70)
+        print("DATASET BALANCING REPORT")
+        print("=" * 70)
+        print(f"Original dataset: {original_total} samples")
+        print(f"Balanced dataset: {total_samples} samples")
+        print(f"Added {augmented_total} augmented samples")
+        print("-" * 70)
+        print("CLASS BREAKDOWN:")
+        
+        # Create a nice table format
+        print(f"{'Class':<10}{'Original':<12}{'Augmented':<12}{'Total':<12}{'Percentage':<12}")
+        print("-" * 70)
+        for i in range(self.num_classes):
+            percentage = (class_counts[i] / total_samples) * 100
+            print(f"{i:<10}{original_per_class[i]:<12}{augmented_per_class[i]:<12}"
+                  f"{class_counts[i]:<12}{percentage:.1f}%")
+        
+        print("-" * 70)
+        print(f"Class distribution before: {self.original_class_counts}")
+        print(f"Class distribution after:  {class_counts.tolist()}")
+        print("=" * 70)
     
     def __len__(self):
         return len(self.sample_indices)
     
     def __getitem__(self, idx):
-        # Cache mechanism for frequently accessed augmented samples
-        if not hasattr(self, 'sample_cache'):
-            self.sample_cache = {}
+        """Get an item from the dataset with proper index handling."""
+        import numpy as np
+        from datasets.arrow_dataset import Dataset as ArrowDataset
         
-        cache_key = (self.sample_indices[idx], self.augmentation_ids[idx])
-        if cache_key in self.sample_cache:
-            return self.sample_cache[cache_key]
+        # Handle dictionary access pattern (dataset["train"]["label"])
+        if isinstance(idx, str):
+            if idx in ["train", "validation", "test"]:
+                # Return self to maintain chaining
+                return self
+            elif idx == "label":
+                # Fast path for HuggingFace dataset labels
+                if isinstance(self.original_dataset, ArrowDataset):
+                    # Extract all labels at once from the original dataset
+                    all_original_indices = [int(i) for i in self.sample_indices]
+                    try:
+                        all_labels = self.original_dataset.select(all_original_indices)["label"]
+                        return list(all_labels)  # Convert to Python list for compatibility
+                    except Exception as e:
+                        print(f"Error extracting labels from HuggingFace dataset: {e}")
+                        # Fall back to slow path if this fails
+                
+                # Slower path for other dataset types
+                labels = []
+                for i in range(len(self.sample_indices)):
+                    try:
+                        original_idx = int(self.sample_indices[i])
+                        sample = self.original_dataset[original_idx]
+                        if isinstance(sample, dict):
+                            label = sample["label"]
+                        elif hasattr(sample, '__getitem__') and len(sample) > 1:
+                            label = sample[1]
+                        else:
+                            raise ValueError(f"Unexpected sample format: {type(sample)}")
+                        labels.append(label)
+                    except Exception as e:
+                        print(f"Error processing label at index {i}: {str(e)}")
+                        labels.append(-1)  # Add placeholder for error cases
+                return labels
+            else:
+                # Fast path for HuggingFace dataset attributes
+                if isinstance(self.original_dataset, ArrowDataset) and idx in self.original_dataset.column_names:
+                    all_original_indices = [int(i) for i in self.sample_indices]
+                    try:
+                        all_values = self.original_dataset.select(all_original_indices)[idx]
+                        return list(all_values)
+                    except Exception as e:
+                        print(f"Error extracting {idx} from HuggingFace dataset: {e}")
+                        # Fall back to slow path if this fails
+                
+                # Slower path for other dataset types or attributes
+                all_values = []
+                for i in range(len(self.sample_indices)):
+                    try:
+                        original_idx = int(self.sample_indices[i])
+                        sample = self.original_dataset[original_idx]
+                        if isinstance(sample, dict) and idx in sample:
+                            all_values.append(sample[idx])
+                        else:
+                            all_values.append(None)
+                    except Exception as e:
+                        all_values.append(None)
+                return all_values
         
-        # Get the original sample
-        original_idx = self.sample_indices[idx]
-        augmentation_id = self.augmentation_ids[idx]
-        
-        # Get the sample from the original dataset
-        sample = self.original_dataset[original_idx]
-        
-        # If it's a dictionary, add augmentation_id
-        if isinstance(sample, dict):
-            sample = sample.copy()  # Create a copy to avoid modifying the original
-            sample["augmentation_id"] = augmentation_id
-        # If it's a tuple (like audio, label), add augmentation_id
-        else:
-            # Assuming format is (audio, label) or (audio, prosodic, label)
-            if len(sample) == 2:  # (audio, label)
-                audio, label = sample
-                sample = (audio, label, augmentation_id)
-            elif len(sample) == 3:  # (audio, prosodic, label)
-                audio, prosodic, label = sample
-                sample = (audio, prosodic, label, augmentation_id)
-        
-        # Add result to cache before returning if it's an augmented sample
-        if self.augmentation_ids[idx] is not None:
-            self.sample_cache[cache_key] = sample
-        
-        return sample
+        # Regular integer index access for DataLoader
+        try:
+            if isinstance(idx, (torch.Tensor, np.ndarray)):
+                idx = idx.item() if hasattr(idx, 'item') else int(idx)
+            elif not isinstance(idx, int):
+                idx = int(idx)
+            
+            # Check if index is in bounds
+            if idx < 0 or idx >= len(self.sample_indices):
+                raise IndexError(f"Index {idx} out of bounds for dataset of size {len(self.sample_indices)}")
+            
+            # Get data from original dataset with augmentation ID
+            original_idx = int(self.sample_indices[idx])
+            augmentation_id = self.augmentation_ids[idx]
+            
+            # Return cached result if available (for augmented samples)
+            if augmentation_id is not None:
+                cache_key = (original_idx, augmentation_id)
+                if cache_key in self.sample_cache:
+                    return self.sample_cache[cache_key]
+            
+            # Get the sample from the original dataset
+            sample = self.original_dataset[original_idx]
+            
+            # Process the sample based on its format
+            if isinstance(sample, dict):
+                # Handle dictionary format
+                result = dict(sample)  # Create a copy to avoid modifying the original
+                result["augmentation_id"] = augmentation_id
+            else:
+                # Handle tuple format
+                if len(sample) == 2:  # (audio, label)
+                    audio, label = sample
+                    result = (audio, label, augmentation_id)
+                elif len(sample) == 3:  # (audio, prosodic, label)
+                    audio, prosodic, label = sample
+                    result = (audio, prosodic, label, augmentation_id)
+                else:
+                    raise ValueError(f"Unexpected sample format with {len(sample)} elements")
+            
+            # Cache result if it's an augmented sample
+            if augmentation_id is not None and self.max_cache_size > 0:
+                cache_key = (original_idx, augmentation_id)
+                self.sample_cache[cache_key] = result
+                
+                # Trim cache if it gets too large
+                if len(self.sample_cache) > self.max_cache_size:
+                    # Remove oldest items (approximation of LRU)
+                    for _ in range(len(self.sample_cache) - self.max_cache_size):
+                        self.sample_cache.pop(next(iter(self.sample_cache)))
+            
+            return result
+        except Exception as e:
+            print(f"Error in __getitem__ with index {idx}: {str(e)}")
+            raise
 
     @property
     def class_distribution(self):
-        if not hasattr(self, '_class_distribution'):
-            self._class_distribution = Counter()
-            for idx in self.sample_indices:
+        """Calculate class distribution on demand"""
+        import numpy as np
+        
+        if not hasattr(self, '_cached_distribution'):
+            # Count samples by class
+            counts = {i: 0 for i in range(self.num_classes)}
+            
+            for i in range(len(self.sample_indices)):
+                idx = self.sample_indices[i]
                 sample = self.original_dataset[idx]
                 label = sample["label"] if isinstance(sample, dict) else sample[1]
-                self._class_distribution[label] += 1
-        return self._class_distribution
+                counts[label] += 1
+                
+            self._cached_distribution = counts
+            
+        return self._cached_distribution
