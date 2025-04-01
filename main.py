@@ -107,7 +107,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         batch_size=16,  # 
         collate_fn=collate_fn_cnn_rnn,
         num_workers=0,  # 
-        pin_memory=False,  
+        pin_memory=True,  
         persistent_workers=False  
     )
     
@@ -204,6 +204,9 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             
             # Backpropagation
             loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             # Update weights
             optimizer.step()
