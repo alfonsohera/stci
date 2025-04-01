@@ -98,7 +98,7 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, use_prosodic_features=True):
+def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True):
     import gc
     model.train()
     train_loss = 0.0
@@ -123,7 +123,8 @@ def train_epoch(model, train_loader, optimizer, criterion, device, use_prosodic_
         loss.backward()                        
         # Update weights
         optimizer.step()        
-        
+        # Update LR
+        scheduler.step()
         # Track loss 
         train_loss += loss.item()        
         # cleanup of tensors and loss
@@ -263,11 +264,9 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         log_memory_usage(f"Epoch {epoch+1} start")
         
         # Training phase
-        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, use_prosodic_features)
+        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features)
         # Validation phase
         val_loss, all_labels, all_preds = evaluate(model, val_loader, criterion, device, use_prosodic_features)
-        # Update LR
-        scheduler.step()
                        
         # Calculate metrics
         avg_val_loss = val_loss / len(val_loader)
