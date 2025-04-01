@@ -210,19 +210,17 @@ class BalancedAugmentedDataset(Dataset):
     A dataset wrapper that balances classes by augmenting underrepresented samples
     with different CNN spectrograms while keeping RNN and prosodic features intact.
     """
-    def __init__(self, original_dataset, target_samples_per_class=None, total_target_samples=1000, 
+    def __init__(self, original_dataset, total_target_samples=1000, 
                  num_classes=3, augmentation_variants=3, cache_size=1000):
         """
         Args:
             original_dataset: The dataset to balance
-            target_samples_per_class: Target number of samples per class (if None, derived from total_target_samples)
-            total_target_samples: Total target samples for the dataset (ignored if target_samples_per_class is set)
+            total_target_samples: Total target samples for the balanced dataset
             num_classes: Number of classes in the dataset
             augmentation_variants: How many different augmentation variants to create
                                    for each sample when balancing
             cache_size: Maximum number of augmented samples to cache (0 = no cache)
-        """
-        import numpy as np
+        """        
         
         self.original_dataset = original_dataset
         self.num_classes = num_classes
@@ -241,21 +239,21 @@ class BalancedAugmentedDataset(Dataset):
         
         # Calculate original class counts
         self.original_class_counts = [len(indices) for indices in self.class_indices]
-        original_total = sum(self.original_class_counts)
         
-        # Determine target samples per class
-        if target_samples_per_class is None:
-            # Set target per class based on total samples divided across classes
-            samples_per_class = total_target_samples // num_classes
-            self.target_samples_per_class = [samples_per_class] * num_classes
-            
-            # Ensure we don't create a dataset beyond the total_target_samples
-            if sum(self.target_samples_per_class) > total_target_samples:
-                # Reduce the last class slightly if needed for exact fit
-                self.target_samples_per_class[-1] -= (sum(self.target_samples_per_class) - total_target_samples)
-        else:
-            # Use specified target per class but ensure we don't exceed total_target_samples
-            self.target_samples_per_class = [min(target_samples_per_class, total_target_samples // num_classes)] * num_classes
+        # Calculate target samples per class for balanced dataset
+        # This is now always derived from total_target_samples
+        samples_per_class = total_target_samples // num_classes
+        
+        # Handle remainder to ensure exact total_target_samples
+        remainder = total_target_samples % num_classes
+        
+        # Distribute remainder evenly starting from class 0
+        self.target_samples_per_class = [samples_per_class + (1 if i < remainder else 0) 
+                                         for i in range(num_classes)]
+        
+        # Verify exact count
+        assert sum(self.target_samples_per_class) == total_target_samples, \
+            f"Target sample count mismatch: {sum(self.target_samples_per_class)} != {total_target_samples}"
         
         # Build sample mapping 
         self._build_sample_mapping()

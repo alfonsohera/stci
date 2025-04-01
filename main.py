@@ -89,7 +89,14 @@ def collate_fn_cnn_rnn(batch):
 
 def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=True):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    train_loader = DataLoader(dataset["train"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
+    train_loader = DataLoader(
+        dataset["train"], 
+        batch_size=32,
+        collate_fn=collate_fn_cnn_rnn,
+        num_workers=2,  # Enable multiprocessing
+        pin_memory=True,  # More efficient memory transfer
+        prefetch_factor=2  # Prefetch batches
+    )
     val_loader = DataLoader(dataset["validation"], batch_size=32, collate_fn=collate_fn_cnn_rnn)
     
     # Initialize wandb
@@ -148,30 +155,52 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
     # Tracking variables
     best_f1_macro = 0.0  
     
+    # 3. Modify the training loop with explicit garbage collection
+    import gc
+
     for epoch in range(num_epochs):
+        # Log memory at epoch start
+        log_memory_usage(f"Epoch {epoch+1} start")
+        
         # Training phase
         model.train()
         train_loss = 0.0
         
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training"):
+        for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training")):
             # Zero gradients
-            optimizer.zero_grad()                        
+            optimizer.zero_grad()
+            
+            # Forward pass
             if use_prosodic_features and "prosodic_features" in batch:
-                # Forward pass with manual features
                 logits = model(batch["audio"], batch["prosodic_features"])
             else:
-                # Forward pass without manual features
                 logits = model(batch["audio"])
+                
             # Calculate loss                
             loss = criterion(logits, batch["labels"])
+            
             # Backpropagation
             loss.backward()
+            
             # Update weights
             optimizer.step()
+            
             # Update LR
-            scheduler.step()  # Update scheduler after each batch with 1cycle
+            scheduler.step()
+            
             # Track loss
             train_loss += loss.item()
+            
+            # Explicit cleanup of tensors
+            del logits, loss
+            
+            # Periodic garbage collection
+            if i % 5 == 0:  # Every 5 batches
+                gc.collect()
+                
+        # Explicit cleanup after training phase
+        gc.collect()
+        
         # Calculate average loss
         avg_train_loss = train_loss / len(train_loader)
         
@@ -253,12 +282,13 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             log_dict[f"val_npv_{class_name}"] = npv
             log_dict[f"val_f1_{class_name}"] = f1
         
-        # Log metrics to wandb if enabled
-        if wandb.run:
-            # Create and log confusion matrix visualization
+        # Replace the confusion matrix visualization with this simpler version
+        # Only create confusion matrix visualization on best model or final epoch
+        if val_f1_macro > best_f1_macro or epoch == num_epochs - 1:
             import matplotlib.pyplot as plt
             import numpy as np
-            plt.figure(figsize=(10, 8))
+            
+            plt.figure(figsize=(8, 6), dpi=80)  # Lower resolution
             plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
             plt.title('Confusion Matrix')
             plt.colorbar()
@@ -269,13 +299,18 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             plt.xlabel('Predicted Label')
             plt.ylabel('True Label')
             plt.tight_layout()
-                
+            
             # Log to wandb
-            wandb.log({
-                **log_dict,
-                "confusion_matrix": wandb.Image(plt)
-            })
-            plt.close()
+            if wandb.run:
+                wandb.log({
+                    **log_dict,
+                    "confusion_matrix": wandb.Image(plt)
+                })
+            plt.close('all')  # Close ALL figures to prevent leaks
+        else:
+            # Just log metrics without confusion matrix
+            if wandb.run:
+                wandb.log(log_dict)
         
         # Print metrics
         print(f"Epoch {epoch+1}/{num_epochs}:")
@@ -401,7 +436,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     from myCnnRnnModel import BalancedAugmentedDataset
     balanced_train_dataset = BalancedAugmentedDataset(
         original_dataset=dataset["train"],
-        target_samples_per_class=1000,  # Target 1000 samples per class
+        total_target_samples=1000,
         num_classes=3
     )
     
