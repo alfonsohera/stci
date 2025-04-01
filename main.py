@@ -263,7 +263,7 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         log_memory_usage(f"Epoch {epoch+1} start")
         
         # Training phase
-        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, scheduler, device, use_prosodic_features)
+        avg_train_loss = train_epoch(model, train_loader, optimizer, criterion, device, use_prosodic_features)
         # Validation phase
         val_loss, all_labels, all_preds = evaluate(model, val_loader, criterion, device, use_prosodic_features)
         # Update LR
