@@ -38,7 +38,14 @@ class SpecAugment(nn.Module):
         """
         # Skip augmentation with probability 1-apply_prob, unless force_apply is True
         if not force_apply and random.random() > self.apply_prob:
-            return spec            
+            return spec
+        
+        # Get the device from input and ensure transforms use it
+        device = spec.device
+        if self.freq_mask.device != device:
+            self.freq_mask = self.freq_mask.to(device)
+            self.time_mask = self.time_mask.to(device)
+    
         augmented = spec.clone()
         
         # Apply frequency masks
@@ -47,7 +54,8 @@ class SpecAugment(nn.Module):
             
         # Apply time masks
         for _ in range(self.n_time_masks):
-            augmented = self.time_mask(augmented)            
+            augmented = self.time_mask(augmented)
+            
         return augmented
 
 class DualPathAudioClassifier(nn.Module):
@@ -130,6 +138,21 @@ class DualPathAudioClassifier(nn.Module):
             prosodic_features: Optional prosodic features
             augmentation_id: Optional ID to control augmentation type/seed
         """
+        # Get device from input tensor
+        device = audio.device
+                
+        if not hasattr(self, '_device') or self._device != device:
+            self.mel_spec = self.mel_spec.to(device)
+            self.amplitude_to_db = self.amplitude_to_db.to(device)
+            self.normalize = self.normalize.to(device)
+            
+            if self.apply_specaugment:
+                self.spec_augment = self.spec_augment.to(device)
+                self.spec_augment.freq_mask = self.spec_augment.freq_mask.to(device)
+                self.spec_augment.time_mask = self.spec_augment.time_mask.to(device)
+                
+            self._device = device
+        
         # Start with processing the audio through the CNN
         # If the audio is just a single channel, expand to [B, 1, T]
         if len(audio.shape) == 2:

@@ -64,51 +64,36 @@ class FocalLoss(nn.Module):
 
 
 def collate_fn_cnn_rnn(batch):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Process audio more efficiently with less memory copying
+   
     audio_tensors = []
     for item in batch:
         if isinstance(item["audio"], list):
-            # Convert to tensor without copying
             audio_tensors.append(torch.tensor(item["audio"], dtype=torch.float32))
-        else:
-            # Avoid creating new tensor if already a tensor
-            if not item["audio"].requires_grad:
-                audio_tensors.append(item["audio"])
-            else:
-                audio_tensors.append(item["audio"].detach())
+        else:            
+            audio_tensors.append(item["audio"])
     
-    # Stack on CPU, move to device once
+    # Stack on CPU
     audio = torch.stack(audio_tensors)
     labels = torch.tensor([item["label"] for item in batch])
     
     result = {
-        "audio": audio.to(device),
-        "labels": labels.to(device)
+        "audio": audio,  # Keep on CPU
+        "labels": labels  # Keep on CPU
     }
-    
-    # Process prosodic features with minimal copying
+        
     if "prosodic_features" in batch[0]:
         features_list = []
         for item in batch:
             pf = item["prosodic_features"]
             if not isinstance(pf, torch.Tensor):
                 pf = torch.tensor(pf, dtype=torch.float32)
-            # Avoid gradient history
-            if not pf.requires_grad:
-                features_list.append(pf)
-            else:
-                features_list.append(pf.detach())
+            features_list.append(pf)
         
-        # Single movement to device
-        features = torch.stack(features_list)
-        result["prosodic_features"] = features.to(device)
+        result["prosodic_features"] = torch.stack(features_list)
     
-    # Explicitly clean up
-    del audio_tensors
-    if "prosodic_features" in batch[0]:
-        del features_list
+    # Pass augmentation IDs if present
+    if "augmentation_id" in batch[0]:
+        result["augmentation_id"] = [item.get("augmentation_id") for item in batch]
     
     return result
 
@@ -202,17 +187,20 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
         train_loss = 0.0
         
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Training")):
+            # Move batch to GPU if available
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            
             # Zero gradients more efficiently
             optimizer.zero_grad(set_to_none=True)
             
             # Forward pass
             if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(batch["audio"], batch["prosodic_features"])
+                logits = model(batch["audio"], batch["prosodic_features"], batch.get("augmentation_id"))
             else:
-                logits = model(batch["audio"])
+                logits = model(batch["audio"], augmentation_id=batch.get("augmentation_id"))
                 
             # Calculate loss                
-            loss = criterion(logits, batch["labels"])
+            loss = criterion(logits, batch["labels"].to(device))
             
             # Backpropagation
             loss.backward()
@@ -258,12 +246,12 @@ def train_cnn_rnn_model(model, dataset, num_epochs=10, use_prosodic_features=Tru
             for batch in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} - Validation"):
                 if use_prosodic_features:
                     # Forward pass
-                    logits = model(batch["audio"], batch["prosodic_features"])
+                    logits = model(batch["audio"].to(device), batch["prosodic_features"].to(device))
                 else:
                     # Forward pass
-                    logits = model(batch["audio"])
+                    logits = model(batch["audio"].to(device))
                 # Calculate loss
-                loss = criterion(logits, batch["labels"])
+                loss = criterion(logits, batch["labels"].to(device))
                 # Track loss
                 val_loss += loss.item()
                 # Get predictions
@@ -425,9 +413,9 @@ def test_cnn_rnn_model(model, dataset, use_prosodic_features=True):
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Testing"):
             if use_prosodic_features:
-                logits = model(batch["audio"], batch["prosodic_features"])
+                logits = model(batch["audio"].to(device), batch["prosodic_features"].to(device))
             else:
-                logits = model(batch["audio"])
+                logits = model(batch["audio"].to(device))
                 
             preds = torch.argmax(logits, dim=-1)
             
