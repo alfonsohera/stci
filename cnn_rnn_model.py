@@ -241,7 +241,6 @@ class DualPathAudioClassifier(nn.Module):
         mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
         
         cnn_features = self.cnn_extractor(mel_db)
-        print(f"CNN features shape: {cnn_features.shape}")
         
         # Process audio for RNN path
         audio_downsampled = self.audio_downsample(audio)
@@ -279,7 +278,6 @@ class DualPathAudioClassifier(nn.Module):
             rnn_output, _ = self.rnn(audio_downsampled)
             rnn_features = rnn_output[:, -1, :]
         
-        print(f"RNN features shape: {rnn_features.shape}")
         
         # Combine CNN and RNN features
         combined_features = torch.cat([cnn_features, rnn_features], dim=1)
@@ -291,7 +289,6 @@ class DualPathAudioClassifier(nn.Module):
             processed = self.prosodic_feature_mlp(prosodic_features)
             combined_features = torch.cat([combined_features, processed], dim=1)
         
-        print(f"Combined features shape: {combined_features.shape}")
         
         # Final classification
         fusion_output = self.fusion(combined_features)

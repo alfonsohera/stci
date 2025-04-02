@@ -132,7 +132,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
     model.to(device)
     
     # Initialize wandb
-    if not myConfig.running_offline and not wandb.run:
+    if not wandb.run:
         wandb.init(
             project=myConfig.wandb_project,
             entity=myConfig.wandb_entity,
@@ -265,7 +265,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             log_dict[f"val_f1_{class_name}"] = f1
         
         # Log metrics to wandb if applicable
-        if not myConfig.running_offline and wandb.run:
+        if wandb.run:
             wandb.log(log_dict)
         
         # Print metrics
@@ -296,7 +296,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
                 print("  safetensors not available, skipping safetensors format")
     
     # End of training, log best model if enabled    
-    if not myConfig.running_offline and wandb.run:
+    if wandb.run:
         wandb.run.summary["best_f1_macro"] = best_f1_macro
         
         # Log final model if configured
