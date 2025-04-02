@@ -142,7 +142,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
                 "use_prosodic_features": use_prosodic_features,
                 "learning_rate": 1e-4,
                 "epochs": num_epochs,
-                "batch_size": 64,
+                "batch_size": 32,
                 "weight_decay": 5e-4,
                 "prosodic_features_dim": len(myData.extracted_features) if use_prosodic_features else 0
             }
@@ -382,7 +382,7 @@ def main_cnn_rnn(use_prosodic_features=True):
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=64,
+        batch_size=32,
         use_prosodic_features=use_prosodic_features
     )
     
@@ -759,7 +759,7 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
         # Get dataloaders for this fold
         fold_dataloaders = get_cnn_rnn_dataloaders(
             fold_dataset,
-            batch_size=64,
+            batch_size=32,
             use_prosodic_features=use_prosodic_features
         )
         
