@@ -116,22 +116,24 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def get_cnn_rnn_dataloaders(dataset, batch_size=64, use_prosodic_features=True):
+def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=True):
     """
     Creates appropriate dataloaders for CNN+RNN model training.
     
     Args:
-        dataset: HuggingFace dataset with train/validation/test splits
+        dataset_dict: Dictionary of HuggingFace datasets with train/validation/test splits
         batch_size: Batch size for training and evaluation
         use_prosodic_features: Whether to include prosodic features
         
     Returns:
         Dictionary with train, validation, and test dataloaders
     """
-    # First prepare the raw datasets for CNN+RNN format
-    processed_dataset = dataset.map(prepare_for_cnn_rnn)
+    # Process each dataset in the dictionary
+    processed_dataset = {}
+    for split, split_dataset in dataset_dict.items():
+        processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)
     
-    # Wrap the datasets in our custom dataset class
+    # Wrap the datasets in a custom dataset class
     train_dataset = CNNRNNDataset(processed_dataset["train"], use_prosodic_features)
     val_dataset = CNNRNNDataset(processed_dataset["validation"], use_prosodic_features)
     test_dataset = CNNRNNDataset(processed_dataset["test"], use_prosodic_features)
@@ -142,8 +144,8 @@ def get_cnn_rnn_dataloaders(dataset, batch_size=64, use_prosodic_features=True):
         batch_size=batch_size,
         collate_fn=collate_fn_cnn_rnn,
         shuffle=True,
-        num_workers=0,  # Avoid multiprocessing overhead
-        pin_memory=True  # Speed up host to GPU transfers
+        num_workers=0,  
+        pin_memory=True  
     )
     
     val_loader = DataLoader(
