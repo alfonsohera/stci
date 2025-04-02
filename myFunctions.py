@@ -496,26 +496,6 @@ def extract_gpu_features(data_df):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-def setWeightedCELoss():
-    # Compute original class weights
-    total_samples = sum(myConfig.num_samples_per_class.values())
-    num_classes = len(myConfig.num_samples_per_class)
-    class_weights = {cls: total_samples / (num_classes * count) for cls, count in myConfig.num_samples_per_class.items()}
-    
-    # Manually increase MCI weight
-    class_weights[1] *= 2  # Double MCI weight
-    class_weights[2] *= 2  # Double AD weight
-    
-    # Normalize class weights (to prevent excessive imbalance)
-    max_weight = max(class_weights.values())
-    class_weights = {cls: weight / max_weight for cls, weight in class_weights.items()}
-    
-    # Convert to PyTorch tensor - but don't move to device yet
-    weights_tensor = torch.tensor([class_weights[0], class_weights[1], class_weights[2]], dtype=torch.float)
-    
-    # Let the Trainer move this to the appropriate device with the model
-    return None, weights_tensor  # Return None for criterion as it will be created in CustomTrainer
-
 
 def createAgeSexStats(data_df):
     # Count the number of men (M) and women (W)
