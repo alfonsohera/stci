@@ -106,18 +106,20 @@ def collate_fn_cnn_rnn(batch):
     # Find max length in this batch only
     max_len = max(audio_lengths)
     
-    # Cap maximum length to avoid OOM (e.g., 100 seconds at 16kHz)
-    max_allowed_len = 16000 * 100  
+    # Cap maximum length to avoid OOM (e.g., 60 seconds at 16kHz)
+    max_allowed_len = 16000 * 60  
     max_len = min(max_len, max_allowed_len)
     
     # Pad to max length in this batch (or cap)
     padded_tensors = []
-    for audio, orig_len in zip(audio_tensors, audio_lengths):
+    
+    # Use enumeration to get index directly
+    for i, (audio, orig_len) in enumerate(zip(audio_tensors, audio_lengths)):
         if audio.shape[1] > max_len:
             # Trim audio to max allowed length
             padded_tensors.append(audio[:, :max_len])
-            # Update length for RNN packing
-            audio_lengths[audio_tensors.index(audio)] = max_len
+            # Update length using the index directly
+            audio_lengths[i] = max_len
         elif audio.shape[1] < max_len:
             padding = torch.zeros((audio.shape[0], max_len - audio.shape[1]), dtype=audio.dtype)
             padded = torch.cat([audio, padding], dim=1)
