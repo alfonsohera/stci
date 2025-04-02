@@ -18,7 +18,6 @@ import myConfig
 import myData
 import myModel
 from torch.utils.data import DataLoader
-from myThresholdOptimization import optimize_thresholds_for_model
 from safetensors.torch import load_file
 
 
