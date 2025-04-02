@@ -17,6 +17,7 @@ def prepare_for_cnn_rnn(example):
     """
     Convert dataset examples for CNN+RNN model format.
     Converts the audio from HuggingFace dataset format to tensor format for the CNN+RNN model.
+    Standardizes audio length to exactly 100 seconds.
     """
     # Extract raw audio array
     audio = example["audio"]["array"]
@@ -24,6 +25,24 @@ def prepare_for_cnn_rnn(example):
     # Convert to torch tensor if not already
     if not isinstance(audio, torch.Tensor):
         audio = torch.tensor(audio, dtype=torch.float32)
+    
+    # Standardize audio length - 100 seconds at 16kHz
+    max_length = 16000 * 100  # 100 seconds max
+    
+    # Ensure 2D format [C, T]
+    if len(audio.shape) == 1:
+        audio = audio.unsqueeze(0)
+    
+    # Standardize length
+    c, t = audio.shape
+    if t > max_length:
+        # Crop to max_length
+        audio = audio[:, :max_length]
+    elif t < max_length:
+        # Pad to max_length
+        padded = torch.zeros((c, max_length), dtype=audio.dtype)
+        padded[:, :t] = audio
+        audio = padded
     
     # Create list of prosodic features
     prosodic_features = []
