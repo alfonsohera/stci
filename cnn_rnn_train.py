@@ -47,9 +47,18 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
         
         # Forward pass
         if use_prosodic_features and "prosodic_features" in batch:
-            logits = model(batch["audio"], batch["prosodic_features"], batch.get("augmentation_id"))
+            logits = model(
+                batch["audio"], 
+                audio_lengths=batch["audio_lengths"],  # Make sure this is passed
+                prosodic_features=batch["prosodic_features"], 
+                augmentation_id=batch.get("augmentation_id")
+            )
         else:
-            logits = model(batch["audio"], augmentation_id=batch.get("augmentation_id"))
+            logits = model(
+                batch["audio"], 
+                audio_lengths=batch["audio_lengths"],  # Make sure this is passed
+                augmentation_id=batch.get("augmentation_id")
+            )
             
         # Calculate loss                
         loss = criterion(logits, batch["labels"].to(device))
@@ -93,9 +102,16 @@ def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
             if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(batch["audio"], batch["prosodic_features"])
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],  
+                    prosodic_features=batch["prosodic_features"]
+                )
             else:
-                logits = model(batch["audio"])
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"] 
+                )
                 
             # Calculate loss
             loss = criterion(logits, batch["labels"])

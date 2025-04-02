@@ -85,28 +85,47 @@ class CNNRNNDataset(Dataset):
 
 def collate_fn_cnn_rnn(batch):
     """
-    Collate function for the CNN+RNN model data loader.
-    Handles proper batching of audio tensors and optional prosodic features.
+    Collate function that handles variable-length audio more effectively.
     """
-    device = "cpu"  # Initially collect on CPU, will move to GPU in the model
-    
-    # Handle audio
+    # Get original lengths and convert to tensors
     audio_tensors = []
-    for item in batch:
-        if isinstance(item["audio"], list):
-            audio_tensors.append(torch.tensor(item["audio"], dtype=torch.float32))
-        else:            
-            audio_tensors.append(item["audio"])
+    audio_lengths = []
     
-    # Stack on CPU
-    audio = torch.stack(audio_tensors)
+    for item in batch:
+        audio = item["audio"]
+        if isinstance(audio, list):
+            audio = torch.tensor(audio, dtype=torch.float32)
+        
+        # Ensure 2D format [C, T]
+        if len(audio.shape) == 1:
+            audio = audio.unsqueeze(0)
+            
+        audio_tensors.append(audio)
+        audio_lengths.append(audio.shape[1])
+    
+    # Find max length in this batch only
+    max_len = max(audio_lengths)
+    
+    # Pad to max length in this batch
+    padded_tensors = []
+    for audio in audio_tensors:
+        if audio.shape[1] < max_len:
+            padding = torch.zeros((audio.shape[0], max_len - audio.shape[1]), dtype=audio.dtype)
+            padded = torch.cat([audio, padding], dim=1)
+            padded_tensors.append(padded)
+        else:
+            padded_tensors.append(audio)
+    
+    # Stack tensors
+    audio = torch.stack(padded_tensors)
     labels = torch.tensor([item["label"] for item in batch])
     
     result = {
         "audio": audio,
-        "labels": labels
+        "labels": labels,
+        "audio_lengths": torch.tensor(audio_lengths)
     }
-        
+    
     # Add prosodic features if present
     if "prosodic_features" in batch[0]:
         features_list = []

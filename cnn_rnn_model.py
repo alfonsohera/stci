@@ -164,12 +164,13 @@ class DualPathAudioClassifier(nn.Module):
         self._device = None
         self._initialized_for_device = False
         
-    def forward(self, audio, prosodic_features=None, augmentation_id=None):
+    def forward(self, audio, audio_lengths=None, prosodic_features=None, augmentation_id=None):
         """
         Forward pass with optional augmentation ID to control augmentation.
         
         Args:
             audio: Audio input tensor
+            audio_lengths: Optional lengths of audio sequences
             prosodic_features: Optional prosodic features
             augmentation_id: Optional ID to control augmentation type/seed
         """
@@ -240,9 +241,28 @@ class DualPathAudioClassifier(nn.Module):
         audio_downsampled = self.audio_downsample(audio)
         audio_downsampled = audio_downsampled.transpose(1, 2)  # B, T, C
         
-        # Pass through RNN
-        rnn_output, _ = self.rnn(audio_downsampled)
-        rnn_features = rnn_output[:, -1, :]  
+        if audio_lengths is not None:
+            # Adjust lengths for downsampling
+            downsample_factor = audio.shape[2] / audio_downsampled.shape[1]
+            downsampled_lengths = (audio_lengths / downsample_factor).long()
+            
+            # Pack sequence
+            packed = nn.utils.rnn.pack_padded_sequence(
+                audio_downsampled, 
+                downsampled_lengths.cpu(),
+                batch_first=True, 
+                enforce_sorted=False
+            )
+            
+            # Run RNN on packed sequence
+            packed_output, hidden = self.rnn(packed)
+            
+            # Either use last hidden state or unpack
+            rnn_features = hidden[-1]  # Get final hidden state from last layer
+        else:
+            # Fallback to original method
+            rnn_output, _ = self.rnn(audio_downsampled)
+            rnn_features = rnn_output[:, -1, :]
         
         # Combine CNN and RNN features
         combined_features = torch.cat([cnn_features, rnn_features], dim=1)
