@@ -789,11 +789,409 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         import traceback
         traceback.print_exc()
 
+def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95):
+    """
+    Analyzes the similarity between samples across dataset splits (train, valid, test)
+    to detect potential data leakage.
+    
+    Args:
+        dataset_path: Path to the HuggingFace dataset directory 
+        audio_root_path: Root path to audio files
+        model_path: Optional path to a saved model, otherwise uses a fresh model
+        similarity_threshold: Cosine similarity threshold above which samples are considered too similar
+                            (default: 0.95)
+    
+    Returns:
+        Dictionary with similarity statistics and lists of potentially problematic sample pairs
+    """
+    import torch
+    import torch.nn.functional as F
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from tqdm import tqdm
+    import os
+    import gc
+    from datasets import load_from_disk
+    from myCnnRnnModel import DualPathAudioClassifier
+    import librosa
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Load dataset from disk
+    print(f"Loading dataset from {dataset_path}")
+    dataset = load_from_disk(dataset_path)
+    
+    # Verify dataset structure
+    print(f"Dataset keys: {list(dataset.keys())}")
+    
+    # Print distribution of samples by split
+    split_counts = {split: len(dataset[split]) for split in dataset.keys()}
+    print(f"Dataset distribution:")
+    for split, count in split_counts.items():
+        print(f"  {split}: {count} samples")
+    
+    # Verify data format by examining first sample from each split
+    for split in dataset.keys():
+        if len(dataset[split]) > 0:
+            sample = dataset[split][0]
+            print(f"Sample structure in {split} split: {list(sample.keys())}")
+    
+    # Load or create model
+    print("Loading feature extraction model...")
+    model = DualPathAudioClassifier(
+        num_classes=3,  # Using 3 as defined in your config
+        sample_rate=16000,
+        use_prosodic_features=False,
+        apply_specaugment=False
+    ).to(device)
+    
+    if model_path and os.path.exists(model_path):
+        print(f"Loading model weights from: {model_path}")
+        model.load_state_dict(torch.load(model_path, map_location=device))
+    else:
+        print("Using model with random weights")
+    
+    model.eval()  # Set to evaluation mode
+    
+    # Create feature extraction function
+    def extract_features(audio_path):
+        try:
+            # Load audio
+            y, sr = librosa.load(audio_path, sr=16000)
+            
+            # Create log mel spectrogram
+            mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+            log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
+            
+            # Convert to tensor
+            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
+            
+            with torch.no_grad():
+                # Normalize as in model preprocessing
+                log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
+                
+                # Resize to model's expected input size
+                log_mel_tensor = F.interpolate(log_mel_tensor, size=(384, 384), 
+                                             mode='bilinear', align_corners=False)
+                
+                # Apply standard normalization
+                log_mel_tensor = (log_mel_tensor - log_mel_tensor.mean()) / (log_mel_tensor.std() + 1e-5)
+                
+                # Apply ImageNet normalization
+                log_mel_tensor = model.normalize(log_mel_tensor)
+                
+                # Extract features using CNN
+                features = model.cnn_extractor(log_mel_tensor).flatten().cpu().numpy()
+                
+            return features
+        except Exception as e:
+            print(f"Error processing audio file: {e}")
+            return None
+    
+    # Helper function to resolve audio paths
+    def resolve_audio_path(file_path):
+        # First try direct path
+        if os.path.exists(file_path):
+            return file_path
+        
+        # Try with audio_root_path
+        full_path = os.path.join(audio_root_path, file_path)
+        if os.path.exists(full_path):
+            return full_path
+        
+        # Try to find by basename
+        basename = os.path.basename(file_path)
+        for root, _, files in os.walk(audio_root_path):
+            if basename in files:
+                return os.path.join(root, basename)
+        
+        # Could not find file
+        raise FileNotFoundError(f"Could not find file: {file_path}")
+    
+    # Process each file and extract features
+    features_dict = {}  # Will store {file_id: features}
+    file_info = {}      # Will store {file_id: {path, split, class_label}}
+    
+    print("Extracting features from all audio files...")
+    for split in dataset.keys():
+        print(f"Processing {split} split...")
+        
+        for idx, sample in enumerate(tqdm(dataset[split], desc=f"Processing {split}")):
+            try:
+                # Check if we have a file_path field directly
+                if 'file_path' in sample:
+                    file_path = sample['file_path']
+                # If not, check if it's in an audio field
+                elif 'audio' in sample and isinstance(sample['audio'], dict) and 'path' in sample['audio']:
+                    file_path = sample['audio']['path']
+                # Last resort, check for any field that might contain a path
+                else:
+                    potential_path_fields = [k for k in sample.keys() if 'path' in k.lower() or 'file' in k.lower()]
+                    if potential_path_fields:
+                        file_path = sample[potential_path_fields[0]]
+                    else:
+                        print(f"Cannot find file path in sample keys: {list(sample.keys())}")
+                        continue
+                
+                # Create a unique file ID
+                file_id = f"{split}_{idx}_{os.path.basename(file_path)}"
+                
+                # Get the label
+                if 'label' in sample:
+                    label = sample['label']
+                elif 'labels' in sample:
+                    label = sample['labels']
+                else:
+                    print(f"Cannot find label in sample keys: {list(sample.keys())}")
+                    label = -1  # Unknown label
+                
+                # Store file info
+                file_info[file_id] = {
+                    'path': file_path,
+                    'split': split,
+                    'class': label
+                }
+                
+                # Resolve full path
+                try:
+                    full_path = resolve_audio_path(file_path)
+                    
+                    # Extract features
+                    features = extract_features(full_path)
+                    if features is not None:
+                        features_dict[file_id] = features
+                except FileNotFoundError as e:
+                    print(f"File not found: {file_path}")
+                    continue
+                
+            except Exception as e:
+                print(f"Error processing sample {idx} in {split} split: {str(e)}")
+                continue
+            
+            # Periodic memory cleanup
+            if idx % 50 == 0:
+                torch.cuda.empty_cache()
+                gc.collect()
+    
+    print(f"Successfully extracted features for {len(features_dict)} files")
+    
+    # Clean up memory
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    # Create pairs of files to compare across different splits
+    split_comparisons = []
+    for i, split1 in enumerate(dataset.keys()):
+        for split2 in list(dataset.keys())[i+1:]:
+            split_comparisons.append((split1, split2))
+    
+    print(f"Will compare the following split pairs: {split_comparisons}")
+    
+    # Store similarity results
+    high_similarity_pairs = []
+    all_cross_similarities = []
+    
+    # For each split comparison
+    for split1, split2 in split_comparisons:
+        print(f"Comparing {split1} vs {split2} split...")
+        
+        # Get file IDs for each split
+        split1_files = [fid for fid, info in file_info.items() if info['split'] == split1 and fid in features_dict]
+        split2_files = [fid for fid, info in file_info.items() if info['split'] == split2 and fid in features_dict]
+        
+        if not split1_files or not split2_files:
+            print(f"Skipping comparison - missing files in {split1} or {split2}")
+            continue
+        
+        print(f"  Comparing {len(split1_files)} files from {split1} with {len(split2_files)} files from {split2}")
+        
+        # Process in smaller batches to avoid memory issues
+        batch_size = 100
+        
+        for i in tqdm(range(0, len(split1_files), batch_size), desc=f"{split1}-{split2} comparison"):
+            batch_split1 = split1_files[i:i+batch_size]
+            split1_features = np.vstack([features_dict[fid] for fid in batch_split1])
+            
+            for j in range(0, len(split2_files), batch_size):
+                batch_split2 = split2_files[j:j+batch_size]
+                split2_features = np.vstack([features_dict[fid] for fid in batch_split2])
+                
+                # Compute cosine similarity between all pairs in this batch
+                similarity_matrix = cosine_similarity(split1_features, split2_features)
+                
+                # Find high similarity pairs
+                for batch_i, fid1 in enumerate(batch_split1):
+                    for batch_j, fid2 in enumerate(batch_split2):
+                        similarity = similarity_matrix[batch_i, batch_j]
+                        all_cross_similarities.append(similarity)
+                        
+                        if similarity >= similarity_threshold:
+                            high_similarity_pairs.append({
+                                'file1': fid1,
+                                'file2': fid2,
+                                'split1': split1,
+                                'split2': split2,
+                                'class1': file_info[fid1]['class'],
+                                'class2': file_info[fid2]['class'],
+                                'similarity': similarity
+                            })
+    
+    # Analyze within-split similarity for thoroughness (optional but useful)
+    within_split_similarities = {}
+    for split in dataset.keys():
+        split_files = [fid for fid, info in file_info.items() if info['split'] == split and fid in features_dict]
+        
+        if len(split_files) <= 1:
+            continue
+            
+        print(f"Analyzing within-split similarity for {split}...")
+        within_split_similarities[split] = []
+        
+        # Process in smaller batches
+        batch_size = 100
+        for i in tqdm(range(0, len(split_files), batch_size), desc=f"{split} internal comparison"):
+            batch1 = split_files[i:i+batch_size]
+            features1 = np.vstack([features_dict[fid] for fid in batch1])
+            
+            for j in range(i, len(split_files), batch_size):
+                batch2 = split_files[j:j+batch_size]
+                features2 = np.vstack([features_dict[fid] for fid in batch2])
+                
+                # Compute similarity matrix
+                sim_matrix = cosine_similarity(features1, features2)
+                
+                # Process similarity values
+                for batch_i, fid1 in enumerate(batch1):
+                    for batch_j, fid2 in enumerate(batch2):
+                        # Skip self-comparisons
+                        if i == j and batch_i == batch_j:
+                            continue
+                            
+                        similarity = sim_matrix[batch_i, batch_j]
+                        within_split_similarities[split].append(similarity)
+                        
+                        # Record high similarity pairs within split
+                        if similarity >= similarity_threshold:
+                            high_similarity_pairs.append({
+                                'file1': fid1,
+                                'file2': fid2,
+                                'split1': split,
+                                'split2': split,
+                                'class1': file_info[fid1]['class'],
+                                'class2': file_info[fid2]['class'],
+                                'similarity': similarity
+                            })
+    
+    # Sort high similarity pairs by similarity (highest first)
+    high_similarity_pairs.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    # Generate summary report
+    print("\n===== Dataset Split Similarity Analysis Report =====")
+    print(f"Total files analyzed: {len(features_dict)}")
+    print(f"High similarity pairs (>= {similarity_threshold}): {len(high_similarity_pairs)}")
+    
+    # Cross-split similarity statistics
+    if all_cross_similarities:
+        print(f"\nCross-split similarity statistics:")
+        print(f"  Mean: {np.mean(all_cross_similarities):.4f}")
+        print(f"  Std dev: {np.std(all_cross_similarities):.4f}")
+        print(f"  Min: {np.min(all_cross_similarities):.4f}")
+        print(f"  Max: {np.max(all_cross_similarities):.4f}")
+    
+    # Within-split similarity statistics
+    print(f"\nWithin-split similarity statistics:")
+    for split, similarities in within_split_similarities.items():
+        if similarities:
+            print(f"  {split}:")
+            print(f"    Mean: {np.mean(similarities):.4f}")
+            print(f"    Std dev: {np.std(similarities):.4f}")
+            print(f"    Min: {np.min(similarities):.4f}")
+            print(f"    Max: {np.max(similarities):.4f}")
+    
+    # Display top high similarity pairs
+    n_to_show = min(10, len(high_similarity_pairs))
+    if high_similarity_pairs:
+        print(f"\nTop {n_to_show} highest similarity pairs:")
+        for i, pair in enumerate(high_similarity_pairs[:n_to_show]):
+            print(f"  {i+1}. {pair['file1']} ({pair['split1']}, class {pair['class1']}) ↔ "
+                  f"{pair['file2']} ({pair['split2']}, class {pair['class2']}): "
+                  f"{pair['similarity']:.4f}")
+    
+    # Create visualizations
+    print("\nGenerating visualizations...")
+    
+    # 1. Plot histogram of cross-split similarities
+    plt.figure(figsize=(10, 6))
+    plt.hist(all_cross_similarities, bins=50, alpha=0.7, color='skyblue')
+    plt.axvline(similarity_threshold, color='red', linestyle='--', 
+                label=f'Threshold ({similarity_threshold})')
+    plt.axvline(np.mean(all_cross_similarities), color='green', linestyle='-', 
+                label=f'Mean ({np.mean(all_cross_similarities):.4f})')
+    plt.title('Distribution of Cross-Split Feature Similarities')
+    plt.xlabel('Cosine Similarity')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.savefig('cross_split_similarity_histogram.png')
+    plt.close()
+    
+    # 2. Plot distribution of within-split similarities for each split
+    plt.figure(figsize=(12, 6))
+    for split, similarities in within_split_similarities.items():
+        if similarities:
+            sns.kdeplot(similarities, label=f'{split} (mean={np.mean(similarities):.4f})')
+    plt.axvline(similarity_threshold, color='red', linestyle='--', 
+                label=f'Threshold ({similarity_threshold})')
+    plt.title('Distribution of Within-Split Feature Similarities')
+    plt.xlabel('Cosine Similarity')
+    plt.ylabel('Density')
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.savefig('within_split_similarity_distribution.png')
+    plt.close()
+    
+    # Return results as a dictionary
+    results = {
+        'high_similarity_pairs': high_similarity_pairs,
+        'cross_split_statistics': {
+            'mean': np.mean(all_cross_similarities) if all_cross_similarities else None,
+            'std': np.std(all_cross_similarities) if all_cross_similarities else None,
+            'min': np.min(all_cross_similarities) if all_cross_similarities else None,
+            'max': np.max(all_cross_similarities) if all_cross_similarities else None,
+        },
+        'within_split_statistics': {
+            split: {
+                'mean': np.mean(similarities) if similarities else None,
+                'std': np.std(similarities) if similarities else None,
+                'min': np.min(similarities) if similarities else None,
+                'max': np.max(similarities) if similarities else None,
+            } for split, similarities in within_split_similarities.items()
+        },
+        'problematic_files': sorted(list(set(
+            [pair['file1'] for pair in high_similarity_pairs] + 
+            [pair['file2'] for pair in high_similarity_pairs]
+        )))
+    }
+    
+    # Save high similarity pairs to CSV for further analysis
+    if high_similarity_pairs:
+        df = pd.DataFrame(high_similarity_pairs)
+        df.to_csv('high_similarity_pairs.csv', index=False)
+        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
+    
+    return results
+
 # Example usage (commented out)
 
 
-data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
-data_df = pd.read_csv(data_file_path)
+""" data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
+dataset_path = myConfig.OUTPUT_PATH
+data_df = pd.read_csv(data_file_path) """
 
 # To visualize one sample per class:
 #visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
@@ -802,7 +1200,19 @@ data_df = pd.read_csv(data_file_path)
 #visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
 
 # Analyze how different your augmentations are in feature space
-analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
+#analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
+
+
+""" results = analyze_dataset_split_similarity(
+    dataset_path=dataset_path,  # Path to your HF dataset
+    audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
+    model_path=None,  # Set to your model path if a trained model is available
+    similarity_threshold=0.95
+)
+
+# Access results
+print(f"Found {len(results['problematic_files'])} potentially problematic files")
+ """
 
 # Example usage
 """ original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
