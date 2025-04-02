@@ -78,8 +78,6 @@ class DualPathAudioClassifier(nn.Module):
             n_mels=n_mels
         )
         self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB()
-        self.target_size = (384, 384)  # Expected size for EfficientNetV2
-        self.normalize = transforms.Normalize(mean=[0.485], std=[0.229])  # Single channel version
         
         # SpecAugment for training (only applied when in training mode)
         self.apply_specaugment = apply_specaugment
@@ -182,7 +180,6 @@ class DualPathAudioClassifier(nn.Module):
         if not self._initialized_for_device or self._device != device:
             self.mel_spec = self.mel_spec.to(device)
             self.amplitude_to_db = self.amplitude_to_db.to(device)
-            self.normalize = self.normalize.to(device)
             self.audio_downsample = self.audio_downsample.to(device)
             self.rnn = self.rnn.to(device)            
             self.fusion = self.fusion.to(device)
@@ -234,13 +231,8 @@ class DualPathAudioClassifier(nn.Module):
                 # Process entire batch with standard augmentation
                 mel_db = self.spec_augment(mel_db, force_apply=False)
         
-        # First apply SpecAugment, then resize and normalize to match EfficientNetV2 input
-        if self.training:
-            mel_db = F.interpolate(mel_db, size=self.target_size, mode='nearest')
-        else:
-            mel_db = F.interpolate(mel_db, size=self.target_size, mode='bilinear', align_corners=False)
-        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5) 
-        mel_db = self.normalize(mel_db)  # Apply ImageNet normalization
+        # Normalization
+        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
         
         cnn_features = self.cnn_extractor(mel_db)
         
