@@ -121,17 +121,22 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
     Creates appropriate dataloaders for CNN+RNN model training.
     
     Args:
-        dataset_dict: Dictionary of HuggingFace datasets with train/validation/test splits
+        dataset_dict: Dictionary of datasets with train/validation/test splits
         batch_size: Batch size for training and evaluation
         use_prosodic_features: Whether to include prosodic features
         
     Returns:
         Dictionary with train, validation, and test dataloaders
     """
-    # Process each dataset in the dictionary
+    # Process each dataset in the dictionary if it supports .map()
     processed_dataset = {}
     for split, split_dataset in dataset_dict.items():
-        processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)
+        if hasattr(split_dataset, 'map'):
+            # Only apply map if the dataset has this method
+            processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)
+        else:
+            # For custom datasets that don't have a map method
+            processed_dataset[split] = split_dataset
     
     # Wrap the datasets in a custom dataset class
     train_dataset = CNNRNNDataset(processed_dataset["train"], use_prosodic_features)
