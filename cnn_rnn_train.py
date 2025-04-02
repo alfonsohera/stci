@@ -1,9 +1,7 @@
 import os
 import torch
 import numpy as np
-import pandas as pd
 import wandb
-from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from tqdm import tqdm
 import gc
@@ -11,8 +9,27 @@ import gc
 # Local imports
 import myConfig
 import myData
-from main import FocalLoss, log_memory_usage
+from myThresholdOptimization import optimize_thresholds_for_model
+from main import  log_memory_usage
 from cnn_rnn_data import prepare_cnn_rnn_dataset, get_cnn_rnn_dataloaders
+from torch import nn
+from torch.nn import functional as F
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, weight=None):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.weight = weight
+        
+    def forward(self, input, target):
+        # Compute cross entropy with class weights if provided
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+        # Get prediction probabilities
+        pt = torch.exp(-ce_loss)
+        # Apply focal weighting
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
 
 
 def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True):
@@ -94,9 +111,7 @@ def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
 
 
 def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features=True):
-    """Train the CNN+RNN model."""
-    from sklearn.utils.class_weight import compute_class_weight
-    
+    """Train the CNN+RNN model."""        
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     
@@ -407,3 +422,268 @@ def test_cnn_rnn(use_prosodic_features=True):
     
     # Run evaluation
     test_cnn_rnn_model(model, dataloaders["test"], use_prosodic_features)
+
+
+def optimize_cnn_rnn(use_prosodic_features=True):
+    """Function to run threshold optimization for CNN+RNN model"""    
+    
+    # Configure paths
+    path_config = myConfig.configure_paths()
+    for key, path in path_config.items():
+        setattr(myConfig, key, path)
+    
+    # Prepare the dataset
+    print("Loading dataset for threshold optimization...")
+    dataset = prepare_cnn_rnn_dataset()
+    
+    # Create model
+    from myCnnRnnModel import DualPathAudioClassifier
+    model = DualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+    )
+    
+    # Load the best model weights if available
+    model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
+    if os.path.exists(model_path):
+        print(f"Loading pre-trained model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
+    else:
+        raise FileNotFoundError(f"No pre-trained model found at {model_path}. Please train the model first.")
+    
+    # Create validation dataloader
+    dataloader = get_cnn_rnn_dataloaders(
+        dataset, 
+        batch_size=8,
+        use_prosodic_features=use_prosodic_features
+    )["validation"]
+    
+    # Set output directory
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_optimization", "cnn_rnn")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Run threshold optimization
+    class_names = ["Healthy", "MCI", "AD"]
+    
+    # Custom prediction function for CNN+RNN model
+    def predict_fn(model, batch, device):
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        
+        if use_prosodic_features and "prosodic_features" in batch:
+            logits = model(batch["audio"], batch["prosodic_features"])
+        else:
+            logits = model(batch["audio"])
+        
+        # Get probabilities
+        probs = torch.softmax(logits, dim=-1)
+        # Get true labels
+        labels = batch["labels"]
+        
+        return probs, labels
+    
+    # Run optimization
+    print(f"Running threshold optimization for CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features...")
+    optimize_thresholds_for_model(
+        model=model,
+        dataloader=dataloader,
+        class_names=class_names,
+        output_dir=output_dir,
+        use_manual_features=use_prosodic_features,
+        is_cnn_rnn=True,  # Flag to indicate CNN+RNN model
+        log_to_wandb=not myConfig.running_offline,
+        prediction_fn=predict_fn  # Pass custom prediction function
+    )
+    
+    print(f"Threshold optimization completed. Results saved to {output_dir}")
+
+
+def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
+    """Test CNN+RNN model using the optimized thresholds"""
+    import os
+    import json
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+    
+    # Configure paths
+    path_config = myConfig.configure_paths()
+    for key, path in path_config.items():
+        setattr(myConfig, key, path)
+    
+    # Prepare dataset
+    print(f"Loading dataset for testing with thresholds ({'with' if use_prosodic_features else 'without'} manual features)...")
+    dataset = prepare_cnn_rnn_dataset()
+    
+    # Create model
+    from myCnnRnnModel import DualPathAudioClassifier
+    model = DualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+    )
+    
+    # Load the best model weights
+    model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
+    if os.path.exists(model_path):
+        print(f"Loading pre-trained model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
+    else:
+        raise FileNotFoundError(f"No pre-trained model found at {model_path}. Please train the model first.")
+    
+    # Create test dataloader
+    dataloader = get_cnn_rnn_dataloaders(
+        dataset, 
+        batch_size=8,
+        use_prosodic_features=use_prosodic_features
+    )["test"]
+    
+    # Try to load threshold values from the optimization results
+    threshold_results_path = os.path.join(
+        myConfig.OUTPUT_PATH, 
+        "threshold_optimization", 
+        "cnn_rnn", 
+        "threshold_optimization_results.json"
+    )
+    
+    if os.path.exists(threshold_results_path):
+        print(f"Loading thresholds from {threshold_results_path}")
+        with open(threshold_results_path, "r") as f:
+            threshold_results = json.load(f)
+            
+        # We'll test with both Youden and F1 thresholds
+        for threshold_type in ["youden", "f1"]:
+            print(f"\nTesting with {threshold_type.upper()} thresholds...")
+            
+            # Get thresholds for current type
+            thresholds = threshold_results[f"{threshold_type}_thresholds"]
+            
+            # Run evaluation with thresholds
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model.to(device)
+            model.eval()
+            
+            all_probs = []
+            all_labels = []
+            
+            # Collect all predictions and labels
+            with torch.no_grad():
+                for batch in tqdm(dataloader, desc="Evaluating"):
+                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                    
+                    if use_prosodic_features and "prosodic_features" in batch:
+                        logits = model(batch["audio"], batch["prosodic_features"])
+                    else:
+                        logits = model(batch["audio"])
+                    
+                    # Get probabilities
+                    probs = torch.softmax(logits, dim=-1)
+                    
+                    all_probs.append(probs.cpu().numpy())
+                    all_labels.append(batch["labels"].cpu().numpy())
+            
+            # Convert to numpy arrays
+            all_probs = np.vstack(all_probs)
+            all_labels = np.concatenate(all_labels)
+            
+            # Standard argmax prediction (baseline)
+            standard_preds = np.argmax(all_probs, axis=-1)
+            
+            # Calculate baseline metrics
+            class_names = ["Healthy", "MCI", "AD"]
+            baseline_accuracy = accuracy_score(all_labels, standard_preds)
+            baseline_report = classification_report(
+                all_labels, standard_preds, target_names=class_names, output_dict=True
+            )
+            
+            # Print baseline results
+            print("=" * 50)
+            print("BASELINE (ARGMAX) RESULTS:")
+            print(f"Test Accuracy: {baseline_accuracy:.4f}")
+            print("Classification Report:")
+            print(classification_report(all_labels, standard_preds, target_names=class_names))
+            print("=" * 50)
+            
+            # Make predictions with thresholds
+            threshold_preds = np.zeros_like(all_labels)
+            
+            # For each sample, predict class with highest probability/threshold ratio
+            for i in range(len(all_labels)):
+                best_score = -float('inf')
+                best_class = -1
+                
+                for j, class_name in enumerate(class_names):
+                    threshold = thresholds[class_name]
+                    # Calculate how much the probability exceeds the threshold
+                    score = all_probs[i, j] - threshold
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_class = j
+                
+                threshold_preds[i] = best_class
+            
+            # Calculate metrics with optimized thresholds
+            threshold_accuracy = accuracy_score(all_labels, threshold_preds)
+            threshold_report = classification_report(
+                all_labels, threshold_preds, target_names=class_names, output_dict=True
+            )
+            
+            # Print thresholded results
+            print(f"\n{threshold_type.upper()} THRESHOLD RESULTS:")
+            print(f"Using thresholds: {thresholds}")
+            print(f"Test Accuracy: {threshold_accuracy:.4f}")
+            print("Classification Report:")
+            print(classification_report(all_labels, threshold_preds, target_names=class_names))
+            print("=" * 50)
+            
+            # Print comparison
+            print("\nCOMPARISON (Threshold vs Baseline):")
+            print(f"Overall Accuracy: {threshold_accuracy:.4f} vs {baseline_accuracy:.4f} " +
+                  f"({'better' if threshold_accuracy > baseline_accuracy else 'worse'})")
+            
+            # Per-class comparison
+            for i, class_name in enumerate(class_names):
+                baseline_f1 = baseline_report[class_name]['f1-score']
+                threshold_f1 = threshold_report[class_name]['f1-score']
+                print(f"{class_name} F1: {threshold_f1:.4f} vs {baseline_f1:.4f} " +
+                      f"({'better' if threshold_f1 > baseline_f1 else 'worse'})")
+                
+                baseline_recall = baseline_report[class_name]['recall']
+                threshold_recall = threshold_report[class_name]['recall']
+                print(f"{class_name} Recall: {threshold_recall:.4f} vs {baseline_recall:.4f} " +
+                      f"({'better' if threshold_recall > baseline_recall else 'worse'})")
+            
+            # Plot confusion matrices        
+            # Set up plot 
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+            
+            # Baseline confusion matrix
+            cm_baseline = confusion_matrix(all_labels, standard_preds)
+            sns.heatmap(cm_baseline, annot=True, fmt='d', cmap='Blues', 
+                      xticklabels=class_names, yticklabels=class_names, ax=ax1)
+            ax1.set_xlabel('Predicted labels')
+            ax1.set_ylabel('True labels')
+            ax1.set_title('Baseline Confusion Matrix (argmax)')
+            
+            # Threshold confusion matrix
+            cm_threshold = confusion_matrix(all_labels, threshold_preds)
+            sns.heatmap(cm_threshold, annot=True, fmt='d', cmap='Blues', 
+                      xticklabels=class_names, yticklabels=class_names, ax=ax2)
+            ax2.set_xlabel('Predicted labels') 
+            ax2.set_ylabel('True labels')
+            ax2.set_title(f'Threshold Confusion Matrix ({threshold_type})')
+            
+            # Save the plot
+            output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_comparison", "cnn_rnn")
+            os.makedirs(output_dir, exist_ok=True)
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f"confusion_matrix_comparison_{threshold_type}.png"))
+            plt.close()
+            
+            print(f"\nConfusion matrix comparison saved to {output_dir}")
+    else:
+        print(f"Threshold optimization results not found at {threshold_results_path}")
+        print("Please run optimize_cnn_rnn() first to generate threshold values.")

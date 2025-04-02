@@ -1,11 +1,12 @@
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-import sys
 import warnings
-from zipfile import ZipFile
 import torch
 import pandas as pd
-import numpy
+import argparse
+import numpy as np 
+import matplotlib.pyplot as plt
+import seaborn as sns
 from transformers import logging
 # <local imports>
 import myConfig
@@ -14,11 +15,8 @@ import myModel
 import myFunctions
 # </local imports>
 from tqdm import tqdm
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
-from torch import nn
-import torch.nn.functional as F 
 
 
 # Add this function to your main.py at the top level
@@ -47,19 +45,6 @@ def log_memory_usage(label):
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
 logging.set_verbosity_error()  # Set transformers logging to show only errors
-
-
-class FocalLoss(nn.Module):
-        def __init__(self, gamma=2, weight=None):
-            super(FocalLoss, self).__init__()
-            self.gamma = gamma
-            self.weight = weight
-            
-        def forward(self, input, target):
-            ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
-            pt = torch.exp(-ce_loss)
-            focal_loss = ((1 - pt) ** self.gamma) * ce_loss
-            return focal_loss.mean()
 
 
 def collate_fn(batch):
@@ -226,10 +211,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
             print(f"{class_name} Recall: {threshold_recall:.4f} vs {baseline_recall:.4f} " +
                   f"({'better' if threshold_recall > baseline_recall else 'worse'})")
         
-        # Plot confusion matrices
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        
+        # Plot confusion matrices        
         # Set up plot 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
         
@@ -457,10 +439,7 @@ def optimize():
     )
 
 
-if __name__ == "__main__":
-    import argparse
-    import numpy as np  
-    
+if __name__ == "__main__": 
     # Create argument parser
     parser = argparse.ArgumentParser(description="Cognitive Impairment Detection Model")
     parser.add_argument("mode", choices=["train", "finetune", "test", "optimize", "test_thresholds"], 
