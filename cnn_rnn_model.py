@@ -321,6 +321,26 @@ class BalancedAugmentedDataset(Dataset):
         import numpy as np
         self.rng = np.random.RandomState(42)
 
+        # Add attributes for HuggingFace compatibility
+        self._supports_huggingface_api = True
+        from datasets.arrow_dataset import Dataset as ArrowDataset
+        self._is_hf_dataset = isinstance(original_dataset, ArrowDataset)
+        
+        # Cache the column_names for faster access
+        if hasattr(original_dataset, 'column_names'):
+            self._column_names = original_dataset.column_names
+        else:
+            # Try to determine column names from the first item
+            if len(original_dataset) > 0:
+                first_item = original_dataset[0]
+                if isinstance(first_item, dict):
+                    self._column_names = list(first_item.keys())
+                else:
+                    # Default column names if we can't determine them
+                    self._column_names = ["audio", "label"]
+            else:
+                self._column_names = ["audio", "label"]
+
     def __len__(self):
         total_len = 0
         # Original samples
@@ -488,3 +508,85 @@ class BalancedAugmentedDataset(Dataset):
         
         print(f"\nTotal samples: {total_orig} → {total_final} (+{total_final-total_orig})")
         print("=====================================\n")
+
+    @property
+    def column_names(self):
+        """Return the column names to be compatible with HF datasets."""
+        return self._column_names
+    
+    @property
+    def features(self):
+        """Return the features dictionary from the original dataset if available."""
+        if hasattr(self.original_dataset, 'features'):
+            return self.original_dataset.features
+        return None
+    
+    def select(self, indices):
+        """Implement select method for HF datasets compatibility."""
+        from datasets import Dataset as HFDataset
+        
+        # Convert indices to list if it's not already
+        if not isinstance(indices, list):
+            indices = [indices]
+        
+        # Map indices to our internal sample_indices
+        selected_indices = [int(self.sample_indices[i]) for i in indices 
+                           if i >= 0 and i < len(self.sample_indices)]
+        
+        # Get augmentation IDs for these indices
+        selected_aug_ids = [self.augmentation_ids[i] for i in indices 
+                           if i >= 0 and i < len(self.augmentation_ids)]
+        
+        # Create a new dataset with these indices
+        selected_data = []
+        for idx, aug_id in zip(selected_indices, selected_aug_ids):
+            sample = self.original_dataset[idx]
+            if isinstance(sample, dict):
+                result = dict(sample)  # Make a copy
+                if aug_id is not None:
+                    result["augmentation_id"] = aug_id
+                selected_data.append(result)
+                
+        # If using HF datasets, try to convert back to an HFDataset
+        if self._is_hf_dataset:
+            try:
+                return HFDataset.from_dict({k: [item[k] for item in selected_data] 
+                                           for k in self.column_names if all(k in item for item in selected_data)})
+            except:
+                # Fallback to returning the list of dictionaries
+                return selected_data
+        
+        return selected_data
+    
+    def map(self, function, batched=False, batch_size=None, **kwargs):
+        """Implement map method for HF datasets compatibility."""
+        from datasets import Dataset as HFDataset
+        
+        # Apply the function to each item or batch
+        if batched:
+            batch_size = batch_size or 1000
+            results = []
+            
+            for i in range(0, len(self), batch_size):
+                batch_indices = list(range(i, min(i + batch_size, len(self))))
+                batch_data = [self[idx] for idx in batch_indices]
+                batch_results = function(batch_data)
+                results.extend(batch_results)
+        else:
+            results = [function(self[i]) for i in range(len(self))]
+            
+        # If using HF datasets, try to convert back to an HFDataset
+        if self._is_hf_dataset:
+            try:
+                return HFDataset.from_dict({k: [item[k] for item in results] 
+                                           for k in results[0].keys()})
+            except:
+                # Fallback to returning the processed data
+                return results
+                
+        return results
+    
+    # Add compatibility check method
+    def is_huggingface_compatible(self):
+        """Check if this dataset is compatible with HuggingFace API."""
+        return hasattr(self, '_supports_huggingface_api') and self._supports_huggingface_api

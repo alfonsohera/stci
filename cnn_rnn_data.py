@@ -131,12 +131,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
     # Process each dataset in the dictionary if it supports .map()
     processed_dataset = {}
     for split, split_dataset in dataset_dict.items():
-        if hasattr(split_dataset, 'map'):
-            # Only apply map if the dataset has this method
-            processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)
-        else:
-            # For custom datasets that don't have a map method
-            processed_dataset[split] = split_dataset
+        processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)        
     
     # Wrap the datasets in a custom dataset class
     train_dataset = CNNRNNDataset(processed_dataset["train"], use_prosodic_features)
