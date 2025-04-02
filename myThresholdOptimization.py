@@ -565,9 +565,9 @@ def main():
         # Import here to avoid issues if the module doesn't exist
         try:
             from main import collate_fn_cnn_rnn
-            from myCnnRnnModel import DualPathAudioClassifier
+            from cnn_rnn_model import DualPathAudioClassifier
         except ImportError:
-            print("Error: Could not import CNN+RNN model. Make sure myCnnRnnModel.py exists and contains the DualPathAudioClassifier class.")
+            print("Error: Could not import CNN+RNN model. Make sure cnn_rnn_model.py exists and contains the DualPathAudioClassifier class.")
             return
         
         # Prepare dataset for CNN+RNN model

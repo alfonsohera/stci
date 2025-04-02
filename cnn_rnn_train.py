@@ -338,7 +338,7 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
 
 def main_cnn_rnn(use_prosodic_features=True):
     """Main function for the CNN+RNN pipeline."""
-    from myCnnRnnModel import BalancedAugmentedDataset, DualPathAudioClassifier
+    from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
     
     print(f"Running CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features")
     
@@ -392,7 +392,7 @@ def main_cnn_rnn(use_prosodic_features=True):
 
 def test_cnn_rnn(use_prosodic_features=True):
     """Test function for the CNN+RNN pipeline."""
-    from myCnnRnnModel import DualPathAudioClassifier
+    from cnn_rnn_model import DualPathAudioClassifier
     
     # Prepare data
     dataset = prepare_cnn_rnn_dataset()
@@ -437,7 +437,7 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from myCnnRnnModel import DualPathAudioClassifier
+    from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -517,7 +517,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from myCnnRnnModel import DualPathAudioClassifier
+    from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -687,3 +687,562 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     else:
         print(f"Threshold optimization results not found at {threshold_results_path}")
         print("Please run optimize_cnn_rnn() first to generate threshold values.")
+
+
+def run_cross_validation(use_prosodic_features=True, n_folds=5):
+    """Run k-fold cross-validation for the CNN+RNN model."""
+    from sklearn.model_selection import KFold
+    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    import numpy as np
+    import json
+    
+    print(f"Running {n_folds}-fold cross-validation...")
+    
+    # Load and prepare dataset
+    dataset = prepare_cnn_rnn_dataset()
+    
+    # Combine train and validation for cross-validation
+    combined_data = []
+    for split in ["train", "validation"]:
+        for i in range(len(dataset[split])):
+            item = dataset[split][i]
+            combined_data.append(item)
+    
+    # Prepare indices for k-fold splits
+    indices = np.arange(len(combined_data))
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+    
+    cv_results = []
+    fold_metrics = []
+    
+    # Run training for each fold
+    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
+        print(f"\n--- Processing Fold {fold_idx+1}/{n_folds} ---")
+        
+        # Create fold-specific datasets
+        fold_train = [combined_data[i] for i in train_idx]
+        fold_val = [combined_data[i] for i in val_idx]
+        fold_test = dataset["test"]  # Use original test set
+        
+        # Create balanced training dataset
+        print("Creating balanced dataset for this fold...")
+        fold_train_balanced = BalancedAugmentedDataset(
+            original_dataset=fold_train,
+            total_target_samples=1000,
+            num_classes=3
+        )
+        fold_train_balanced.print_distribution_stats()
+        
+        # Create temporary dataset with the fold splits
+        fold_dataset = {
+            "train": fold_train_balanced,
+            "validation": fold_val,
+            "test": fold_test
+        }
+        
+        # Get dataloaders for this fold
+        fold_dataloaders = get_cnn_rnn_dataloaders(
+            fold_dataset,
+            batch_size=64,
+            use_prosodic_features=use_prosodic_features
+        )
+        
+        # Create new model for this fold
+        fold_model = DualPathAudioClassifier(
+            num_classes=3,
+            sample_rate=16000,
+            use_prosodic_features=use_prosodic_features,
+            prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        )
+        
+        # Train the model on this fold
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        fold_model.to(device)
+        
+        # Setup training for this fold with progress tracking
+        criterion = FocalLoss(gamma=0, weight=None)
+        optimizer = torch.optim.AdamW(
+            fold_model.parameters(),
+            lr=2e-5,
+            weight_decay=0.01,
+            betas=(0.9, 0.999)
+        )
+        
+        # Calculate total steps for 1cycle scheduler
+        total_steps = len(fold_dataloaders["train"]) * 5  # Use 5 epochs for CV
+        
+        # 1cycle LR scheduler
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=5e-4,
+            total_steps=total_steps,
+            pct_start=0.3,
+            div_factor=25,
+            final_div_factor=1000,
+            anneal_strategy='cos',
+            three_phase=False
+        )
+        
+        # Train for fewer epochs in cross-validation
+        best_val_f1 = 0.0
+        fold_best_metrics = {}
+        
+        print(f"Training fold {fold_idx+1}...")
+        for epoch in range(5):  # 5 epochs per fold
+            # Train
+            train_loss = train_epoch(
+                fold_model, fold_dataloaders["train"], optimizer, 
+                criterion, device, scheduler, use_prosodic_features
+            )
+            
+            # Validate
+            val_loss, val_labels, val_preds = evaluate(
+                fold_model, fold_dataloaders["validation"], 
+                criterion, device, use_prosodic_features
+            )
+            
+            # Calculate metrics
+            val_accuracy = accuracy_score(val_labels, val_preds)
+            val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+            
+            print(f"Fold {fold_idx+1}, Epoch {epoch+1}: Val Acc={val_accuracy:.4f}, F1={val_f1_macro:.4f}")
+            
+            # Track best model
+            if val_f1_macro > best_val_f1:
+                best_val_f1 = val_f1_macro
+                fold_best_metrics = {
+                    "fold": fold_idx+1,
+                    "val_accuracy": val_accuracy,
+                    "val_f1_macro": val_f1_macro,
+                    "val_loss": val_loss / len(fold_dataloaders["validation"]),
+                    "epoch": epoch + 1
+                }
+        
+        # Test the best model on this fold
+        test_loss, test_labels, test_preds = evaluate(
+            fold_model, fold_dataloaders["test"],
+            criterion, device, use_prosodic_features
+        )
+        
+        # Calculate test metrics
+        test_accuracy = accuracy_score(test_labels, test_preds)
+        test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+        
+        # Add test metrics to fold results
+        fold_best_metrics.update({
+            "test_accuracy": test_accuracy,
+            "test_f1_macro": test_f1_macro,
+            "test_loss": test_loss / len(fold_dataloaders["test"])
+        })
+        
+        fold_metrics.append(fold_best_metrics)
+        print(f"Fold {fold_idx+1} test results: Acc={test_accuracy:.4f}, F1={test_f1_macro:.4f}")
+        
+        # Clean up to free memory
+        del fold_model, optimizer, scheduler, criterion
+        del fold_dataloaders, fold_dataset, fold_train, fold_val
+        gc.collect()
+        torch.cuda.empty_cache()
+    
+    # Calculate average metrics across folds
+    avg_metrics = {
+        "val_accuracy": np.mean([fold["val_accuracy"] for fold in fold_metrics]),
+        "val_f1_macro": np.mean([fold["val_f1_macro"] for fold in fold_metrics]),
+        "test_accuracy": np.mean([fold["test_accuracy"] for fold in fold_metrics]),
+        "test_f1_macro": np.mean([fold["test_f1_macro"] for fold in fold_metrics]),
+    }
+    
+    # Store full results
+    cv_results = {
+        "fold_metrics": fold_metrics,
+        "avg_metrics": avg_metrics
+    }
+    
+    # Print cross-validation summary
+    print("\n=== Cross-Validation Results ===")
+    print(f"Average validation accuracy: {avg_metrics['val_accuracy']:.4f}")
+    print(f"Average validation F1-macro: {avg_metrics['val_f1_macro']:.4f}")
+    print(f"Average test accuracy: {avg_metrics['test_accuracy']:.4f}")
+    print(f"Average test F1-macro: {avg_metrics['test_f1_macro']:.4f}")
+    
+    # Save results
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "cross_validation")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    with open(os.path.join(output_dir, f"cv_{n_folds}fold_results.json"), "w") as f:
+        json.dump(cv_results, f, indent=2)
+    
+    print(f"Cross-validation results saved to {output_dir}")
+    return cv_results
+
+
+def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
+    """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
+    try:
+        import optuna
+    except ImportError:
+        print("Optuna is required for Bayesian optimization. Install with: pip install optuna")
+        return None
+    
+    from cnn_rnn_model import DualPathAudioClassifier
+    import json
+    
+    # Load and prepare dataset
+    print("Loading dataset for hyperparameter optimization...")
+    dataset = prepare_cnn_rnn_dataset()
+    
+    # Create dataloaders for optimization
+    # Use the entire train set for training and validation set for hyperparameter evaluation
+    train_loader = get_cnn_rnn_dataloaders(
+        {"train": dataset["train"]}, batch_size=64, use_prosodic_features=use_prosodic_features
+    )["train"]
+    
+    val_loader = get_cnn_rnn_dataloaders(
+        {"validation": dataset["validation"]}, batch_size=64, use_prosodic_features=use_prosodic_features
+    )["validation"]
+    
+    # Test set will only be used for final evaluation of the best model
+    test_loader = get_cnn_rnn_dataloaders(
+        {"test": dataset["test"]}, batch_size=64, use_prosodic_features=use_prosodic_features
+    )["test"]
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    def objective(trial):
+        """Objective function for Optuna optimization."""
+        # Define hyperparameter search space
+        lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
+        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
+        max_lr = trial.suggest_float("max_lr", lr, 1e-2, log=True)
+        pct_start = trial.suggest_float("pct_start", 0.1, 0.5)
+        gamma = trial.suggest_float("focal_loss_gamma", 0.0, 3.0)        
+        n_mels = trial.suggest_int("n_mels", 64, 256, log=True)  # Changed from categorical to int
+        time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
+        freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
+        
+        # Create model with trial hyperparameters
+        model = DualPathAudioClassifier(
+            num_classes=3,
+            sample_rate=16000,
+            use_prosodic_features=use_prosodic_features,
+            prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
+            n_mels=n_mels,
+            apply_specaugment=True
+        )
+        
+        # Update SpecAugment parameters if the model has that module
+        if hasattr(model, 'spec_augment'):
+            model.spec_augment.time_mask_param = time_mask_param
+            model.spec_augment.freq_mask_param = freq_mask_param
+        
+        model.to(device)
+        
+        # Create optimizer with trial hyperparameters
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=(0.9, 0.999)
+        )
+        
+        # Create focal loss with trial gamma
+        criterion = FocalLoss(gamma=gamma)
+        
+        # Calculate total steps for shorter training (3 epochs)
+        total_steps = len(train_loader) * 3
+        
+        # Create scheduler with trial hyperparameters
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=max_lr,
+            total_steps=total_steps,
+            pct_start=pct_start,
+            div_factor=25,
+            final_div_factor=1000,
+            anneal_strategy='cos',
+            three_phase=False
+        )
+        
+        # Short training loop (3 epochs)
+        for epoch in range(3):
+            # Train
+            train_loss = train_epoch(
+                model, train_loader, optimizer, 
+                criterion, device, scheduler, use_prosodic_features
+            )
+            
+            # If trial is being pruned due to poor performance, stop early
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+        
+        # Evaluate on the validation set
+        val_loss, val_labels, val_preds = evaluate(
+            model, val_loader, criterion, device, use_prosodic_features
+        )
+        
+        # Calculate metrics for optimization objective
+        val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+        
+        # Clean up to free memory
+        del model, optimizer, scheduler, criterion
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        return val_f1_macro
+    
+    # Create study for maximizing F1-macro
+    print(f"Running Bayesian optimization with {n_trials} trials...")
+    study_name = f"cnn_rnn_{'with' if use_prosodic_features else 'without'}_manual_features"
+    
+    # Configure pruner for early stopping of bad trials
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=20)
+    
+    study = optuna.create_study(
+        study_name=study_name,
+        direction="maximize",
+        pruner=pruner
+    )
+    
+    # Run the optimization
+    study.optimize(objective, n_trials=n_trials)
+    
+    # Get and print best parameters
+    best_params = study.best_params
+    best_value = study.best_value
+    
+    print("\n=== Bayesian Optimization Results ===")
+    print(f"Best F1-macro on validation set: {best_value:.4f}")
+    print("Best hyperparameters:")
+    for param, value in best_params.items():
+        print(f"  {param}: {value}")
+    
+    # Save the results
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "hyperparameter_optimization")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save best hyperparameters
+    result = {
+        "best_params": best_params,
+        "best_value": best_value,
+        "feature_type": "with_manual" if use_prosodic_features else "without_manual"
+    }
+    
+    with open(os.path.join(output_dir, f"best_hyperparams_{'with' if use_prosodic_features else 'no'}_manual.json"), "w") as f:
+        json.dump(result, f, indent=2)
+    
+    # Print importance of hyperparameters if optuna has enough trials
+    if n_trials >= 20:
+        param_importances = optuna.importance.get_param_importances(study)
+        print("\nHyperparameter Importance:")
+        for param, importance in param_importances.items():
+            print(f"  {param}: {importance:.4f}")
+    
+    # Create visualization if not in offline mode
+    if not myConfig.running_offline:
+        try:
+            # Save optimization plots
+            import matplotlib.pyplot as plt
+            from optuna.visualization import plot_optimization_history, plot_param_importances
+            
+            # History plot
+            fig1 = plot_optimization_history(study)
+            fig1.write_image(os.path.join(output_dir, f"optimization_history_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            
+            # Parameter importance plot
+            fig2 = plot_param_importances(study)
+            fig2.write_image(os.path.join(output_dir, f"param_importances_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            
+            print(f"Optimization visualizations saved to {output_dir}")
+        except Exception as e:
+            print(f"Could not create visualizations: {str(e)}")
+    
+    print(f"Optimization results saved to {output_dir}")
+    
+    # Train final model with best hyperparameters (optional)
+    if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
+        train_with_best_hyperparameters(dataset, best_params, use_prosodic_features)
+    
+    return result
+
+
+def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=True):
+    """Train a final model using the best hyperparameters from Bayesian optimization."""
+    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    
+    print("\n=== Training with Best Hyperparameters ===")
+    
+    # Create balanced training dataset
+    print("Creating balanced training dataset...")
+    balanced_train_dataset = BalancedAugmentedDataset(
+        original_dataset=dataset["train"],
+        total_target_samples=1000,
+        num_classes=3
+    )
+    balanced_train_dataset.print_distribution_stats()
+    
+    # Create dataset with balanced training
+    balanced_dataset = {
+        "train": balanced_train_dataset,
+        "validation": dataset["validation"],
+        "test": dataset["test"]
+    }
+    
+    # Extract hyperparameters
+    lr = best_params.get("learning_rate", 2e-5)
+    weight_decay = best_params.get("weight_decay", 0.01)
+    max_lr = best_params.get("max_lr", 5e-4)
+    pct_start = best_params.get("pct_start", 0.3)
+    gamma = best_params.get("focal_loss_gamma", 0.0)
+    n_mels = best_params.get("n_mels", 128)
+    time_mask_param = best_params.get("time_mask_param", 50)
+    freq_mask_param = best_params.get("freq_mask_param", 50)
+    
+    # Create dataloaders
+    dataloaders = get_cnn_rnn_dataloaders(
+        balanced_dataset, 
+        batch_size=64,
+        use_prosodic_features=use_prosodic_features
+    )
+    
+    # Create model with optimized hyperparameters
+    model = DualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
+        n_mels=n_mels,
+        apply_specaugment=True
+    )
+    
+    # Update SpecAugment parameters if the model has that module
+    if hasattr(model, 'spec_augment'):
+        model.spec_augment.time_mask_param = time_mask_param
+        model.spec_augment.freq_mask_param = freq_mask_param
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    
+    # Create optimizer with optimized hyperparameters
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+        betas=(0.9, 0.999)
+    )
+    
+    # Create focal loss with optimized gamma
+    criterion = FocalLoss(gamma=gamma)
+    
+    # Calculate total steps for full training (10 epochs)
+    total_steps = len(dataloaders["train"]) * 10
+    
+    # Create scheduler with optimized hyperparameters
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=max_lr,
+        total_steps=total_steps,
+        pct_start=pct_start,
+        div_factor=25,
+        final_div_factor=1000,
+        anneal_strategy='cos',
+        three_phase=False
+    )
+    
+    # Create output directory for optimized CNN+RNN model
+    optimized_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cnn_rnn_optimized")
+    os.makedirs(optimized_output_dir, exist_ok=True)
+    
+    # Tracking variables
+    best_f1_macro = 0.0
+    
+    # Training loop
+    for epoch in range(10):
+        torch.cuda.empty_cache()
+        gc.collect()
+        log_memory_usage(f"Epoch {epoch+1} start")
+        
+        # Training phase
+        avg_train_loss = train_epoch(
+            model, 
+            dataloaders["train"], 
+            optimizer, 
+            criterion, 
+            device, 
+            scheduler, 
+            use_prosodic_features
+        )
+        
+        # Validation phase
+        val_loss, all_labels, all_preds = evaluate(
+            model, 
+            dataloaders["validation"], 
+            criterion, 
+            device, 
+            use_prosodic_features
+        )
+        
+        # Calculate metrics
+        avg_val_loss = val_loss / len(dataloaders["validation"])
+        val_accuracy = accuracy_score(all_labels, all_preds)
+        val_f1_macro = f1_score(all_labels, all_preds, average='macro')
+        val_f1_per_class = f1_score(all_labels, all_preds, average=None)
+        
+        # Print metrics
+        print(f"Epoch {epoch+1}/10:")
+        print(f"  Train Loss: {avg_train_loss:.4f}")
+        print(f"  Val Loss: {avg_val_loss:.4f}")
+        print(f"  Val Accuracy: {val_accuracy:.4f}")
+        print(f"  Val F1-Macro: {val_f1_macro:.4f}")
+        print(f"  Val F1 per class: {val_f1_per_class}")
+        
+        # Save best model based on F1-macro
+        if val_f1_macro > best_f1_macro:
+            best_f1_macro = val_f1_macro
+            
+            # Save model to optimized directory
+            model_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")
+            torch.save(model.state_dict(), model_path)
+            print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
+            
+            # Save in safetensors format if available
+            try:
+                from safetensors.torch import save_file
+                safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
+                save_file(model.state_dict(), safetensors_path)
+                print(f"  Also saved model in safetensors format to {safetensors_path}")
+            except ImportError:
+                print("  safetensors not available, skipping safetensors format")
+    
+    # Test the best model
+    # Load the best model
+    model.load_state_dict(torch.load(os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")))
+    
+    # Test on test set
+    print("\nTesting optimized model on test set...")
+    test_loss, test_labels, test_preds = evaluate(
+        model, dataloaders["test"], criterion, device, use_prosodic_features
+    )
+    
+    # Calculate test metrics
+    test_accuracy = accuracy_score(test_labels, test_preds)
+    test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+    test_report = classification_report(test_labels, test_preds, target_names=["Healthy", "MCI", "AD"])
+    
+    print(f"Test Accuracy: {test_accuracy:.4f}")
+    print(f"Test F1-Macro: {test_f1_macro:.4f}")
+    print("Classification Report:")
+    print(test_report)
+    
+    # Save hyperparameters and test results
+    results = {
+        "hyperparameters": best_params,
+        "test_accuracy": test_accuracy,
+        "test_f1_macro": test_f1_macro,
+        "val_f1_macro": best_f1_macro
+    }
+    
+    with open(os.path.join(optimized_output_dir, "results.json"), "w") as f:
+        import json
+        json.dump(results, f, indent=2)
+    
+    print(f"Optimized model and results saved to {optimized_output_dir}")

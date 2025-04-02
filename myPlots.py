@@ -260,7 +260,7 @@ def visualize_spectrogram_augmentations(data_df, audio_root_path):
     import random
     import torch
     from torch.utils.data import Dataset
-    from myCnnRnnModel import SpecAugment  # Import your augmentation class
+    from cnn_rnn_model import SpecAugment  # Import your augmentation class
     
     # Print column names for debugging
     print("Available DataFrame columns:", data_df.columns.tolist())
@@ -376,7 +376,7 @@ def visualize_augmentation_examples(data_df, audio_root_path, n_examples=3):
     import random
     import torch
     import os
-    from myCnnRnnModel import SpecAugment
+    from cnn_rnn_model import SpecAugment
     
     # Initialize the SpecAugment augmentation
     spec_augment = SpecAugment(
@@ -496,7 +496,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     from sklearn.metrics.pairwise import cosine_similarity
     import matplotlib.pyplot as plt
     import seaborn as sns
-    from myCnnRnnModel import SpecAugment, DualPathAudioClassifier
+    from cnn_rnn_model import SpecAugment, DualPathAudioClassifier
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -815,7 +815,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     import os
     import gc
     from datasets import load_from_disk
-    from myCnnRnnModel import DualPathAudioClassifier
+    from cnn_rnn_model import DualPathAudioClassifier
     import librosa
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

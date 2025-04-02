@@ -105,11 +105,11 @@ class DualPathAudioClassifier(nn.Module):
             # Third convolutional block
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(), 
+            nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Dropout(0.3),
             
-            # Fourth convolutional block - added for deeper feature extraction
+            # Fourth convolutional block 
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(),
@@ -127,7 +127,7 @@ class DualPathAudioClassifier(nn.Module):
         )
        
         # RNN path for raw audio
-        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)  
+        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)
         self.rnn = nn.GRU(
             input_size=8,
             hidden_size=128,

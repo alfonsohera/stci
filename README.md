@@ -15,7 +15,7 @@ Repository/
 ├── myPlots.py                   # Visualization and analysis tools
 ├── myThresholdOptimization.py   # Threshold optimization for classification
 ├── feature_analysis.py          # Feature analysis utilities
-├── myCnnRnnModel.py             # CNN+RNN model architecture
+├── cnn_rnn_model.py             # CNN+RNN model architecture
 ├── cnn_rnn_train.py             # CNN+RNN training and evaluation functions
 ├── cnn_rnn_data.py              # Data utilities specific to CNN+RNN
 └── environment.yml              # Conda environment definition
@@ -26,7 +26,7 @@ Repository/
 - **main.py**: Entry point with argument parsing, training/testing pipelines
 - **myModel.py**: Wav2Vec2-based model, training, and evaluation
 - **myData.py**: Data loading, preprocessing, and feature extraction
-- **myCnnRnnModel.py**: CNN+RNN model architecture for audio classification
+- **cnn_rnn_model.py**: CNN+RNN model architecture for audio classification
 - **cnn_rnn_train.py**: Training and evaluation functions for CNN+RNN models
 - **myThresholdOptimization.py**: Optimizing decision thresholds for better classification
 

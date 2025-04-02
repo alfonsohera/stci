@@ -442,16 +442,22 @@ def optimize():
 if __name__ == "__main__": 
     # Create argument parser
     parser = argparse.ArgumentParser(description="Cognitive Impairment Detection Model")
-    parser.add_argument("mode", choices=["train", "finetune", "test", "optimize", "test_thresholds"], 
+    parser.add_argument("mode", choices=["train", "finetune", "test", "optimize", "test_thresholds", "cv", "hpo"], 
                         help="Mode of operation: train (from scratch), finetune (existing model), "
-                             "test (evaluate model), optimize (threshold optimization), or "
-                             "test_thresholds (evaluate with optimized thresholds)")
+                             "test (evaluate model), optimize (threshold optimization), "
+                             "test_thresholds (evaluate with optimized thresholds), "
+                             "cv (cross-validation), or hpo (hyperparameter optimization)")
     parser.add_argument("--pipeline", choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
                         help="Specify the pipeline to use: wav2vec2 (transformer-based) or cnn_rnn")
     parser.add_argument("--online", action="store_true", 
                         help="Run with online services (WandB logging)")
     parser.add_argument("--no_manual", action="store_true",
                         help="Disable manual features for cnn_rnn pipeline")
+    # Add new arguments for cross-validation and hyperparameter optimization
+    parser.add_argument("--folds", type=int, default=5,
+                        help="Number of folds for cross-validation (default: 5)")
+    parser.add_argument("--trials", type=int, default=50,
+                        help="Number of trials for hyperparameter optimization (default: 50)")
     
     args = parser.parse_args()
     
@@ -487,6 +493,7 @@ if __name__ == "__main__":
         # Import CNN+RNN threshold optimization if it exists
         try:
             from cnn_rnn_train import optimize_cnn_rnn, test_cnn_rnn_with_thresholds
+            from cnn_rnn_train import run_cross_validation, run_bayesian_optimization
             has_threshold_functions = True
         except ImportError:
             has_threshold_functions = False
@@ -522,3 +529,15 @@ if __name__ == "__main__":
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
+        elif args.mode == "cv":
+            if has_threshold_functions:
+                print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
+                run_cross_validation(use_prosodic_features=use_manual, n_folds=args.folds)
+            else:
+                print("Cross-validation not implemented. Please check your installation.")
+        elif args.mode == "hpo":
+            if has_threshold_functions:
+                print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
+                run_bayesian_optimization(use_prosodic_features=use_manual, n_trials=args.trials)
+            else:
+                print("Hyperparameter optimization not implemented. Please check your installation.")
