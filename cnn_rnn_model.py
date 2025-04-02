@@ -128,7 +128,7 @@ class DualPathAudioClassifier(nn.Module):
         self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)
         self.rnn = nn.GRU(
             input_size=8,
-            hidden_size=128,
+            hidden_size=80,  
             num_layers=2,
             batch_first=True,
             bidirectional=True,
@@ -144,11 +144,11 @@ class DualPathAudioClassifier(nn.Module):
                 nn.Dropout(0.2),
                 nn.Linear(64, 32)
             )
-            fusion_input_dim = 256 + 256 + 32  # CNN + RNN + prosodic
+            fusion_input_dim = 256 + 160 + 32  
         else:
-            fusion_input_dim = 256 + 256  # CNN + RNN only
+            fusion_input_dim = 256 + 160  
         
-        # Fusion layer
+        # Fusion layer 
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, 256),
             nn.BatchNorm1d(256),
@@ -156,9 +156,11 @@ class DualPathAudioClassifier(nn.Module):
             nn.Dropout(0.4),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
+            nn.Dropout(0.3)
         )
+
+        # Separate classifier layer
+        self.classifier = nn.Linear(128, num_classes)
         
         # Pre-initialize device tracking to avoid device checks at runtime
         self._device = None
@@ -184,6 +186,7 @@ class DualPathAudioClassifier(nn.Module):
             self.audio_downsample = self.audio_downsample.to(device)
             self.rnn = self.rnn.to(device)            
             self.fusion = self.fusion.to(device)
+            self.classifier = self.classifier.to(device)
             
             if self.use_prosodic_features:
                 self.prosodic_feature_mlp = self.prosodic_feature_mlp.to(device)
@@ -275,7 +278,8 @@ class DualPathAudioClassifier(nn.Module):
             combined_features = torch.cat([combined_features, processed], dim=1)
         
         # Final classification
-        output = self.fusion(combined_features)
+        fusion_output = self.fusion(combined_features)
+        output = self.classifier(fusion_output)
         return output
 
 class BalancedAugmentedDataset(Dataset):
