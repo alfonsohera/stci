@@ -126,9 +126,11 @@ class DualPathAudioClassifier(nn.Module):
        
         # RNN path for raw audio
         self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)
+        
+        
         self.rnn = nn.GRU(
             input_size=8,
-            hidden_size=80,  
+            hidden_size=128,  
             num_layers=2,
             batch_first=True,
             bidirectional=True,
@@ -144,9 +146,9 @@ class DualPathAudioClassifier(nn.Module):
                 nn.Dropout(0.2),
                 nn.Linear(64, 32)
             )
-            fusion_input_dim = 256 + 160 + 32  
+            fusion_input_dim = 256 + 256 + 32  
         else:
-            fusion_input_dim = 256 + 160  
+            fusion_input_dim = 256 + 256 
         
         # Fusion layer 
         self.fusion = nn.Sequential(
@@ -239,6 +241,7 @@ class DualPathAudioClassifier(nn.Module):
         mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
         
         cnn_features = self.cnn_extractor(mel_db)
+        print(f"CNN features shape: {cnn_features.shape}")
         
         # Process audio for RNN path
         audio_downsampled = self.audio_downsample(audio)
@@ -260,12 +263,23 @@ class DualPathAudioClassifier(nn.Module):
             # Run RNN on packed sequence
             packed_output, hidden = self.rnn(packed)
             
-            # Either use last hidden state or unpack
-            rnn_features = hidden[-1]  # Get final hidden state from last layer
+            # Get the bidirectional hidden states and reshape
+            # hidden shape is [num_layers, num_directions, batch_size, hidden_size]
+            hidden_reshaped = hidden.view(self.rnn.num_layers, 2, -1, self.rnn.hidden_size)
+            
+            # Concatenate forward and backward of last layer
+            last_layer_hidden = hidden_reshaped[-1]  # [2, batch_size, hidden_size]
+            forward_hidden = last_layer_hidden[0]    # [batch_size, hidden_size]
+            backward_hidden = last_layer_hidden[1]   # [batch_size, hidden_size]
+            
+            # Concatenate to get the same 256 dimension output
+            rnn_features = torch.cat([forward_hidden, backward_hidden], dim=1)
         else:
             # Fallback to original method
             rnn_output, _ = self.rnn(audio_downsampled)
             rnn_features = rnn_output[:, -1, :]
+        
+        print(f"RNN features shape: {rnn_features.shape}")
         
         # Combine CNN and RNN features
         combined_features = torch.cat([cnn_features, rnn_features], dim=1)
@@ -276,6 +290,8 @@ class DualPathAudioClassifier(nn.Module):
                 raise ValueError("Prosodic features are enabled but not provided to the model")
             processed = self.prosodic_feature_mlp(prosodic_features)
             combined_features = torch.cat([combined_features, processed], dim=1)
+        
+        print(f"Combined features shape: {combined_features.shape}")
         
         # Final classification
         fusion_output = self.fusion(combined_features)
