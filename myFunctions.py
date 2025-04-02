@@ -406,7 +406,7 @@ def extract_gpu_features(data_df):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
     print("Extracting GPU-dependent features:")
     
-    # 0. Load audio separation model
+    """ # 0. Load audio separation model
     model = myAudio.load_demucs_model()
     print("Applying voice separation with Demucs...")
     
@@ -417,9 +417,9 @@ def extract_gpu_features(data_df):
     # Track processing time for performance analysis
     import time
     start_time = time.time()
-    total_processed = 0
+    total_processed = 0 """
     
-    # Process files in batches with Demucs
+    """ # Process files in batches with Demucs
     for i in range(0, total_files, demucs_batch_size):
         batch_start_time = time.time()
         batch_end = min(i + demucs_batch_size, total_files)
@@ -445,7 +445,7 @@ def extract_gpu_features(data_df):
         
         # Clear CUDA cache after each batch
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            torch.cuda.empty_cache() """
     # 1. Extract VAD-based prosodic features
     print("Extracting VAD-based prosodic features...")
     for idx, row in data_df.iterrows():

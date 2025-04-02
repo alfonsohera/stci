@@ -5,22 +5,62 @@ import warnings
 from zipfile import ZipFile
 import torch
 import pandas as pd
+import numpy
 from transformers import logging
 # <local imports>
 import myConfig
 import myData
 import myModel
 import myFunctions
-import myModel
 # </local imports>
 from tqdm import tqdm
-from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, f1_score
+from sklearn.utils.class_weight import compute_class_weight
 from torch.utils.data import DataLoader
+from torch import nn
+import torch.nn.functional as F 
+
+
+# Add this function to your main.py at the top level
+def log_memory_usage(label):
+    import psutil
+    import gc
+    
+    # Force garbage collection before measurement
+    gc.collect()
+    
+    # Get process memory info
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    
+    # Calculate CPU memory usage
+    rss_mb = mem_info.rss / (1024 * 1024)
+    vms_mb = mem_info.vms / (1024 * 1024)
+    
+    # System memory info
+    sys_mem = psutil.virtual_memory()
+    sys_percent = sys_mem.percent
+    
+    print(f"[{label}] CPU Memory: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB, System={sys_percent}%")
 
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message="Some weights of.*were not initialized from the model checkpoint.*")
 logging.set_verbosity_error()  # Set transformers logging to show only errors
+
+
+class FocalLoss(nn.Module):
+        def __init__(self, gamma=2, weight=None):
+            super(FocalLoss, self).__init__()
+            self.gamma = gamma
+            self.weight = weight
+            
+        def forward(self, input, target):
+            ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+            pt = torch.exp(-ce_loss)
+            focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+            return focal_loss.mean()
+
 
 def collate_fn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -427,31 +467,79 @@ if __name__ == "__main__":
                         help="Mode of operation: train (from scratch), finetune (existing model), "
                              "test (evaluate model), optimize (threshold optimization), or "
                              "test_thresholds (evaluate with optimized thresholds)")
-    parser.add_argument("--online", action="store_true", help="Run with online services (WandB logging)")
+    parser.add_argument("--pipeline", choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
+                        help="Specify the pipeline to use: wav2vec2 (transformer-based) or cnn_rnn")
+    parser.add_argument("--online", action="store_true", 
+                        help="Run with online services (WandB logging)")
+    parser.add_argument("--no_manual", action="store_true",
+                        help="Disable manual features for cnn_rnn pipeline")
     
     args = parser.parse_args()
     
     # Configure offline/online mode
     myConfig.running_offline = not args.online
     
-    # Set training mode and call appropriate function
-    if args.mode == "train":
-        myConfig.training_from_scratch = True
-        print("Starting training from scratch...")
-        main_fn()
-    elif args.mode == "finetune":
-        myConfig.training_from_scratch = False
-        print("Starting fine-tuning of existing model...")
-        main_fn()
-    elif args.mode == "test":
-        myConfig.training_from_scratch = False
-        print("Running model evaluation...")
-        test()
-    elif args.mode == "optimize":
-        myConfig.training_from_scratch = False
-        print("Running threshold optimization...")
-        optimize()
-    elif args.mode == "test_thresholds":
-        myConfig.training_from_scratch = False
-        print("Testing model with optimized thresholds...")
-        test_with_thresholds()
+    # Set up the selected pipeline
+    if args.pipeline == "wav2vec2":
+        # Set training mode and call appropriate function for wav2vec2 pipeline
+        if args.mode == "train":
+            myConfig.training_from_scratch = True
+            print("Starting training from scratch (Wav2Vec2 pipeline)...")
+            main_fn()
+        elif args.mode == "finetune":
+            myConfig.training_from_scratch = False
+            print("Starting fine-tuning of existing model (Wav2Vec2 pipeline)...")
+            main_fn()
+        elif args.mode == "test":
+            myConfig.training_from_scratch = False
+            print("Running model evaluation (Wav2Vec2 pipeline)...")
+            test()
+        elif args.mode == "optimize":
+            myConfig.training_from_scratch = False
+            print("Running threshold optimization (Wav2Vec2 pipeline)...")
+            optimize()
+        elif args.mode == "test_thresholds":
+            myConfig.training_from_scratch = False
+            print("Testing model with optimized thresholds (Wav2Vec2 pipeline)...")
+            test_with_thresholds()
+    elif args.pipeline == "cnn_rnn":
+        # Import CNN+RNN functions only when needed
+        from cnn_rnn_train import main_cnn_rnn, test_cnn_rnn
+        # Import CNN+RNN threshold optimization if it exists
+        try:
+            from cnn_rnn_train import optimize_cnn_rnn, test_cnn_rnn_with_thresholds
+            has_threshold_functions = True
+        except ImportError:
+            has_threshold_functions = False
+            
+        use_manual = not args.no_manual
+        feature_text = "without" if args.no_manual else "with"
+        
+        if args.mode == "train":
+            myConfig.training_from_scratch = True
+            print(f"Starting training from scratch (CNN+RNN pipeline {feature_text} manual features)...")
+            main_cnn_rnn(use_prosodic_features=use_manual)
+        elif args.mode == "finetune":
+            myConfig.training_from_scratch = False
+            print(f"Starting fine-tuning (CNN+RNN pipeline {feature_text} manual features)...")
+            main_cnn_rnn(use_prosodic_features=use_manual)
+        elif args.mode == "test":
+            myConfig.training_from_scratch = False
+            print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
+            test_cnn_rnn(use_prosodic_features=use_manual)
+        elif args.mode == "optimize":
+            myConfig.training_from_scratch = False
+            if has_threshold_functions:
+                print(f"Running threshold optimization (CNN+RNN pipeline {feature_text} manual features)...")
+                optimize_cnn_rnn(use_prosodic_features=use_manual)
+            else:
+                print("Threshold optimization not implemented for CNN+RNN pipeline.")
+                print("Please use the wav2vec2 pipeline for threshold optimization.")
+        elif args.mode == "test_thresholds":
+            myConfig.training_from_scratch = False
+            if has_threshold_functions:
+                print(f"Testing with optimized thresholds (CNN+RNN pipeline {feature_text} manual features)...")
+                test_cnn_rnn_with_thresholds(use_prosodic_features=use_manual)
+            else:
+                print("Testing with thresholds not implemented for CNN+RNN pipeline.")
+                print("Please use the wav2vec2 pipeline for threshold testing.")
