@@ -128,10 +128,9 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
     Returns:
         Dictionary with train, validation, and test dataloaders
     """
-    # Process each dataset in the dictionary if it supports .map()
-    processed_dataset = {}
-    for split, split_dataset in dataset_dict.items():
-        processed_dataset[split] = split_dataset.map(prepare_for_cnn_rnn)        
+    # Datasets are already processed by prepare_cnn_rnn_dataset() 
+    # or are custom datasets like BalancedAugmentedDataset
+    processed_dataset = dataset_dict
     
     # Wrap the datasets in a custom dataset class
     train_dataset = CNNRNNDataset(processed_dataset["train"], use_prosodic_features)
