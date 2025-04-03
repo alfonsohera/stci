@@ -28,7 +28,7 @@ def get_predictions(
     is_cnn_rnn: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Get model predictions and true labels from a dataloader.
+Get model predictions and true labels from a dataloader.
     
     Args:
         model: PyTorch model
@@ -38,7 +38,7 @@ def get_predictions(
         
     Returns:
         Tuple of (all_probs, all_labels) as numpy arrays
-    """
+"""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -48,18 +48,22 @@ def get_predictions(
     
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Getting predictions"):
+            # Move all tensor values to the correct device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                    for k, v in batch.items()}
+            
             # Handle different model architectures
             if is_cnn_rnn:
                 if use_prosodic_features and "prosodic_features" in batch:
                     logits = model(
-                        batch["audio"], 
-                        audio_lengths=batch["audio_lengths"],  
+                        batch["audio"],
+                        audio_lengths=batch["audio_lengths"],
                         prosodic_features=batch["prosodic_features"]
                     )
                 else:
                     logits = model(
-                        batch["audio"], 
-                        audio_lengths=batch["audio_lengths"] 
+                        batch["audio"],
+                        audio_lengths=batch["audio_lengths"]
                     )
             else:
                 # Wav2Vec2 type models
@@ -67,7 +71,9 @@ def get_predictions(
                     input_values=batch["input_values"],
                     prosodic_features=batch["prosodic_features"]
                 ).logits
-                labels = batch["labels"]
+            
+            # Get labels from batch
+            labels = batch["labels"]
             
             # Convert logits to probabilities
             probs = torch.softmax(logits, dim=-1)
