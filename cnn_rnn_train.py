@@ -921,12 +921,28 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
     try:
         import optuna
+        from optuna.integration.wandb import WeightsAndBiasesCallback
     except ImportError:
-        print("Optuna is required for Bayesian optimization. Install with: pip install optuna")
+        print("Required packages not found. Install with: pip install optuna wandb")
         return None
     
     from cnn_rnn_model import DualPathAudioClassifier
     import json
+    
+    # Initialize wandb if not already running
+    if not wandb.run:
+        wandb.init(
+            project="CNN-RNN-HPO",
+            entity=myConfig.wandb_entity,
+            name="hpo_cnn_rnn",
+            config={
+                "model_type": "CNN+RNN HPO",
+                "use_prosodic_features": use_prosodic_features,
+                "n_trials": n_trials,
+                "optimization_type": "bayesian"
+            },
+            tags=["hpo", "bayesian-optimization", "cnn-rnn"]
+        )
     
     # Load and prepare dataset
     print("Loading dataset for hyperparameter optimization...")
@@ -950,16 +966,29 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     def objective(trial):
-        """Objective function for Optuna optimization."""
-        # Define hyperparameter search space
+        # Current parameters
         lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
         weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
         max_lr = trial.suggest_float("max_lr", lr, 1e-2, log=True)
         pct_start = trial.suggest_float("pct_start", 0.1, 0.5)
         gamma = trial.suggest_float("focal_loss_gamma", 0.0, 3.0)        
-        n_mels = trial.suggest_int("n_mels", 64, 256, log=True)  # Changed from categorical to int
+        n_mels = trial.suggest_int("n_mels", 64, 256, log=True)
         time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
         freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
+        
+        trial_history = []
+        
+        """ dropout = trial.suggest_float("dropout", 0.0, 0.5)
+        rnn_hidden_size = trial.suggest_int("rnn_hidden_size", 64, 256)
+        rnn_num_layers = trial.suggest_int("rnn_num_layers", 1, 3)
+        rnn_type = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
+        
+        # Class weighting for focal loss
+        use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
+        
+        # For CNN path complexity
+        cnn_channels = trial.suggest_int("cnn_channels", 16, 64)
+        cnn_layers = trial.suggest_int("cnn_layers", 2, 4) """
         
         # Create model with trial hyperparameters
         model = DualPathAudioClassifier(
@@ -1004,48 +1033,111 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
             three_phase=False
         )
         
-        # Short training loop (3 epochs)
-        for epoch in range(3):
+        # Short training loop (5 epochs)
+        max_training_epochs = 5
+        
+        best_trial_f1 = 0.0
+        
+        trial_name = f"trial_{trial.number}"
+        
+        # Log trial parameters to wandb
+        if wandb.run:
+            wandb.run.summary[f"{trial_name}_params"] = {
+                param: value for param, value in trial.params.items()
+            }
+        
+        for epoch in range(max_training_epochs):
             # Train
             train_loss = train_epoch(
                 model, train_loader, optimizer, 
                 criterion, device, scheduler, use_prosodic_features
             )
-            
-            # If trial is being pruned due to poor performance, stop early
+            # Evaluate 
+            val_loss, val_labels, val_preds = evaluate(
+                model, val_loader, criterion, device, use_prosodic_features
+            )
+            val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
+            # Append to history 
+            trial_history.append({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_f1": val_f1_macro
+            })            
+            # Log to wandb after each epoch evaluation
+            if wandb.run:
+                wandb.log({
+                    f"{trial_name}/epoch": epoch,
+                    f"{trial_name}/train_loss": train_loss,
+                    f"{trial_name}/val_f1": val_f1_macro
+                })
+            # Check for pruning
+            trial.report(val_f1_macro, epoch)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
-        
-        # Evaluate on the validation set
-        val_loss, val_labels, val_preds = evaluate(
-            model, val_loader, criterion, device, use_prosodic_features
-        )
-        
-        # Calculate metrics for optimization objective
-        val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+
+        if val_f1_macro > best_trial_f1:
+            best_trial_f1 = val_f1_macro
+            # Remove any previous model for this trial if it exists
+            trial_model_path = os.path.join(
+                myConfig.OUTPUT_PATH, 
+                "hyperparameter_optimization", 
+                f"trial_{trial.number}_model.pt"
+            )
+            if os.path.exists(trial_model_path):
+                os.remove(trial_model_path)
+            torch.save(model.state_dict(), trial_model_path)
         
         # Clean up to free memory
         del model, optimizer, scheduler, criterion
         torch.cuda.empty_cache()
         gc.collect()
         
-        return val_f1_macro
+        # Store history
+        with open(os.path.join(
+            myConfig.OUTPUT_PATH, 
+            "hyperparameter_optimization",
+            f"trial_{trial.number}_history.json"
+        ), "w") as f:
+            json.dump(trial_history, f)
+        
+        # Log the final result to wandb
+        if wandb.run:
+            wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
+        
+        return best_trial_f1
     
     # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials...")
     study_name = f"cnn_rnn_{'with' if use_prosodic_features else 'without'}_manual_features"
-    
-    # Configure pruner for early stopping of bad trials
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=20)
-    
+        
+    # Pruner that balances exploration and exploitation
+    pruner = optuna.pruners.SuccessiveHalvingPruner(
+        min_resource=1, 
+        reduction_factor=4, 
+        min_early_stopping_rate=0
+    )
+
+    # Sampler for more efficient search
+    sampler = optuna.samplers.TPESampler(seed=42)
+
+    wandb_callback = WeightsAndBiasesCallback(
+        metric_name="f1_macro",
+        wandb_kwargs={
+            "project": "CNN-RNN-HPO",
+            "entity": myConfig.wandb_entity,
+            # Use existing wandb run
+            "group": wandb.run.name if wandb.run else None
+        }
+    )
+
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",
-        pruner=pruner
+        pruner=pruner,
+        sampler=sampler
     )
     
-    # Run the optimization
-    study.optimize(objective, n_trials=n_trials)
+    study.optimize(objective, n_trials=n_trials, callbacks=[wandb_callback])
     
     # Get and print best parameters
     best_params = study.best_params
@@ -1099,9 +1191,34 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     
     print(f"Optimization results saved to {output_dir}")
     
+    if wandb.run:
+        # Log best parameters
+        wandb.run.summary["best_f1_macro"] = best_value
+        wandb.run.summary["best_params"] = best_params
+        
+        # Log best model artifact
+        best_trial_number = study.best_trial.number
+        best_model_path = os.path.join(
+            myConfig.OUTPUT_PATH, 
+            "hyperparameter_optimization", 
+            f"trial_{best_trial_number}_model.pt"
+        )
+        
+        if os.path.exists(best_model_path):
+            artifact = wandb.Artifact(
+                f"hpo-best-model-{wandb.run.id}", 
+                type="model",
+                description=f"Best model from HPO with F1={best_value:.4f}"
+            )
+            artifact.add_file(best_model_path, name="best_model.pt")
+            wandb.log_artifact(artifact)
+    
     # Train final model with best hyperparameters (optional)
     if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
         train_with_best_hyperparameters(dataset, best_params, use_prosodic_features)
+    
+    if wandb.run and wandb.run.name.startswith("hpo_cnn_rnn"):
+        wandb.finish()
     
     return result
 
