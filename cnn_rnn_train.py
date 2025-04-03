@@ -10,13 +10,33 @@ import gc
 import myConfig
 import myData
 from myThresholdOptimization import optimize_thresholds_for_model
-from main import  log_memory_usage
+from main import log_memory_usage
 from cnn_rnn_data import prepare_cnn_rnn_dataset, get_cnn_rnn_dataloaders
 from torch import nn
 from torch.nn import functional as F
 import optuna
-import wandb
-from optuna.integration.wandb import WeightsAndBiasesCallback
+
+
+class WandbCallback:
+    
+    def __init__(self, metric_name):
+        self.metric_name = metric_name
+        self.trial_count = 0
+    
+    def __call__(self, study, trial):
+        """Called after each trial."""
+        self.trial_count += 1
+        if wandb.run:
+            wandb.log({
+                "best_value": study.best_value,
+                f"trial_{trial.number}_value": trial.value,
+                "trial_number": trial.number,
+                "completed_trials": self.trial_count
+            })
+            
+            # Log parameters
+            for key, value in trial.params.items():
+                wandb.log({f"trial_{trial.number}_{key}": value})
 
 
 class FocalLoss(nn.Module):
@@ -718,7 +738,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
                       xticklabels=class_names, yticklabels=class_names, ax=ax2)
             ax2.set_xlabel('Predicted labels') 
             ax2.set_ylabel('True labels')
-            ax2.set_title(f'Threshold Confusion Matrix ({threshold_type})')
+            ax2.setTitle(f'Threshold Confusion Matrix ({threshold_type})')
             
             # Save the plot
             output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_comparison", "cnn_rnn")
@@ -1116,15 +1136,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     # Sampler for more efficient search
     sampler = optuna.samplers.TPESampler(seed=42)
 
-    wandb_callback = WeightsAndBiasesCallback(
-        metric_name="f1_macro",
-        wandb_kwargs={
-            "project": "CNN-RNN-HPO",
-            "entity": myConfig.wandb_entity,
-            # Use existing wandb run
-            "group": wandb.run.name if wandb.run else None
-        }
-    )
+    wandb_callback = WandbCallback(metric_name="f1_macro")
 
     study = optuna.create_study(
         study_name=study_name,
