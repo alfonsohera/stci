@@ -27,14 +27,16 @@ class WandbCallback:
         """Called after each trial."""
         self.trial_count += 1
         if wandb.run:
+            # Existing code
             wandb.log({
                 "best_value": study.best_value,
                 f"trial_{trial.number}_value": trial.value,
                 "trial_number": trial.number,
                 "completed_trials": self.trial_count
             })
-            
-            # Log parameters
+                        
+            if 'val_loss' in trial.user_attrs:
+                wandb.log({f"trial_{trial.number}_val_loss": trial.user_attrs['val_loss']})                            
             for key, value in trial.params.items():
                 wandb.log({f"trial_{trial.number}_{key}": value})
 
@@ -993,145 +995,161 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     def objective(trial):
-        # Current parameters
-        lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
-        weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
-        max_lr = trial.suggest_float("max_lr", lr, 1e-2, log=True)
-        pct_start = trial.suggest_float("pct_start", 0.1, 0.5)
-        gamma = trial.suggest_float("focal_loss_gamma", 0.0, 3.0)        
-        n_mels = trial.suggest_int("n_mels", 64, 256, log=True)
-        time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
-        freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
-        
-        trial_history = []
-        
-        """ dropout = trial.suggest_float("dropout", 0.0, 0.5)
-        rnn_hidden_size = trial.suggest_int("rnn_hidden_size", 64, 256)
-        rnn_num_layers = trial.suggest_int("rnn_num_layers", 1, 3)
-        rnn_type = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
-        
-        # Class weighting for focal loss
-        use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
-        
-        # For CNN path complexity
-        cnn_channels = trial.suggest_int("cnn_channels", 16, 64)
-        cnn_layers = trial.suggest_int("cnn_layers", 2, 4) """
-        
-        # Create model with trial hyperparameters
-        model = DualPathAudioClassifier(
-            num_classes=3,
-            sample_rate=16000,
-            use_prosodic_features=use_prosodic_features,
-            prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
-            n_mels=n_mels,
-            apply_specaugment=True
-        )
-        
-        # Update SpecAugment parameters if the model has that module
-        if hasattr(model, 'spec_augment'):
-            model.spec_augment.time_mask_param = time_mask_param
-            model.spec_augment.freq_mask_param = freq_mask_param
-        
-        model.to(device)
-        
-        # Create optimizer with trial hyperparameters
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
-            betas=(0.9, 0.999)
-        )
-        
-        # Create focal loss with trial gamma
-        criterion = FocalLoss(gamma=gamma)
-        
-        # Calculate total steps for shorter training (3 epochs)
-        total_steps = len(train_loader) * 3
-        
-        # Create scheduler with trial hyperparameters
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=max_lr,
-            total_steps=total_steps,
-            pct_start=pct_start,
-            div_factor=25,
-            final_div_factor=1000,
-            anneal_strategy='cos',
-            three_phase=False
-        )
-        
-        # Short training loop (5 epochs)
-        max_training_epochs = 5
-        
-        best_trial_f1 = 0.0
-        
-        trial_name = f"trial_{trial.number}"
-        
-        # Log trial parameters to wandb
-        if wandb.run:
-            wandb.run.summary[f"{trial_name}_params"] = {
-                param: value for param, value in trial.params.items()
-            }
-        
-        for epoch in range(max_training_epochs):
-            # Train
-            train_loss = train_epoch(
-                model, train_loader, optimizer, 
-                criterion, device, scheduler, use_prosodic_features
+        try:
+            # Current parameters
+            lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
+            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
+            max_lr = trial.suggest_float("max_lr", lr, 1e-2, log=True)
+            pct_start = trial.suggest_float("pct_start", 0.1, 0.5)
+            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 3.0)        
+            n_mels = trial.suggest_int("n_mels", 64, 256, log=True)
+            time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
+            
+            trial_history = []
+            
+            """ dropout = trial.suggest_float("dropout", 0.0, 0.5)
+            rnn_hidden_size = trial.suggest_int("rnn_hidden_size", 64, 256)
+            rnn_num_layers = trial.suggest_int("rnn_num_layers", 1, 3)
+            rnn_type = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
+            
+            # Class weighting for focal loss
+            use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
+            
+            # For CNN path complexity
+            cnn_channels = trial.suggest_int("cnn_channels", 16, 64)
+            cnn_layers = trial.suggest_int("cnn_layers", 2, 4) """
+            
+            # Create model with trial hyperparameters
+            model = DualPathAudioClassifier(
+                num_classes=3,
+                sample_rate=16000,
+                use_prosodic_features=use_prosodic_features,
+                prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
+                n_mels=n_mels,
+                apply_specaugment=True
             )
-            # Evaluate 
-            val_loss, val_labels, val_preds = evaluate(
-                model, val_loader, criterion, device, use_prosodic_features
+            
+            # Update SpecAugment parameters if the model has that module
+            if hasattr(model, 'spec_augment'):
+                model.spec_augment.time_mask_param = time_mask_param
+                model.spec_augment.freq_mask_param = freq_mask_param
+            
+            model.to(device)
+            
+            # Create optimizer with trial hyperparameters
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=lr,
+                weight_decay=weight_decay,
+                betas=(0.9, 0.999)
             )
-            val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
-            # Append to history 
-            trial_history.append({
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "val_f1": val_f1_macro
-            })            
-            # Log to wandb after each epoch evaluation
+            
+            # Create focal loss with trial gamma
+            criterion = FocalLoss(gamma=gamma)
+            
+            # Calculate total steps for shorter training (3 epochs)
+            n_batches = len(train_loader)
+            n_epochs = 5  # Number of epochs for HPO
+            total_steps = n_batches * n_epochs
+            
+            # Create scheduler with trial hyperparameters
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=max_lr,
+                total_steps=total_steps,
+                pct_start=pct_start,
+                div_factor=25,
+                final_div_factor=1000,
+                anneal_strategy='cos',
+                three_phase=False
+            )
+            
+            # Short training loop 
+            max_training_epochs = n_epochs
+            
+            best_trial_f1 = 0.0
+            
+            trial_name = f"trial_{trial.number}"
+            
+            # Log trial parameters to wandb
             if wandb.run:
-                wandb.log({
-                    f"{trial_name}/epoch": epoch,
-                    f"{trial_name}/train_loss": train_loss,
-                    f"{trial_name}/val_f1": val_f1_macro
-                })
-            # Check for pruning
-            trial.report(val_f1_macro, epoch)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
+                wandb.run.summary[f"{trial_name}_params"] = {
+                    param: value for param, value in trial.params.items()
+                }
+            
+            for epoch in range(max_training_epochs):
+                # Train
+                train_loss = train_epoch(
+                    model, train_loader, optimizer, 
+                    criterion, device, scheduler, use_prosodic_features
+                )
+                # Evaluate 
+                val_loss, val_labels, val_preds = evaluate(
+                    model, val_loader, criterion, device, use_prosodic_features
+                )
+                val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
+                # Append to history 
+                trial_history.append({
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,                    
+                    "val_f1": val_f1_macro
+                })            
+                # Log to wandb after each epoch evaluation
+                if wandb.run:
+                    wandb.log({
+                        f"{trial_name}/epoch": epoch,
+                        f"{trial_name}/train_loss": train_loss,
+                        f"{trial_name}/val_loss": val_loss,
+                        f"{trial_name}/val_f1": val_f1_macro
+                    })
+                # Check for pruning
+                trial.report(val_f1_macro, epoch)
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
 
-        if val_f1_macro > best_trial_f1:
-            best_trial_f1 = val_f1_macro
-            # Remove any previous model for this trial if it exists
-            trial_model_path = os.path.join(
+            if val_f1_macro > best_trial_f1:
+                best_trial_f1 = val_f1_macro
+                # Remove any previous model for this trial if it exists
+                trial_model_path = os.path.join(
+                    myConfig.OUTPUT_PATH, 
+                    "hyperparameter_optimization", 
+                    f"trial_{trial.number}_model.pt"
+                )
+                if os.path.exists(trial_model_path):
+                    os.remove(trial_model_path)
+                torch.save(model.state_dict(), trial_model_path)
+            
+            # Clean up to free memory
+            del model, optimizer, scheduler, criterion
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            # Store history
+            with open(os.path.join(
                 myConfig.OUTPUT_PATH, 
-                "hyperparameter_optimization", 
-                f"trial_{trial.number}_model.pt"
-            )
-            if os.path.exists(trial_model_path):
-                os.remove(trial_model_path)
-            torch.save(model.state_dict(), trial_model_path)
-        
-        # Clean up to free memory
-        del model, optimizer, scheduler, criterion
-        torch.cuda.empty_cache()
-        gc.collect()
-        
-        # Store history
-        with open(os.path.join(
-            myConfig.OUTPUT_PATH, 
-            "hyperparameter_optimization",
-            f"trial_{trial.number}_history.json"
-        ), "w") as f:
-            json.dump(trial_history, f)
-        
-        # Log the final result to wandb
-        if wandb.run:
-            wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
-        
-        return best_trial_f1
+                "hyperparameter_optimization",
+                f"trial_{trial.number}_history.json"
+            ), "w") as f:
+                json.dump(trial_history, f)
+            
+            # Log the final result to wandb
+            if wandb.run:
+                wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
+                        
+            # Store the best validation loss as trial user attribute
+            min_val_loss = min(entry["val_loss"] for entry in trial_history)
+            trial.set_user_attr("val_loss", min_val_loss)
+            
+            return best_trial_f1
+        except Exception as e:
+            print(f"Trial {trial.number} failed with error: {str(e)}")
+            # Log the error to wandb if available
+            if wandb.run:
+                wandb.log({f"trial_{trial.number}_error": str(e)})
+            # Return a very low score to indicate failure
+            return -1.0  # Study is maximizing, so negative value marks failure
     
     # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials...")
