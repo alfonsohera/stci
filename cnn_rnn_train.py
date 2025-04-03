@@ -942,7 +942,7 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
 
 def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
-    from cnn_rnn_model import DualPathAudioClassifier
+    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
     import json
     
     # Initialize wandb if not already running
@@ -964,20 +964,31 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     print("Loading dataset for hyperparameter optimization...")
     dataset = prepare_cnn_rnn_dataset()
     
-    # Create dataloaders for optimization
-    # Use the entire train set for training and validation set for hyperparameter evaluation
-    train_loader = get_cnn_rnn_dataloaders(
-        {"train": dataset["train"]}, batch_size=64, use_prosodic_features=use_prosodic_features
-    )["train"]
+    # Create balanced training dataset
+    print("Creating balanced training dataset for optimization...")
+    balanced_train_dataset = BalancedAugmentedDataset(
+        original_dataset=dataset["train"],
+        total_target_samples=1000,
+        num_classes=3
+    )
     
-    val_loader = get_cnn_rnn_dataloaders(
-        {"validation": dataset["validation"]}, batch_size=64, use_prosodic_features=use_prosodic_features
-    )["validation"]
+    # Update dataset with balanced training set
+    balanced_dataset = {
+        "train": balanced_train_dataset,
+        "validation": dataset["validation"],
+        "test": dataset["test"]
+    }
     
-    # Test set will only be used for final evaluation of the best model
-    test_loader = get_cnn_rnn_dataloaders(
-        {"test": dataset["test"]}, batch_size=64, use_prosodic_features=use_prosodic_features
-    )["test"]
+    # Get dataloaders with balanced training data
+    dataloaders = get_cnn_rnn_dataloaders(
+        balanced_dataset,
+        batch_size=32,
+        use_prosodic_features=use_prosodic_features
+    )
+    
+    train_loader = dataloaders["train"]
+    val_loader = dataloaders["validation"]
+    test_loader = dataloaders["test"]
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -1266,7 +1277,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Create dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=64,
+        batch_size=32,
         use_prosodic_features=use_prosodic_features
     )
     
