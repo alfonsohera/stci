@@ -48,6 +48,7 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
   - `test`: Evaluate a trained model
   - `optimize`: Perform threshold optimization
   - `test_thresholds`: Evaluate with optimized thresholds
+  - `optimize_hpo`: Perform hyperparameter optimization
 
 - **--pipeline**: Model pipeline to use
   - `wav2vec2`: Transformer-based pipeline (default)
@@ -59,6 +60,9 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
 - **--no_manual**: Disable manual features for cnn_rnn pipeline
   - Only applicable to the CNN+RNN pipeline
   - If not specified, manual prosodic features are used
+
+- **--trials**: Number of trials for hyperparameter optimization
+  - Only applicable with the `optimize_hpo` mode
 
 ### Example Commands
 
@@ -87,6 +91,11 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
 5. **Test with optimized thresholds**
    ```bash
    python main.py test_thresholds --pipeline wav2vec2
+   ```
+
+6. **Perform hyperparameter optimization**
+   ```bash
+   python main.py optimize_hpo --pipeline wav2vec2 --trials 50 --online
    ```
 
 #### CNN+RNN Pipeline
@@ -143,6 +152,22 @@ Key characteristics:
 - Optional manual features pathway
 - Balanced augmented dataset for training
 
+## Data Augmentation
+
+The system uses data augmentation via SpecAugment to improve model generalization and address class imbalance:
+
+### Augmentation Techniques
+
+- **SpecAugment**: For spectrograms in the CNN+RNN pipeline
+  - Time masking
+  - Frequency masking
+
+
+### Augmentation Strategy
+
+- Applied during training to underrepresented classes
+- Balanced dataset creation through stratified augmentation
+
 ## Threshold Optimization
 
 Both pipelines support threshold optimization to improve classification performance:
@@ -153,6 +178,25 @@ Both pipelines support threshold optimization to improve classification performa
    - Youden's J statistic (balances sensitivity and specificity)
    - F1-score optimization (balances precision and recall)
 
+## Hyperparameter Optimization
+
+The project implements automated hyperparameter optimization to find the most effective model configurations:
+
+### HPO Approach
+
+- **Optimization Framework**: Uses Optuna for efficient hyperparameter search
+- **Search Strategy**: Implements Bayesian optimization with Tree-structured Parzen Estimator
+- **Objective Function**: Maximizes validation set performance (macro F1-score)
+- **Cross-Validation**: Employs stratified k-fold cross-validation for robust parameter selection
+
+
+### Running HPO
+
+```bash
+python main.py optimize_hpo --pipeline wav2vec2 --trials 50
+python main.py optimize_hpo --pipeline cnn_rnn --trials 50
+```
+
 ## Requirements
 
 The project requires Python 3.8+ and several libraries listed in the environment.yml file. Set up the environment with:
@@ -161,6 +205,8 @@ The project requires Python 3.8+ and several libraries listed in the environment
 conda env create -f environment.yml
 conda activate stci
 ```
+
+The models have been train using an NVIDIA A40 GPU with 48GB of RAM, comparable HW is recommended to avoid running out of memory.
 
 ## Data Structure
 
@@ -177,4 +223,24 @@ Data/
     ├── AD-W-01-001.wav
     └── ...
 ```
+
+## Results and Performance
+
+### Performance Metrics
+
+The system evaluates models using multiple metrics:
+- Accuracy
+- Precision, Recall, F1-score (per class and macro average)
+- Specificity and Sensitivity
+- Confusion matrices
+- ROC-AUC and PR-AUC curves
+
+### Visualization
+
+Performance visualization tools are available in myPlots.py:
+- Confusion matrices
+- ROC curves
+- PR curves
+- Feature importance plots
+- Attention weight visualization (for Wav2Vec2)
 
