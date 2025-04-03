@@ -1002,10 +1002,12 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
         try:
             # Current parameters
             lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
-            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
-            max_lr = trial.suggest_float("max_lr", lr, 1e-2, log=True)
-            pct_start = trial.suggest_float("pct_start", 0.1, 0.5)
-            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 3.0)        
+            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)            
+            max_lr_min = lr * 5
+            max_lr_max = min(lr * 25, 1e-2)  # Cap at 1e-2
+            max_lr = trial.suggest_float("max_lr", max_lr_min, max_lr_max, log=True)
+            pct_start = trial.suggest_float("pct_start", 0.1, 0.4)             
+            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0)                        
             n_mels = trial.suggest_int("n_mels", 64, 256, log=True)
             time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
             freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
