@@ -14,6 +14,9 @@ from main import  log_memory_usage
 from cnn_rnn_data import prepare_cnn_rnn_dataset, get_cnn_rnn_dataloaders
 from torch import nn
 from torch.nn import functional as F
+import optuna
+import wandb
+from optuna.integration.wandb import WeightsAndBiasesCallback
 
 
 class FocalLoss(nn.Module):
@@ -919,13 +922,6 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
 
 def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
-    try:
-        import optuna
-        from optuna.integration.wandb import WeightsAndBiasesCallback
-    except ImportError:
-        print("Required packages not found. Install with: pip install optuna wandb")
-        return None
-    
     from cnn_rnn_model import DualPathAudioClassifier
     import json
     
