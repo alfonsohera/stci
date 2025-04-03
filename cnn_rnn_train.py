@@ -495,9 +495,16 @@ def optimize_cnn_rnn(use_prosodic_features=True):
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
         if use_prosodic_features and "prosodic_features" in batch:
-            logits = model(batch["audio"], batch["prosodic_features"])
+            logits = model(
+                batch["audio"], 
+                audio_lengths=batch["audio_lengths"],  
+                prosodic_features=batch["prosodic_features"]
+            )
         else:
-            logits = model(batch["audio"])
+            logits = model(
+                batch["audio"], 
+                audio_lengths=batch["audio_lengths"]
+            )
         
         # Get probabilities
         probs = torch.softmax(logits, dim=-1)
@@ -514,9 +521,8 @@ def optimize_cnn_rnn(use_prosodic_features=True):
         class_names=class_names,
         output_dir=output_dir,
         use_manual_features=use_prosodic_features,
-        is_cnn_rnn=True,  # Flag to indicate CNN+RNN model
-        log_to_wandb=not myConfig.running_offline,
-        prediction_fn=predict_fn  # Pass custom prediction function
+        is_cnn_rnn=True, 
+        log_to_wandb=not myConfig.running_offline,        
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
