@@ -520,7 +520,7 @@ def optimize_cnn_rnn(use_prosodic_features=True):
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
-        use_manual_features=use_prosodic_features,
+        use_prosodic_features=use_prosodic_features,
         is_cnn_rnn=True, 
         log_to_wandb=not myConfig.running_offline,        
     )

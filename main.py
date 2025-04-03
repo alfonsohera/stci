@@ -433,7 +433,7 @@ def optimize():
         dataloader=val_loader,
         class_names=class_names,
         output_dir=output_dir,
-        use_manual_features=False,
+        use_prosodic_features=False,
         is_cnn_rnn=False,
         log_to_wandb=not myConfig.running_offline
     )

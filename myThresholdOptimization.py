@@ -340,7 +340,7 @@ def optimize_thresholds_for_model(
     dataloader: DataLoader,
     class_names: List[str],
     output_dir: str,
-    use_manual_features: bool = False,
+    use_prosodic_features: bool = False,
     is_cnn_rnn: bool = False,
     log_to_wandb: bool = False
 ) -> Dict[str, float]:
@@ -352,7 +352,7 @@ def optimize_thresholds_for_model(
         dataloader: DataLoader for validation or test data
         class_names: List of class names
         output_dir: Directory to save results
-        use_manual_features: Whether the model uses manual features
+        use_prosodic_features: Whether the model uses prosodic features
         is_cnn_rnn: Whether the model is CNN+RNN type
         log_to_wandb: Whether to log results to wandb
         
@@ -366,7 +366,7 @@ def optimize_thresholds_for_model(
     print("Getting model predictions...")
     y_prob, y_true = get_predictions(
         model, dataloader, 
-        use_manual_features=use_manual_features,
+        use_prosodic_features=use_prosodic_features,
         is_cnn_rnn=is_cnn_rnn
     )
     
@@ -561,7 +561,7 @@ def main():
             dataloader=dataloader,
             class_names=class_names,
             output_dir=args.output_dir,
-            use_manual_features=False,
+            use_prosodic_features=False,
             is_cnn_rnn=False,
             log_to_wandb=args.log_wandb
         )
@@ -590,7 +590,7 @@ def main():
         model = DualPathAudioClassifier(
             num_classes=3,
             sample_rate=16000,
-            use_manual_features=args.use_manual,
+            use_prosodic_features=args.use_manual,
             manual_features_dim=len(myData.extracted_features)
         )
         
@@ -604,7 +604,7 @@ def main():
             dataloader=dataloader,
             class_names=class_names,
             output_dir=args.output_dir,
-            use_manual_features=args.use_manual,
+            use_prosodic_features=args.use_manual,
             is_cnn_rnn=True,
             log_to_wandb=args.log_wandb
         )
