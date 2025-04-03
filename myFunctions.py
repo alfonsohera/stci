@@ -474,7 +474,7 @@ def extract_gpu_features(data_df):
     batch_size = 16  # Ajdust based on GPU memory
     total_files = len(data_df)
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for i in range(0, total_files, batch_size):
             batch_files = data_df.iloc[i:i+batch_size]
             print(f"Processing batch {i//batch_size + 1}/{(total_files + batch_size - 1)//batch_size}")

@@ -243,7 +243,7 @@ class CustomTrainer(Trainer):
         prosodic_features = inputs.pop("prosodic_features").to(device)
         input_values = inputs["input_values"].to(device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model(input_values=input_values, prosodic_features=prosodic_features, labels=labels)
 
         loss = outputs.loss if outputs.loss is not None else None

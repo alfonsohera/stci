@@ -49,14 +49,14 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
         if use_prosodic_features and "prosodic_features" in batch:
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  # Make sure this is passed
+                audio_lengths=batch["audio_lengths"],  
                 prosodic_features=batch["prosodic_features"], 
                 augmentation_id=batch.get("augmentation_id")
             )
         else:
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  # Make sure this is passed
+                audio_lengths=batch["audio_lengths"],  
                 augmentation_id=batch.get("augmentation_id")
             )
             
@@ -327,14 +327,21 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
     all_preds = []
     all_labels = []
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Testing"):
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
             if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(batch["audio"], batch["prosodic_features"])
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],  
+                    prosodic_features=batch["prosodic_features"]
+                )
             else:
-                logits = model(batch["audio"])
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"] 
+                )
                 
             preds = torch.argmax(logits, dim=-1)
             
@@ -585,14 +592,21 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
             all_labels = []
             
             # Collect all predictions and labels
-            with torch.no_grad():
+            with torch.inference_mode():
                 for batch in tqdm(dataloader, desc="Evaluating"):
                     batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
                     
                     if use_prosodic_features and "prosodic_features" in batch:
-                        logits = model(batch["audio"], batch["prosodic_features"])
+                        logits = model(
+                            batch["audio"], 
+                            audio_lengths=batch["audio_lengths"],  
+                            prosodic_features=batch["prosodic_features"]
+                        )
                     else:
-                        logits = model(batch["audio"])
+                        logits = model(
+                            batch["audio"], 
+                            audio_lengths=batch["audio_lengths"] 
+                        )
                     
                     # Get probabilities
                     probs = torch.softmax(logits, dim=-1)

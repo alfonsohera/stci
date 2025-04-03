@@ -24,7 +24,7 @@ from safetensors.torch import load_file
 def get_predictions(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    use_manual_features: bool = False,
+    use_prosodic_features: bool = False,
     is_cnn_rnn: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -33,7 +33,7 @@ def get_predictions(
     Args:
         model: PyTorch model
         dataloader: DataLoader containing validation/test data
-        use_manual_features: Whether the model uses manual features
+        use_prosodic_features: Whether the model uses prosodic features
         is_cnn_rnn: Whether the model is CNN+RNN type
         
     Returns:
@@ -46,15 +46,21 @@ def get_predictions(
     all_probs = []
     all_labels = []
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Getting predictions"):
             # Handle different model architectures
             if is_cnn_rnn:
-                if use_manual_features and "manual_features" in batch:
-                    logits = model(batch["audio"], batch["manual_features"])
+                if use_prosodic_features and "prosodic_features" in batch:
+                    logits = model(
+                        batch["audio"], 
+                        audio_lengths=batch["audio_lengths"],  
+                        prosodic_features=batch["prosodic_features"]
+                    )
                 else:
-                    logits = model(batch["audio"])
-                labels = batch["labels"]
+                    logits = model(
+                        batch["audio"], 
+                        audio_lengths=batch["audio_lengths"] 
+                    )
             else:
                 # Wav2Vec2 type models
                 logits = model(

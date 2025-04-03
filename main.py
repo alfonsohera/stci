@@ -80,7 +80,7 @@ def testModel(model, dataset):
     all_preds = []
     all_labels = []
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(test_loader):
             logits = model(
                 input_values=batch["input_values"],
@@ -124,7 +124,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
     all_probs = []
     all_labels = []
     
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Evaluating"):
             logits = model(
                 input_values=batch["input_values"],

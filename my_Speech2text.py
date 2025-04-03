@@ -60,7 +60,7 @@ def compute_wer_with_transcript(file_path, reference_text, asr_model, processor)
                 # Move to device 
                 input_values = input_values.to(device)                
                 # Process through ASR model
-                with torch.no_grad():
+                with torch.inference_mode():
                     logits = asr_model(input_values).logits                    
                 # Decode predictions
                 predicted_ids = torch.argmax(logits, dim=-1)

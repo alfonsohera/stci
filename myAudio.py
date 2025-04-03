@@ -168,7 +168,7 @@ def separate_with_demucs(file_path, model, device, target_sr=16000):
         waveform = torchaudio.functional.resample(waveform, sr, model.samplerate)
     
     # Separate sources
-    with torch.no_grad():
+    with torch.inference_mode():
         sources = apply_model(model, waveform.unsqueeze(0), device=device)[0]
     
     # Get just the vocals

@@ -577,7 +577,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         # Extract features using the CNN extractor
         print("Extracting features from original and augmented spectrograms...")
         
-        with torch.no_grad():
+        with torch.inference_mode():
             # Prepare original spectrogram for the model (match model's preprocessing)
             # [1, 1, freq, time] - adding channel dimension expected by CNN
             orig_mel_db = log_mel_tensor.unsqueeze(0)  
@@ -870,7 +870,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             # Convert to tensor
             log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
             
-            with torch.no_grad():
+            with torch.inference_mode():
                 # Normalize as in model preprocessing
                 log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
                 
