@@ -1009,8 +1009,8 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
             pct_start = trial.suggest_float("pct_start", 0.1, 0.4)             
             gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0)                        
             n_mels = trial.suggest_int("n_mels", 64, 128, log=True)
-            time_mask_param = trial.suggest_int("time_mask_param", 10, 100)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 100)
+            time_mask_param = trial.suggest_int("time_mask_param", 10, 50)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 50)
             
             trial_history = []
             
