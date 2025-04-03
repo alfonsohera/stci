@@ -1089,19 +1089,22 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
                     model, val_loader, criterion, device, use_prosodic_features
                 )
                 val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
+                # Calculate average batch validation loss 
+                avg_val_loss = val_loss / len(val_loader)
+                            
                 # Append to history 
                 trial_history.append({
                     "epoch": epoch,
                     "train_loss": train_loss,
-                    "val_loss": val_loss,                    
+                    "val_loss": avg_val_loss,
                     "val_f1": val_f1_macro
-                })            
+                })
                 # Log to wandb after each epoch evaluation
                 if wandb.run:
                     wandb.log({
                         f"{trial_name}/epoch": epoch,
                         f"{trial_name}/train_loss": train_loss,
-                        f"{trial_name}/val_loss": val_loss,
+                        f"{trial_name}/val_loss": avg_val_loss,
                         f"{trial_name}/val_f1": val_f1_macro
                     })
                 # Check for pruning
