@@ -962,6 +962,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
             tags=["hpo", "bayesian-optimization", "cnn-rnn"]
         )
     
+    # Create output directory for hyperparameter optimization    
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "hyperparameter_optimization")
+    os.makedirs(output_dir, exist_ok=True)
+    
     # Load and prepare dataset
     print("Loading dataset for hyperparameter optimization...")
     dataset = prepare_cnn_rnn_dataset()
@@ -1079,16 +1083,23 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
                 }
             
             for epoch in range(max_training_epochs):
-                # Train
-                train_loss = train_epoch(
-                    model, train_loader, optimizer, 
-                    criterion, device, scheduler, use_prosodic_features
-                )
-                # Evaluate 
-                val_loss, val_labels, val_preds = evaluate(
-                    model, val_loader, criterion, device, use_prosodic_features
-                )
-                val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
+                try:
+                    # Train
+                    train_loss = train_epoch(
+                        model, train_loader, optimizer, 
+                        criterion, device, scheduler, use_prosodic_features
+                    )
+                    # Evaluate 
+                    val_loss, val_labels, val_preds = evaluate(
+                        model, val_loader, criterion, device, use_prosodic_features
+                    )
+                    val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
+                    # Rest of the code...
+                except Exception as epoch_error:
+                    print(f"Error in epoch {epoch} of trial {trial.number}: {str(epoch_error)}")
+                    if wandb.run:
+                        wandb.log({f"trial_{trial.number}_epoch_{epoch}_error": str(epoch_error)})
+                    raise  # Re-raise to be caught by the outer try/except
                 # Calculate average batch validation loss 
                 avg_val_loss = val_loss / len(val_loader)
                             
@@ -1114,10 +1125,16 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
 
             if val_f1_macro > best_trial_f1:
                 best_trial_f1 = val_f1_macro
+                                
+                trial_model_dir = os.path.join(
+                    myConfig.OUTPUT_PATH, 
+                    "hyperparameter_optimization"
+                )
+                os.makedirs(trial_model_dir, exist_ok=True)
+                
                 # Remove any previous model for this trial if it exists
                 trial_model_path = os.path.join(
-                    myConfig.OUTPUT_PATH, 
-                    "hyperparameter_optimization", 
+                    trial_model_dir, 
                     f"trial_{trial.number}_model.pt"
                 )
                 if os.path.exists(trial_model_path):
@@ -1130,9 +1147,14 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
             gc.collect()
             
             # Store history
-            with open(os.path.join(
+            history_dir = os.path.join(
                 myConfig.OUTPUT_PATH, 
-                "hyperparameter_optimization",
+                "hyperparameter_optimization"
+            )
+            os.makedirs(history_dir, exist_ok=True)  
+
+            with open(os.path.join(
+                history_dir,
                 f"trial_{trial.number}_history.json"
             ), "w") as f:
                 json.dump(trial_history, f)
