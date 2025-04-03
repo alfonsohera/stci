@@ -582,12 +582,17 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
         with open(threshold_results_path, "r") as f:
             threshold_results = json.load(f)
             
-        # We'll test with both Youden and F1 thresholds
+        # test with both Youden and F1 thresholds
         for threshold_type in ["youden", "f1"]:
             print(f"\nTesting with {threshold_type.upper()} thresholds...")
             
-            # Get thresholds for current type
-            thresholds = threshold_results[f"{threshold_type}_thresholds"]
+            # Extract thresholds from the JSON results
+            thresholds = {}
+            for class_name in ["Healthy", "MCI", "AD"]:
+                if threshold_type == "youden":
+                    thresholds[class_name] = threshold_results[class_name]["best_youden"]["threshold"]
+                else:  # f1
+                    thresholds[class_name] = threshold_results[class_name]["best_f1"]["threshold"]
             
             # Run evaluation with thresholds
             device = "cuda" if torch.cuda.is_available() else "cpu"
