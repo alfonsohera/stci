@@ -458,6 +458,8 @@ if __name__ == "__main__":
                         help="Number of folds for cross-validation (default: 5)")
     parser.add_argument("--trials", type=int, default=50,
                         help="Number of trials for hyperparameter optimization (default: 50)")
+    parser.add_argument("--resume", action="store_true", 
+                        help="Resume previous hyperparameter optimization study")
     
     args = parser.parse_args()
     
@@ -538,6 +540,10 @@ if __name__ == "__main__":
         elif args.mode == "hpo":
             if has_threshold_functions:
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
-                run_bayesian_optimization(use_prosodic_features=use_manual, n_trials=args.trials)
+                run_bayesian_optimization(
+                    use_prosodic_features=use_manual, 
+                    n_trials=args.trials,
+                    resume_study=args.resume  # Pass the resume flag
+                )
             else:
                 print("Hyperparameter optimization not implemented. Please check your installation.")
