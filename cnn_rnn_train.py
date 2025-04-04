@@ -942,10 +942,11 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
     return cv_results
 
 
-def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
+def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_study=False):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
     from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
     import json
+    import joblib
     
     # Initialize wandb if not already running
     if not wandb.run:
@@ -1000,17 +1001,21 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     
     def objective(trial):
         try:
+            # Add at the beginning of each trial
+            torch.cuda.empty_cache()
+            gc.collect()
+            
             # Current parameters
-            lr = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
+            lr = trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True)
             weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)            
             max_lr_min = lr * 5
             max_lr_max = min(lr * 25, 1e-2)  # Cap at 1e-2
             max_lr = trial.suggest_float("max_lr", max_lr_min, max_lr_max, log=True)
             pct_start = trial.suggest_float("pct_start", 0.1, 0.4)             
-            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0)                        
-            n_mels = trial.suggest_int("n_mels", 64, 128, log=True)
-            time_mask_param = trial.suggest_int("time_mask_param", 10, 50)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 50)
+            gamma = trial.suggest_float("focal_loss_gamma", 0.5, 2.0)                        
+            n_mels = trial.suggest_int("n_mels", 90, 110, log=True)
+            time_mask_param = trial.suggest_int("time_mask_param", 10, 25)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 70)
             
             trial_history = []
             
@@ -1171,36 +1176,51 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
             
             return best_trial_f1
         except Exception as e:
-            print(f"Trial {trial.number} failed with error: {str(e)}")
-            # Log the error to wandb if available
+            print(f"Trial {trial.number} failed with error: {str(e)}")            
             if wandb.run:
-                wandb.log({f"trial_{trial.number}_error": str(e)})
+                wandb.log({
+                    f"trial_{trial.number}_error": str(e),
+                    f"trial_{trial.number}_error_type": type(e).__name__,
+                    f"trial_{trial.number}_hyperparams": trial.params
+                })
             # Return a very low score to indicate failure
-            return -1.0  # Study is maximizing, so negative value marks failure
+            return -1.0
+    
+    # Define study storage path
+    study_storage_path = os.path.join(
+        myConfig.OUTPUT_PATH, 
+        "hyperparameter_optimization",
+        f"hpo_study_{'with' if use_prosodic_features else 'no'}_manual.pkl"
+    )
     
     # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials...")
     study_name = f"cnn_rnn_{'with' if use_prosodic_features else 'without'}_manual_features"
-        
-    # Pruner that balances exploration and exploitation
-    pruner = optuna.pruners.SuccessiveHalvingPruner(
-        min_resource=1, 
-        reduction_factor=4, 
-        min_early_stopping_rate=0
-    )
+    
+    # Initialize or resume study
+    if resume_study and os.path.exists(study_storage_path):
+        print(f"Resuming study from {study_storage_path}")
+        study = joblib.load(study_storage_path)
+    else:
+        # Pruner that balances exploration and exploitation
+        pruner = optuna.pruners.SuccessiveHalvingPruner(
+            min_resource=1, 
+            reduction_factor=4, 
+            min_early_stopping_rate=0
+        )
 
-    # Sampler for more efficient search
-    sampler = optuna.samplers.TPESampler(seed=42)
+        # Sampler for more efficient search
+        sampler = optuna.samplers.TPESampler(seed=42)
 
+        study = optuna.create_study(
+            study_name=study_name,
+            direction="maximize",
+            pruner=pruner,
+            sampler=sampler
+        )
+    
     wandb_callback = WandbCallback(metric_name="f1_macro")
 
-    study = optuna.create_study(
-        study_name=study_name,
-        direction="maximize",
-        pruner=pruner,
-        sampler=sampler
-    )
-    
     study.optimize(objective, n_trials=n_trials, callbacks=[wandb_callback])
     
     # Get and print best parameters
@@ -1280,6 +1300,11 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50):
     # Train final model with best hyperparameters (optional)
     if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
         train_with_best_hyperparameters(dataset, best_params, use_prosodic_features)
+    
+    # Save study state for possible resumption
+    os.makedirs(os.path.dirname(study_storage_path), exist_ok=True)
+    joblib.dump(study, study_storage_path)
+    print(f"Study state saved to {study_storage_path}")
     
     if wandb.run and wandb.run.name.startswith("hpo_cnn_rnn"):
         wandb.finish()
