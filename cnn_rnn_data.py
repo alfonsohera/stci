@@ -13,41 +13,6 @@ import myFunctions
 import myAudio
 
 
-def prepare_for_cnn_rnn(example):
-    """
-    Convert dataset examples for CNN+RNN model format.    
-    """
-    # Extract raw audio array
-    audio = example["audio"]["array"]
-    
-    # Convert to torch tensor if not already
-    if not isinstance(audio, torch.Tensor):
-        audio = torch.tensor(audio, dtype=torch.float32)
-    
-    # Standardize audio length - 100 seconds at 16kHz
-    max_length = 16000 * 100  # 100 seconds max
-    
-    # Handle as 1D tensor as in the original implementation
-    if len(audio) > max_length:
-        audio = audio[:max_length]
-    elif len(audio) < max_length:
-        padding = torch.zeros(max_length - len(audio), dtype=audio.dtype)
-        audio = torch.cat([audio, padding])
-    
-    # Create list of prosodic features
-    prosodic_features = []
-    for feature in myData.extracted_features:
-        if feature in example:
-            prosodic_features.append(example[feature])
-    
-    # Return updated example with properly formatted audio and prosodic features
-    return {
-        "audio": audio,
-        "prosodic_features": prosodic_features,
-        "label": example["label"]
-    }
-
-
 class CNNRNNDataset(Dataset):
     """Dataset wrapper specifically for CNN+RNN model requirements"""
     def __init__(self, hf_dataset, use_prosodic_features=True):
@@ -244,7 +209,7 @@ def prepare_cnn_rnn_dataset():
         dataset = myData.loadHFDataset()
     
     print("Preparing dataset for CNN+RNN model...")
-    dataset = dataset.map(prepare_for_cnn_rnn)
+    dataset = dataset.map(myData.prepare_for_cnn_rnn)
     
     return dataset
 

@@ -509,7 +509,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         apply_prob=1.0  # Always apply for visualization
     ).to(device)
     
-    # Load the same CNN extractor that your model uses
+    # Load the CNN extractor 
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -540,12 +540,12 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     full_path = os.path.join(audio_root_path, sample_path)
     if not os.path.exists(full_path):
         print(f"File not found: {full_path}")
-        # Try to find the file using alternative methods as in your existing code
+       
         if os.path.exists(sample_path):
             full_path = sample_path
             print(f"Using direct path: {full_path}")
         else:
-            # Try to find the file by basename
+            
             basename = os.path.basename(sample_path)
             for root, _, files in os.walk(audio_root_path):
                 if basename in files:
@@ -558,9 +558,9 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     
     try:
         # Load audio
-        y, sr = librosa.load(full_path, sr=16000)  # Use your model's expected sample rate
+        y, sr = librosa.load(full_path, sr=16000)  
         
-        # Create log mel spectrogram (similar to your model's preprocessing)
+        # Create log mel spectrogram
         mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
         log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
         
@@ -585,6 +585,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
             # Scale to [0,1] range and apply normalization as in your model
             orig_mel_db = (orig_mel_db - orig_mel_db.min()) / (orig_mel_db.max() - orig_mel_db.min() + 1e-6)
             
+            #ToDo: remove these transformations
             # Apply the same transformations as in the model's forward pass
             # Resize to target size (ensure model.target_size is accessible)
             orig_mel_db = F.interpolate(orig_mel_db, size=(384, 384),  # Expected size for EfficientNetV2 
@@ -843,7 +844,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     # Load or create model
     print("Loading feature extraction model...")
     model = DualPathAudioClassifier(
-        num_classes=3,  # Using 3 as defined in your config
+        num_classes=3,  
         sample_rate=16000,
         use_prosodic_features=False,
         apply_specaugment=False
@@ -871,6 +872,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
             
             with torch.inference_mode():
+                #TDO: Remove these transformations
                 # Normalize as in model preprocessing
                 log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
                 
@@ -922,13 +924,13 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         
         for idx, sample in enumerate(tqdm(dataset[split], desc=f"Processing {split}")):
             try:
-                # Check if we have a file_path field directly
+                
                 if 'file_path' in sample:
                     file_path = sample['file_path']
-                # If not, check if it's in an audio field
+                
                 elif 'audio' in sample and isinstance(sample['audio'], dict) and 'path' in sample['audio']:
                     file_path = sample['audio']['path']
-                # Last resort, check for any field that might contain a path
+                
                 else:
                     potential_path_fields = [k for k in sample.keys() if 'path' in k.lower() or 'file' in k.lower()]
                     if potential_path_fields:
@@ -1041,7 +1043,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                                 'similarity': similarity
                             })
     
-    # Analyze within-split similarity for thoroughness (optional but useful)
+    # Analyze within-split similarity for thoroughness
     within_split_similarities = {}
     for split in dataset.keys():
         split_files = [fid for fid, info in file_info.items() if info['split'] == split and fid in features_dict]

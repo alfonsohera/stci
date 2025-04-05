@@ -1006,16 +1006,16 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             gc.collect()
             
             # Current parameters
-            lr = trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True)
-            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)            
+            lr = trial.suggest_float("learning_rate", 1e-4, 3e-4, log=True)
+            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-4, log=True)            
             max_lr_min = lr * 5
             max_lr_max = min(lr * 25, 1e-2)  # Cap at 1e-2
             max_lr = trial.suggest_float("max_lr", max_lr_min, max_lr_max, log=True)
-            pct_start = trial.suggest_float("pct_start", 0.1, 0.4)             
-            gamma = trial.suggest_float("focal_loss_gamma", 0.5, 2.0)                        
-            n_mels = trial.suggest_int("n_mels", 90, 110, log=True)
-            time_mask_param = trial.suggest_int("time_mask_param", 10, 25)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 70)
+            pct_start = trial.suggest_float("pct_start", 0.25, 0.35)             
+            gamma = trial.suggest_float("focal_loss_gamma", 0.6, 0.85)                        
+            n_mels = trial.suggest_int("n_mels", 100, 110, log=True)
+            time_mask_param = trial.suggest_int("time_mask_param", 8, 15)  
+            freq_mask_param = trial.suggest_int("freq_mask_param", 45, 65) 
             
             trial_history = []
             
@@ -1204,8 +1204,8 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     else:
         # Pruner that balances exploration and exploitation
         pruner = optuna.pruners.SuccessiveHalvingPruner(
-            min_resource=1, 
-            reduction_factor=4, 
+            min_resource=2,
+            reduction_factor=3,
             min_early_stopping_rate=0
         )
 

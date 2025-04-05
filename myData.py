@@ -278,33 +278,33 @@ def createHFDatasets(train_df, val_df, test_df):
 
 
 def prepare_for_cnn_rnn(example):
-    """Prepares dataset examples for CNN+RNN model - more efficiently"""
+    """
+    Convert dataset examples for CNN+RNN model format.    
+    """
+    # Extract raw audio array
+    audio = example["audio"]["array"]
     
-    # Create tensor directly without intermediate steps
-    prosodic_features = torch.tensor([
-        example["num_pauses"],
-        example["total_pause_duration"],
-        example["phonation_time"],
-        example["shimmer_local"],
-        example["skewness"],
-        example["centre_of_gravity"],
-        example["wer"]
-    ], dtype=torch.float32)
+    # Convert to torch tensor if not already
+    if not isinstance(audio, torch.Tensor):
+        audio = torch.tensor(audio, dtype=torch.float32)
     
-    # Process raw audio more efficiently
-    if isinstance(example["audio"]["array"], np.ndarray):
-        audio = torch.tensor(example["audio"]["array"], dtype=torch.float32)
-    else:
-        audio = example["audio"]["array"]
+    # Standardize audio length - 100 seconds at 16kHz
+    max_length = 16000 * 100  # 100 seconds max
     
-    max_length = 16000 * 10  # 10 seconds max
+    # Handle as 1D tensor as in the original implementation
     if len(audio) > max_length:
         audio = audio[:max_length]
     elif len(audio) < max_length:
-        # More efficient padding operation
         padding = torch.zeros(max_length - len(audio), dtype=audio.dtype)
         audio = torch.cat([audio, padding])
-
+    
+    # Create list of prosodic features
+    prosodic_features = []
+    for feature in extracted_features:
+        if feature in example:
+            prosodic_features.append(example[feature])
+    
+    # Return updated example with properly formatted audio and prosodic features
     return {
         "audio": audio,
         "prosodic_features": prosodic_features,
