@@ -118,16 +118,23 @@ class DualPathAudioClassifier(nn.Module):
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             
-            # Feature dimension reducer
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Dropout(0.4)
+            # MLP layer
+            nn.Sequential(
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(128, 64),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(64, 256),
+                nn.Dropout(0.4)
+            )
         )
        
         # RNN path for raw audio
         self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)
-        
-        
+               
         self.rnn = nn.GRU(
             input_size=8,
             hidden_size=128,  
@@ -141,10 +148,13 @@ class DualPathAudioClassifier(nn.Module):
         self.use_prosodic_features = use_prosodic_features
         if use_prosodic_features:
             self.prosodic_feature_mlp = nn.Sequential(
-                nn.Linear(prosodic_features_dim, 64),
+                nn.Linear(prosodic_features_dim, 32),
+                nn.BatchNorm1d(32),
                 nn.ReLU(),
                 nn.Dropout(0.2),
-                nn.Linear(64, 32)
+                nn.Linear(32, 32),
+                nn.ReLU(),
+                nn.Dropout(0.2)
             )
             fusion_input_dim = 256 + 256 + 32  
         else:
