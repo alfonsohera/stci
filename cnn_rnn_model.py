@@ -124,10 +124,7 @@ class DualPathAudioClassifier(nn.Module):
                 nn.BatchNorm1d(128),
                 nn.ReLU(),
                 nn.Dropout(0.3),
-                nn.Linear(128, 64),
-                nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(64, 256),
+                nn.Linear(128, 256),
                 nn.Dropout(0.4)
             )
         )

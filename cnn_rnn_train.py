@@ -989,7 +989,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     # Get dataloaders with balanced training data
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset,
-        batch_size=32,
+        batch_size=64,
         use_prosodic_features=use_prosodic_features
     )
     
@@ -1005,15 +1005,17 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             torch.cuda.empty_cache()
             gc.collect()
             
-            # Current parameters
-            lr = trial.suggest_float("learning_rate", 0.0001, 0.0004, log=True)  
-            weight_decay = trial.suggest_float("weight_decay", 5e-5, 2e-4, log=True)            
-            max_lr = trial.suggest_float("max_lr", 0.001, 0.003, log=True)
-            pct_start = trial.suggest_float("pct_start", 0.28, 0.35)  
-            gamma = trial.suggest_float("focal_loss_gamma", 0.5, 0.8) 
-            n_mels = trial.suggest_int("n_mels", 95, 115)  
-            time_mask_param = trial.suggest_int("time_mask_param", 7, 12)  
-            freq_mask_param = trial.suggest_int("freq_mask_param", 55, 70) 
+            # Focus HPO on learning dynamics parameters
+            lr = trial.suggest_float("learning_rate", 0.00005, 0.0005, log=True)  
+            weight_decay = trial.suggest_float("weight_decay", 1e-5, 5e-4, log=True)            
+            max_lr = trial.suggest_float("max_lr", 0.0007, 0.007, log=True)
+            
+            # Fix other parameters to best values from previous HPO
+            pct_start = 0.3031315684459232  # Best from previous HPO
+            gamma = 0.7927673024435109      # Best from previous HPO
+            n_mels = 110                    # Best from previous HPO
+            time_mask_param = 9             # Best from previous HPO
+            freq_mask_param = 66            # Best from previous HPO
             
             trial_history = []
             
@@ -1059,7 +1061,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             
             # Calculate total steps for shorter training (3 epochs)
             n_batches = len(train_loader)
-            n_epochs = 5  # Number of epochs for HPO
+            n_epochs = 4  # Number of epochs for HPO
             total_steps = n_batches * n_epochs
             
             # Create scheduler with trial hyperparameters
