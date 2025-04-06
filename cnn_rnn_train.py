@@ -65,7 +65,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
     
     for i, batch in enumerate(tqdm(train_loader, desc="Training")):
         # Move batch to GPU if available
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
         # Zero gradients more efficiently
         optimizer.zero_grad()
@@ -102,7 +102,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
         del logits_detached
         
         # Periodic garbage collection 
-        if i % 10 == 0:  # Less frequent to reduce overhead
+        if i % 50 == 0:  # Less frequent to reduce overhead
             gc.collect()
             
     # Explicit cleanup after training phase
@@ -124,7 +124,7 @@ def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
     
     with torch.inference_mode():
         for batch in tqdm(val_loader, desc="Validation"):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
             if use_prosodic_features and "prosodic_features" in batch:
                 logits = model(
@@ -1018,19 +1018,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             freq_mask_param = 66            # Best from previous HPO
             
             trial_history = []
-            
-            """ dropout = trial.suggest_float("dropout", 0.0, 0.5)
-            rnn_hidden_size = trial.suggest_int("rnn_hidden_size", 64, 256)
-            rnn_num_layers = trial.suggest_int("rnn_num_layers", 1, 3)
-            rnn_type = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
-            
-            # Class weighting for focal loss
-            use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
-            
-            # For CNN path complexity
-            cnn_channels = trial.suggest_int("cnn_channels", 16, 64)
-            cnn_layers = trial.suggest_int("cnn_layers", 2, 4) """
-            
+                                    
             # Create model with trial hyperparameters
             model = DualPathAudioClassifier(
                 num_classes=3,
