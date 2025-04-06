@@ -978,7 +978,8 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
         total_target_samples=1000,
         num_classes=3
     )
-    
+    balanced_train_dataset.print_distribution_stats()
+
     # Update dataset with balanced training set
     balanced_dataset = {
         "train": balanced_train_dataset,
@@ -1000,8 +1001,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     def objective(trial):
-        try:
-            # Add at the beginning of each trial
+        try:            
             torch.cuda.empty_cache()
             gc.collect()
             
@@ -1049,7 +1049,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             
             # Calculate total steps for shorter training (3 epochs)
             n_batches = len(train_loader)
-            n_epochs = 4  # Number of epochs for HPO
+            n_epochs = 10  # Number of epochs for HPO
             total_steps = n_batches * n_epochs
             
             # Create scheduler with trial hyperparameters
