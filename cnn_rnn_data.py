@@ -147,7 +147,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
         batch_size=batch_size,
         collate_fn=collate_fn_cnn_rnn,
         shuffle=True,
-        num_workers=2,  
+        num_workers=4,  
         pin_memory=True  
     )
     
