@@ -989,7 +989,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     # Get dataloaders with balanced training data
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset,
-        batch_size=64,
+        batch_size=96,
         use_prosodic_features=use_prosodic_features
     )
     

@@ -156,7 +156,8 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
         batch_size=batch_size,
         collate_fn=collate_fn_cnn_rnn,
         shuffle=False,
-        num_workers=0
+        num_workers=4,  
+        pin_memory=True 
     )
     
     test_loader = DataLoader(
@@ -164,7 +165,8 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
         batch_size=batch_size,
         collate_fn=collate_fn_cnn_rnn,
         shuffle=False,
-        num_workers=0
+        num_workers=4,  
+        pin_memory=True 
     )
     
     return {
