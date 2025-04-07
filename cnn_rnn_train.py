@@ -454,19 +454,57 @@ def test_cnn_rnn_model(model, test_loader):
     all_preds = []
     all_labels = []
     
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Testing"):
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            logits = model(
-                batch["audio"], 
-                audio_lengths=batch["audio_lengths"] 
-            )
-                
-            preds = torch.argmax(logits, dim=-1)
+            # Extract audio_ids if available
+            audio_ids = batch.get("audio_id", None)
             
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(batch["labels"].cpu().numpy())
+            # If no audio_ids, process normally (no chunking)
+            if audio_ids is None:
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"]
+                )
+                
+                preds = torch.argmax(logits, dim=-1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(batch["labels"].cpu().numpy())
+            else:
+                # Process batches with audio_ids for chunking
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"]
+                )
+                
+                # Store chunks by audio_id
+                for j, audio_id in enumerate(audio_ids):
+                    if audio_id not in audio_chunks:
+                        audio_chunks[audio_id] = []
+                        # Store the label for this audio
+                        audio_labels[audio_id] = batch["labels"][j]
+                    
+                    # Store the logits for this chunk
+                    audio_chunks[audio_id].append(logits[j])
+    
+    # Process all remaining audios after going through the entire dataset
+    if audio_chunks:
+        for audio_id, chunk_outputs in audio_chunks.items():
+            # Aggregate predictions from all chunks
+            aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+            
+            # Get label for this audio
+            label = audio_labels[audio_id]
+            
+            # Get prediction from aggregated output
+            pred = torch.argmax(aggregated_output)
+            all_preds.append(pred.cpu().numpy())
+            all_labels.append(label.cpu().numpy())
     
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
@@ -685,21 +723,60 @@ def test_cnn_rnn_with_thresholds():
             all_probs = []
             all_labels = []
             
-            # Collect all predictions and labels
+            # Dictionary to track chunks by audio_id
+            audio_chunks = {}
+            audio_labels = {}
+
             with torch.inference_mode():
                 for batch in tqdm(dataloader, desc="Evaluating"):
                     batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
                     
-                    logits = model(
-                        batch["audio"], 
-                        audio_lengths=batch["audio_lengths"]
-                    )
+                    # Extract audio_ids if available
+                    audio_ids = batch.get("audio_id", None)
                     
-                    # Get probabilities
-                    probs = torch.softmax(logits, dim=-1)
+                    # If no audio_ids, process normally (no chunking)
+                    if audio_ids is None:
+                        logits = model(
+                            batch["audio"], 
+                            audio_lengths=batch["audio_lengths"]
+                        )
+                        
+                        # Get probabilities
+                        probs = torch.softmax(logits, dim=-1)
+                        
+                        all_probs.append(probs.cpu().numpy())
+                        all_labels.append(batch["labels"].cpu().numpy())
+                    else:
+                        # Process batches with audio_ids for chunking
+                        logits = model(
+                            batch["audio"], 
+                            audio_lengths=batch["audio_lengths"]
+                        )
+                        
+                        # Store chunks by audio_id
+                        for j, audio_id in enumerate(audio_ids):
+                            if audio_id not in audio_chunks:
+                                audio_chunks[audio_id] = []
+                                # Store the label for this audio
+                                audio_labels[audio_id] = batch["labels"][j]
+                            
+                            # Store the logits for this chunk
+                            audio_chunks[audio_id].append(logits[j])
+
+            # Process all remaining audios after going through the entire dataset
+            if audio_chunks:
+                for audio_id, chunk_outputs in audio_chunks.items():
+                    # Aggregate predictions from all chunks
+                    aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
                     
-                    all_probs.append(probs.cpu().numpy())
-                    all_labels.append(batch["labels"].cpu().numpy())
+                    # Get label for this audio
+                    label = audio_labels[audio_id]
+                    
+                    # Get probabilities from aggregated output
+                    probs = torch.softmax(aggregated_output, dim=-1)
+                    
+                    all_probs.append(probs.cpu().numpy().reshape(1, -1))
+                    all_labels.append(label.cpu().numpy().reshape(1))
             
             # Convert to numpy arrays
             all_probs = np.vstack(all_probs)

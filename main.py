@@ -508,12 +508,12 @@ if __name__ == "__main__":
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn(use_prosodic_features=use_manual)
+            test_cnn_rnn()
         elif args.mode == "optimize":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Running threshold optimization (CNN+RNN pipeline {feature_text} manual features)...")
-                optimize_cnn_rnn(use_prosodic_features=use_manual)
+                optimize_cnn_rnn()
             else:
                 print("Threshold optimization not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold optimization.")
@@ -521,21 +521,20 @@ if __name__ == "__main__":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Testing with optimized thresholds (CNN+RNN pipeline {feature_text} manual features)...")
-                test_cnn_rnn_with_thresholds(use_prosodic_features=use_manual)
+                test_cnn_rnn_with_thresholds()
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
         elif args.mode == "cv":
             if has_threshold_functions:
                 print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
-                run_cross_validation(use_prosodic_features=use_manual, n_folds=args.folds)
+                run_cross_validation(, n_folds=args.folds)
             else:
                 print("Cross-validation not implemented. Please check your installation.")
         elif args.mode == "hpo":
             if has_threshold_functions:
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
-                run_bayesian_optimization(
-                    use_prosodic_features=use_manual, 
+                run_bayesian_optimization(                     
                     n_trials=args.trials,
                     resume_study=args.resume  # Pass the resume flag
                 )
