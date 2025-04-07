@@ -272,8 +272,10 @@ class DualPathAudioClassifier(nn.Module):
         else:
             # Already in correct format [B, 1, T]
             audio_mono = audio
-        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 8, T/25]        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
-        
+        # Downsample audio for attention path
+        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 8, T/25]
+        # Transpose to match positional embedding dimensions
+        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
         # Add positional embeddings
         seq_len = audio_downsampled.shape[1]
         audio_downsampled = audio_downsampled + self.position_embedding[:, :seq_len, :]
