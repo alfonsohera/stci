@@ -57,7 +57,7 @@ Get model predictions and true labels from a dataloader.
                     for k, v in batch.items()}
             
             # Extract audio_ids if available
-            audio_ids = batch.get("audio_ids", None)
+            audio_ids = batch.get("audio_id", None)
             
             # If no audio_ids, process normally (no chunking)
             if audio_ids is None:

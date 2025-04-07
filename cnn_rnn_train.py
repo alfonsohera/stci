@@ -72,7 +72,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
         batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
         # Extract audio_ids if available
-        audio_ids = batch.get("audio_ids", None)
+        audio_ids = batch.get("audio_id", None)
         
         # If no audio_ids, process normally (no chunking)
         if audio_ids is None:
@@ -456,7 +456,7 @@ def test_cnn_rnn_model(model, test_loader):
     
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Testing"):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
             logits = model(
                 batch["audio"], 
@@ -688,7 +688,7 @@ def test_cnn_rnn_with_thresholds():
             # Collect all predictions and labels
             with torch.inference_mode():
                 for batch in tqdm(dataloader, desc="Evaluating"):
-                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                    batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
                     
                     logits = model(
                         batch["audio"], 
@@ -813,6 +813,7 @@ def run_cross_validation(n_folds=5):
     import numpy as np
     import json
     
+    cv_epochs = 10
     print(f"Running {n_folds}-fold cross-validation...")
     
     # Load and prepare dataset
@@ -883,7 +884,7 @@ def run_cross_validation(n_folds=5):
         )
         
         # Calculate total steps for 1cycle scheduler
-        total_steps = len(fold_dataloaders["train"]) * 5  # Use 5 epochs for CV
+        total_steps = len(fold_dataloaders["train"]) * cv_epochs  # Use 5 epochs for CV
         
         # 1cycle LR scheduler
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -902,7 +903,7 @@ def run_cross_validation(n_folds=5):
         fold_best_metrics = {}
         
         print(f"Training fold {fold_idx+1}...")
-        for epoch in range(5):  # 5 epochs per fold
+        for epoch in range(cv_epochs):  # 5 epochs per fold
             # Train
             train_loss = train_epoch(
                 fold_model, fold_dataloaders["train"], optimizer, 
