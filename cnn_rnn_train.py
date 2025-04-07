@@ -478,7 +478,7 @@ def test_cnn_rnn_model(model, test_loader):
     print(report)
 
 
-def main_cnn_rnn():
+def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
     from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
     
