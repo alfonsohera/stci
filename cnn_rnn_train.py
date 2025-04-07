@@ -165,10 +165,10 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             config={
                 "model_type": "CNN+RNN",
                 "use_prosodic_features": use_prosodic_features,
-                "learning_rate": 1e-4,
+                "learning_rate": 2e-4,
                 "epochs": num_epochs,
-                "batch_size": 32,
-                "weight_decay": 5e-4,
+                "batch_size": 96,
+                "weight_decay": 5.47e-5,
                 "prosodic_features_dim": len(myData.extracted_features) if use_prosodic_features else 0
             }
         )
@@ -178,13 +178,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             wandb.watch(model, log="all", log_freq=100)
 
     # Set up the loss function with default weighting
-    criterion = FocalLoss(gamma=0, weight=None)
-    
+    criterion = FocalLoss(gamma=0.8, weight=None)
+
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=2e-5,            # Starting LR (will be scaled by OneCycleLR)
-        weight_decay=0.01,  # L2 regularization
+        lr=2e-4,            # Starting LR (will be scaled by OneCycleLR)
+        weight_decay=5.47e-5,  # L2 regularization
         betas=(0.9, 0.999)  # Default Adam betas
     )
     
@@ -194,7 +194,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
     # 1cycle LR scheduler with optimized parameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=5e-4,           
+        max_lr=6e-3,           
         total_steps=total_steps,
         pct_start=0.3,          # Warm up for 30% of training
         div_factor=25,          # Initial LR = max_lr/25
@@ -414,7 +414,7 @@ def main_cnn_rnn(use_prosodic_features=True):
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=32,
+        batch_size=96,
         use_prosodic_features=use_prosodic_features
     )
     
