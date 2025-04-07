@@ -115,6 +115,56 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
     return avg_train_loss
 
 
+def train_epoch_amp(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True, scaler=None):
+    """Train with mixed precision."""
+    model.train()
+    train_loss = 0.0
+    
+    for i, batch in enumerate(tqdm(train_loader, desc="Training")):
+        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        
+        optimizer.zero_grad()
+        
+        # Forward pass with autocast for mixed precision
+        with torch.cuda.amp.autocast():
+            if use_prosodic_features and "prosodic_features" in batch:
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],  
+                    prosodic_features=batch["prosodic_features"], 
+                    augmentation_id=batch.get("augmentation_id")
+                )
+            else:
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],  
+                    augmentation_id=batch.get("augmentation_id")
+                )
+                
+            loss = criterion(logits, batch["labels"].to(device))
+        
+        # Scale loss and backward
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        scheduler.step()
+        train_loss += loss.item()
+        
+        # Cleanup with less frequency (every 50 batches)
+        logits_detached = logits.detach()
+        del logits, loss, batch
+        del logits_detached
+        
+        if i % 50 == 0:
+            gc.collect()
+            
+    torch.cuda.empty_cache()
+    gc.collect()
+    
+    return train_loss / len(train_loader)
+
+
 def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
     """Evaluate the model on validation data."""
     model.eval()
@@ -1006,9 +1056,9 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             gc.collect()
             
             # Focus HPO on learning dynamics parameters
-            lr = trial.suggest_float("learning_rate", 0.00005, 0.0005, log=True)  
+            lr = trial.suggest_float("learning_rate", 0.00008, 0.0003, log=True)  
             weight_decay = trial.suggest_float("weight_decay", 1e-5, 5e-4, log=True)            
-            max_lr = trial.suggest_float("max_lr", 0.0007, 0.007, log=True)
+            max_lr = trial.suggest_float("max_lr", 0.0001, 0.003, log=True)
             
             # Fix other parameters to best values from previous HPO
             pct_start = 0.3031315684459232  # Best from previous HPO
@@ -1064,7 +1114,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
                 three_phase=False
             )
             
-            # Short training loop 
+            # Add mixed precision training to accelerate trials
+            scaler = torch.cuda.amp.GradScaler()
+
+            # training loop  length
             max_training_epochs = n_epochs
             
             best_trial_f1 = 0.0
@@ -1080,9 +1133,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             for epoch in range(max_training_epochs):
                 try:
                     # Train
-                    train_loss = train_epoch(
+                    train_loss = train_epoch_amp(
                         model, train_loader, optimizer, 
-                        criterion, device, scheduler, use_prosodic_features
+                        criterion, device, scheduler, 
+                        use_prosodic_features, scaler
                     )
                     # Evaluate 
                     val_loss, val_labels, val_preds = evaluate(
@@ -1191,10 +1245,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
         study = joblib.load(study_storage_path)
     else:
         # Pruner that balances exploration and exploitation
-        pruner = optuna.pruners.SuccessiveHalvingPruner(
-            min_resource=2,
-            reduction_factor=3,
-            min_early_stopping_rate=0
+        pruner = optuna.pruners.MedianPruner(
+            n_startup_trials=5,  # Don't prune the first 5 trials
+            n_warmup_steps=3,    # Don't prune before 3 epochs
+            interval_steps=1
         )
 
         # Sampler for more efficient search
