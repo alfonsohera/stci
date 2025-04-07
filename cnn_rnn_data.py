@@ -61,38 +61,54 @@ class CNNRNNDataset(Dataset):
     def __init__(self, hf_dataset, chunk_size_seconds=5):
         self.dataset = hf_dataset        
         self.chunk_size_seconds = chunk_size_seconds
+        self.dataset_length = len(hf_dataset)
         
-        # Always create chunk-based indices
-        self._create_chunk_indices()
+        # Lazy initialization of chunk indices
+        self.chunk_indices = None
     
-    def _create_chunk_indices(self):
-        """Create mapping from chunk index to (dataset_idx, chunk_idx)"""
+    def _lazy_create_chunk_indices(self):
+        """Create mapping from chunk index to (dataset_idx, chunk_idx) on first access"""
+        if self.chunk_indices is not None:
+            return
+            
         self.chunk_indices = []
         
-        for dataset_idx in range(len(self.dataset)):
-            item = self.dataset[dataset_idx]
+        # Process in batches to avoid excessive memory usage
+        batch_size = 32
+        for batch_start in range(0, self.dataset_length, batch_size):
+            batch_end = min(batch_start + batch_size, self.dataset_length)
             
-            # Ensure audio is a tensor
-            if not isinstance(item["audio"], torch.Tensor):
-                audio = torch.tensor(item["audio"], dtype=torch.float32)
-            else:
-                audio = item["audio"]
+            # Process each item in batch
+            for dataset_idx in range(batch_start, batch_end):
+                # Get the item
+                item = self.dataset[dataset_idx]
                 
-            # Add channel dimension if missing
-            if len(audio.shape) == 1:
-                audio = audio.unsqueeze(0)  # [C, L]
+                # Process audio
+                if not isinstance(item["audio"], torch.Tensor):
+                    audio = torch.tensor(item["audio"], dtype=torch.float32)
+                else:
+                    audio = item["audio"]
+                    
+                # Add channel dimension if missing
+                if len(audio.shape) == 1:
+                    audio = audio.unsqueeze(0)
+                    
+                # Chunk the audio
+                chunks = chunk_audio(audio, self.chunk_size_seconds)
                 
-            # Chunk the audio
-            chunks = chunk_audio(audio, self.chunk_size_seconds)
-            
-            # Add mapping for each chunk
-            for chunk_idx in range(len(chunks)):
-                self.chunk_indices.append((dataset_idx, chunk_idx))
+                # Add mapping for each chunk
+                for chunk_idx in range(len(chunks)):
+                    self.chunk_indices.append((dataset_idx, chunk_idx))
     
     def __len__(self):
+        # Initialize chunk indices if not done yet
+        self._lazy_create_chunk_indices()
         return len(self.chunk_indices)
     
     def __getitem__(self, idx):
+        # Initialize chunk indices if not done yet
+        self._lazy_create_chunk_indices()
+        
         # Get original item index and chunk index
         dataset_idx, chunk_idx = self.chunk_indices[idx]
         item = self.dataset[dataset_idx]
@@ -105,17 +121,21 @@ class CNNRNNDataset(Dataset):
             
         # Add channel dimension if missing
         if len(audio.shape) == 1:
-            audio = audio.unsqueeze(0)  # [C, L]
+            audio = audio.unsqueeze(0)
             
         # Get the specified chunk
         chunks = chunk_audio(audio, self.chunk_size_seconds)
-        audio = chunks[chunk_idx]
+        audio = chunks[chunk_idx] if chunk_idx < len(chunks) else chunks[0]
         
         result = {
             "audio": audio,
             "label": item["label"],
             "original_idx": dataset_idx
         }
+        
+        # Add audio_id for chunk handling
+        audio_id = f"{dataset_idx}_{chunk_idx}"
+        result["audio_id"] = audio_id
                 
         return result
 
