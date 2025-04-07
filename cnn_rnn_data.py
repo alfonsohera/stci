@@ -13,7 +13,7 @@ import myFunctions
 import myAudio
 
 
-def chunk_audio(audio, chunk_size_seconds=5, sample_rate=16000):
+def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000):
     """
     Split audio into fixed-size chunks of specified duration
     
@@ -59,7 +59,7 @@ def chunk_audio(audio, chunk_size_seconds=5, sample_rate=16000):
 class CNNRNNDataset(Dataset):
     """Dataset wrapper specifically for CNN+RNN model with fixed chunk size
     that works with standard PyTorch datasets."""
-    def __init__(self, dataset, chunk_size_seconds=5, sample_rate=16000):
+    def __init__(self, dataset, chunk_size_seconds=10, sample_rate=16000):
         self.dataset = dataset        
         self.chunk_size_seconds = chunk_size_seconds
         self.sample_rate = sample_rate
@@ -135,7 +135,7 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=5):
+def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     """
     Creates dataloaders using the PyTorch dataset approach instead of HuggingFace.
     
@@ -355,23 +355,3 @@ def prepare_cnn_rnn_dataset():
     }
     save_pytorch_dataset(dataset, pytorch_dataset_path)
     return dataset
-
-
-def load_waveform_from_file(file_path, target_sr=16000, max_duration=10.0, chunk_size_seconds=5):
-    """
-    Load and preprocess audio waveform from file for CNN+RNN model.
-    Handles resampling, normalization, and chunks the audio into fixed-size segments.
-    """
-    # Load audio
-    waveform, sr = myAudio.load_audio(file_path)
-    
-    # Convert to tensor
-    if not isinstance(waveform, torch.Tensor):
-        waveform = torch.tensor(waveform, dtype=torch.float32)
-    
-    # Add channel dimension if missing
-    if len(waveform.shape) == 1:
-        waveform = waveform.unsqueeze(0)  # [C, L]
-    
-    # Always chunk the audio
-    return chunk_audio(waveform, chunk_size_seconds, target_sr)
