@@ -740,7 +740,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
                       xticklabels=class_names, yticklabels=class_names, ax=ax2)
             ax2.set_xlabel('Predicted labels') 
             ax2.set_ylabel('True labels')
-            ax2.setTitle(f'Threshold Confusion Matrix ({threshold_type})')
+            ax2.set_title(f'Threshold Confusion Matrix ({threshold_type})')
             
             # Save the plot
             output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_comparison", "cnn_rnn")
