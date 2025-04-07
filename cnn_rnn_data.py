@@ -190,7 +190,8 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
         num_workers=4,  
         pin_memory=True 
     )
-    
+    print(f"Original validation set size: {len(dataset_dict['validation'])} recordings")
+    print(f"After chunking: {len(val_dataset)} chunks")
     return {
         "train": train_loader,
         "validation": val_loader,
