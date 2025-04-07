@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
-import gc
+import librosa
 
 # Local imports
 import myConfig
@@ -261,6 +261,7 @@ class PreloadedAudioDataset(Dataset):
     def __getitem__(self, idx):
         return self.samples[idx]
 
+
 class CachedAudioDataset(Dataset):
     """PyTorch dataset that uses cached audio samples."""
     def __init__(self, samples):
@@ -271,6 +272,7 @@ class CachedAudioDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.samples[idx]
+
 
 def save_pytorch_dataset(dataset_dict, save_path):
     """Save PyTorch datasets to disk."""
