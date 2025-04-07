@@ -472,7 +472,12 @@ class BalancedAugmentedDataset(Dataset):
                 for i in range(len(self.sample_indices)):
                     try:
                         original_idx = int(self.sample_indices[i])
-                        sample = self.original_dataset[original_idx]
+                        if self._is_hf_dataset:
+                            # Use select for HuggingFace datasets
+                            sample = self.original_dataset.select([original_idx])[0]
+                        else:
+                            # Use direct indexing for other dataset types
+                            sample = self.original_dataset[original_idx]
                         if isinstance(sample, dict) and idx in sample:
                             all_values.append(sample[idx])
                         else:
@@ -503,7 +508,12 @@ class BalancedAugmentedDataset(Dataset):
                     return self.sample_cache[cache_key]
             
             # Get the sample from the original dataset
-            sample = self.original_dataset[original_idx]
+            if self._is_hf_dataset:
+                # Use select method for HuggingFace datasets which is more reliable
+                sample = self.original_dataset.select([original_idx])[0]
+            else:
+                # Use direct indexing for other dataset types
+                sample = self.original_dataset[original_idx]
             
             # Process the sample based on its format
             if isinstance(sample, dict):

@@ -140,17 +140,6 @@ def collate_fn_cnn_rnn(batch):
     if "original_idx" in batch[0]:
         result["original_idx"] = [item["original_idx"] for item in batch]
     
-    # Add prosodic features if present
-    if "prosodic_features" in batch[0]:
-        features_list = []
-        for item in batch:
-            pf = item["prosodic_features"]
-            if not isinstance(pf, torch.Tensor):
-                pf = torch.tensor(pf, dtype=torch.float32)
-            features_list.append(pf)
-        
-        result["prosodic_features"] = torch.stack(features_list)
-    
     # Pass augmentation IDs if present
     if "augmentation_id" in batch[0]:
         result["augmentation_id"] = [item.get("augmentation_id") for item in batch]
