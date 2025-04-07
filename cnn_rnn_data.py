@@ -57,78 +57,46 @@ def chunk_audio(audio, chunk_size_seconds=5, sample_rate=16000):
 
 
 class CNNRNNDataset(Dataset):
-    """Dataset wrapper specifically for CNN+RNN model requirements with fixed chunk size"""
-    def __init__(self, hf_dataset, chunk_size_seconds=5):
-        self.dataset = hf_dataset        
+    """Dataset wrapper specifically for CNN+RNN model with fixed chunk size
+    that works with standard PyTorch datasets."""
+    def __init__(self, dataset, chunk_size_seconds=5, sample_rate=16000):
+        self.dataset = dataset        
         self.chunk_size_seconds = chunk_size_seconds
-        self.dataset_length = len(hf_dataset)
+        self.sample_rate = sample_rate
         
-        # Lazy initialization of chunk indices
-        self.chunk_indices = None
-    
-    def _lazy_create_chunk_indices(self):
-        """Create mapping from chunk index to (dataset_idx, chunk_idx) on first access"""
-        if self.chunk_indices is not None:
-            return
-            
+        # Precompute chunk indices (how many chunks per file)
         self.chunk_indices = []
-        
-        # Process in batches to avoid excessive memory usage
-        batch_size = 32
-        for batch_start in range(0, self.dataset_length, batch_size):
-            batch_end = min(batch_start + batch_size, self.dataset_length)
+        print("Computing chunk indices...")
+        for idx in tqdm(range(len(dataset)), desc="Calculating chunks"):
+            item = dataset[idx]
+            audio = item["audio"]
             
-            # Process each item in batch
-            for dataset_idx in range(batch_start, batch_end):
-                # Get the item
-                item = self.dataset[dataset_idx]
+            # Get number of chunks for this audio
+            chunks = chunk_audio(audio, self.chunk_size_seconds, self.sample_rate)
+            
+            # Store mapping from chunk index to dataset index
+            for chunk_idx in range(len(chunks)):
+                self.chunk_indices.append((idx, chunk_idx))
                 
-                # Process audio
-                if not isinstance(item["audio"], torch.Tensor):
-                    audio = torch.tensor(item["audio"], dtype=torch.float32)
-                else:
-                    audio = item["audio"]
-                    
-                # Add channel dimension if missing
-                if len(audio.shape) == 1:
-                    audio = audio.unsqueeze(0)
-                    
-                # Chunk the audio
-                chunks = chunk_audio(audio, self.chunk_size_seconds)
-                
-                # Add mapping for each chunk
-                for chunk_idx in range(len(chunks)):
-                    self.chunk_indices.append((dataset_idx, chunk_idx))
+        print(f"Created dataset with {len(self.chunk_indices)} chunks from {len(dataset)} files")
     
     def __len__(self):
-        # Initialize chunk indices if not done yet
-        self._lazy_create_chunk_indices()
         return len(self.chunk_indices)
     
     def __getitem__(self, idx):
-        # Initialize chunk indices if not done yet
-        self._lazy_create_chunk_indices()
-        
         # Get original item index and chunk index
         dataset_idx, chunk_idx = self.chunk_indices[idx]
-        item = self.dataset[dataset_idx]
         
-        # Ensure audio is a tensor
-        if not isinstance(item["audio"], torch.Tensor):
-            audio = torch.tensor(item["audio"], dtype=torch.float32)
-        else:
-            audio = item["audio"]
-            
-        # Add channel dimension if missing
-        if len(audio.shape) == 1:
-            audio = audio.unsqueeze(0)
-            
+        # Get the original data
+        item = self.dataset[dataset_idx]
+        audio = item["audio"]
+        
         # Get the specified chunk
-        chunks = chunk_audio(audio, self.chunk_size_seconds)
-        audio = chunks[chunk_idx] if chunk_idx < len(chunks) else chunks[0]
+        chunks = chunk_audio(audio, self.chunk_size_seconds, self.sample_rate)
+        audio_chunk = chunks[chunk_idx] if chunk_idx < len(chunks) else chunks[0]
         
         result = {
-            "audio": audio,
+            "audio": audio_chunk,
             "label": item["label"],
             "original_idx": dataset_idx
         }
@@ -169,33 +137,29 @@ def collate_fn_cnn_rnn(batch):
 
 def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=5):
     """
-    Creates appropriate dataloaders for CNN+RNN model training with chunked audio.
+    Creates dataloaders using the PyTorch dataset approach instead of HuggingFace.
     
     Args:
-        dataset_dict: Dictionary of datasets with train/validation/test splits
+        dataset_dict: Dictionary of PyTorch datasets with train/validation/test splits
         batch_size: Batch size for training and evaluation        
         chunk_size_seconds: Size of each chunk in seconds
         
     Returns:
         Dictionary with train, validation, and test dataloaders
     """
-    # Datasets are already processed by prepare_cnn_rnn_dataset() 
-    # or are custom datasets like BalancedAugmentedDataset
-    processed_dataset = dataset_dict
-    
-    # Wrap the datasets in a custom dataset class
+    # Wrap the datasets in the chunking dataset class
     train_dataset = CNNRNNDataset(
-        processed_dataset["train"],         
+        dataset_dict["train"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
     val_dataset = CNNRNNDataset(
-        processed_dataset["validation"],         
+        dataset_dict["validation"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
     test_dataset = CNNRNNDataset(
-        processed_dataset["test"],         
+        dataset_dict["test"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
@@ -234,8 +198,72 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=5):
     }
 
 
+class PreloadedAudioDataset(Dataset):
+    """PyTorch dataset that preloads all audio data in memory with a duration limit."""
+    def __init__(self, dataframe, max_duration=100.0, sample_rate=16000):
+        self.dataframe = dataframe
+        self.samples = []
+        self.max_duration = max_duration
+        self.sample_rate = sample_rate
+        
+        print(f"Preloading {len(dataframe)} audio files (max {max_duration}s each)...")
+        for idx, row in tqdm(dataframe.iterrows(), total=len(dataframe), desc="Loading audio"):
+            file_path = row["file_path"]
+            label = row["label"]
+            
+            try:
+                # Load audio directly with librosa, limiting duration
+                audio_path = myFunctions.resolve_audio_path(file_path)
+                
+                # Use direct librosa loading with duration limit (matching wav2vec2 pipeline)
+                audio, sr = self._load_audio_with_duration(audio_path)
+                
+                # Convert to tensor
+                if not isinstance(audio, torch.Tensor):
+                    audio = torch.tensor(audio, dtype=torch.float32)
+                
+                # Add channel dimension if missing
+                if len(audio.shape) == 1:
+                    audio = audio.unsqueeze(0)  # [C, L]
+                
+                # Store the processed sample
+                self.samples.append({
+                    "audio": audio,
+                    "label": label,
+                    "file_path": file_path
+                })
+            except Exception as e:
+                print(f"Error loading audio {file_path}: {e}")
+                # Create a dummy sample for failed audio
+                dummy_audio = torch.zeros((1, 16000), dtype=torch.float32)  # 1 second of silence
+                self.samples.append({
+                    "audio": dummy_audio,
+                    "label": label,
+                    "file_path": file_path,
+                    "error": str(e)
+                })
+    
+    def _load_audio_with_duration(self, file_path):
+        """Load audio with a duration limit to match previous implementation."""
+        # Use librosa with duration parameter to limit length
+        audio = librosa.load(
+            file_path, 
+            sr=self.sample_rate,
+            duration=self.max_duration  # Limit duration to max_duration seconds
+        )[0]
+        
+        # Convert to the expected format
+        return np.array(audio, dtype=np.float32), self.sample_rate
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+
 def prepare_cnn_rnn_dataset():
-    """Prepare data for CNN-RNN model training."""
+    """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF."""
     myData.DownloadAndExtract()
     
     # Check if dataframe.csv exists
@@ -258,19 +286,17 @@ def prepare_cnn_rnn_dataset():
         data_df.to_csv(data_file_path, index=False)
         print(f"Created and saved dataframe to {data_file_path}")
     
-    # Prepare dataset splits
-    if not os.path.exists(myConfig.OUTPUT_PATH) or (os.path.exists(myConfig.OUTPUT_PATH) and len(os.listdir(myConfig.OUTPUT_PATH)) == 0):
-        print("Creating dataset splits...")
-        train_df, val_df, test_df = myData.datasetSplit(data_df)
-        train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
-        dataset = myData.createHFDatasets(train_df, val_df, test_df)
-    else:
-        print("Loading existing dataset...")
-        dataset = myData.loadHFDataset()
+    # Perform dataset splits directly on the dataframe
+    print("Creating dataset splits...")
+    train_df, val_df, test_df = myData.datasetSplit(data_df)
+    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
     
-    print("Preparing dataset for CNN+RNN model...")
-    dataset = dataset.map(myData.prepare_for_cnn_rnn)
-    
+    print("Creating PyTorch datasets with preloaded audio...")
+    dataset = {
+        "train": PreloadedAudioDataset(train_df, max_duration=100.0, sample_rate=16000),
+        "validation": PreloadedAudioDataset(val_df, max_duration=100.0, sample_rate=16000),
+        "test": PreloadedAudioDataset(test_df, max_duration=100.0, sample_rate=16000)
+    }
     return dataset
 
 

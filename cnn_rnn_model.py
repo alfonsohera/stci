@@ -329,6 +329,7 @@ class BalancedAugmentedDataset(Dataset):
     """
     A dataset wrapper that balances classes by augmenting underrepresented samples
     with different CNN spectrograms while keeping RNN and prosodic features intact.
+    Designed to work with standard PyTorch datasets.
     """
     def __init__(self, original_dataset, total_target_samples=1000, num_classes=3):
         self.original_dataset = original_dataset
@@ -340,7 +341,8 @@ class BalancedAugmentedDataset(Dataset):
         self.class_counts = {}
         
         # Count original samples per class
-        for i, item in enumerate(self.original_dataset):
+        for i in range(len(self.original_dataset)):
+            item = self.original_dataset[i]
             class_id = item["label"]
             if class_id not in self.class_indices:
                 self.class_indices[class_id] = []
@@ -353,7 +355,7 @@ class BalancedAugmentedDataset(Dataset):
         for class_id in range(num_classes):
             orig_count = self.class_counts.get(class_id, 0)
             self.augmentations_needed[class_id] = max(0, self.target_samples_per_class - orig_count)
-        
+
         # Create sample indices and augmentation IDs upfront
         self.sample_indices = []
         self.augmentation_ids = []
@@ -378,113 +380,19 @@ class BalancedAugmentedDataset(Dataset):
         # Create small, efficient sample cache
         self.max_cache_size = 100  # Limit cache size to control memory
         self.sample_cache = {}  # For caching augmented samples
-
-        # Create small cache for frequently accessed items
-        from collections import OrderedDict
-        self.cache = OrderedDict()
-        self.cache_size = 50  # Very small cache
         
         # Initialize RNG for reproducible augmentations
         import numpy as np
         self.rng = np.random.RandomState(42)
-
-        # Add attributes for HuggingFace compatibility
-        self._supports_huggingface_api = True
-        from datasets.arrow_dataset import Dataset as ArrowDataset
-        self._is_hf_dataset = isinstance(original_dataset, ArrowDataset)
-        
-        # Cache the column_names for faster access
-        if hasattr(original_dataset, 'column_names'):
-            self._column_names = original_dataset.column_names
-        else:
-            # Try to determine column names from the first item
-            if len(original_dataset) > 0:
-                first_item = original_dataset[0]
-                if isinstance(first_item, dict):
-                    self._column_names = list(first_item.keys())
-                else:
-                    # Default column names if we can't determine them
-                    self._column_names = ["audio", "label"]
-            else:
-                self._column_names = ["audio", "label"]
-
+    
     def __len__(self):
-        total_len = 0
-        # Original samples
-        for class_id in range(self.num_classes):
-            total_len += self.class_counts.get(class_id, 0)
-        # Augmented samples
-        for class_id in range(self.num_classes):
-            total_len += self.augmentations_needed.get(class_id, 0)
-        return total_len
-
-    def __getitem__(self, idx):        
+        return len(self.sample_indices)
+    
+    def __getitem__(self, idx):
         """Get an item from the dataset with proper index handling."""
-        from datasets.arrow_dataset import Dataset as ArrowDataset
-        
-        # Handle dictionary access pattern (dataset["train"]["label"])
+        # Handle string indexing just in case (for compatibility with legacy code)
         if isinstance(idx, str):
-            if idx in ["train", "validation", "test"]:
-                # Return self to maintain chaining
-                return self
-            elif idx == "label":
-                # Fast path for HuggingFace dataset labels
-                if isinstance(self.original_dataset, ArrowDataset):
-                    # Only get as many labels as needed for class weights
-                    # Extract smaller batch of labels at a time to avoid memory issues                    
-                    batch_size = 500  # Process in smaller batches
-                    all_labels = []
-                    
-                    for start_idx in range(0, len(self.sample_indices), batch_size):
-                        end_idx = min(start_idx + batch_size, len(self.sample_indices))
-                        batch_indices = self.sample_indices[start_idx:end_idx]
-                        try:
-                            batch_original_indices = [int(i) for i in batch_indices]
-                            batch_labels = self.original_dataset.select(batch_original_indices)["label"]
-                            all_labels.extend(list(batch_labels))
-                        except Exception as e:
-                            print(f"Error extracting labels batch {start_idx}:{end_idx}: {e}")
-                            # Fall back for this batch using individual access
-                            for i in batch_indices:
-                                try:
-                                    all_labels.append(self.original_dataset[int(i)]["label"])
-                                except:
-                                    all_labels.append(-1)  # Mark errors
-                    
-                    return all_labels
-                
-                # Existing slower path for other dataset types
-                return [self.original_dataset[int(i)]["label"] for i in self.sample_indices]
-            
-            else:
-                # Fast path for HuggingFace dataset attributes
-                if isinstance(self.original_dataset, ArrowDataset) and idx in self.original_dataset.column_names:
-                    all_original_indices = [int(i) for i in self.sample_indices]
-                    try:
-                        all_values = self.original_dataset.select(all_original_indices)[idx]
-                        return list(all_values)
-                    except Exception as e:
-                        print(f"Error extracting {idx} from HuggingFace dataset: {e}")
-                        # Fall back to slow path if this fails
-                
-                # Slower path for other dataset types or attributes
-                all_values = []
-                for i in range(len(self.sample_indices)):
-                    try:
-                        original_idx = int(self.sample_indices[i])
-                        if self._is_hf_dataset:
-                            # Use select for HuggingFace datasets
-                            sample = self.original_dataset.select([original_idx])[0]
-                        else:
-                            # Use direct indexing for other dataset types
-                            sample = self.original_dataset[original_idx]
-                        if isinstance(sample, dict) and idx in sample:
-                            all_values.append(sample[idx])
-                        else:
-                            all_values.append(None)
-                    except Exception as e:
-                        all_values.append(None)
-                return all_values
+            raise ValueError(f"String indexing with '{idx}' not supported in PyTorch dataset mode")
         
         # Regular integer index access for DataLoader
         try:
@@ -507,13 +415,8 @@ class BalancedAugmentedDataset(Dataset):
                 if cache_key in self.sample_cache:
                     return self.sample_cache[cache_key]
             
-            # Get the sample from the original dataset
-            if self._is_hf_dataset:
-                # Use select method for HuggingFace datasets which is more reliable
-                sample = self.original_dataset.select([original_idx])[0]
-            else:
-                # Use direct indexing for other dataset types
-                sample = self.original_dataset[original_idx]
+            # Get the sample from the original dataset using direct PyTorch indexing
+            sample = self.original_dataset[original_idx]
             
             # Process the sample based on its format
             if isinstance(sample, dict):
@@ -525,9 +428,6 @@ class BalancedAugmentedDataset(Dataset):
                 if len(sample) == 2:  # (audio, label)
                     audio, label = sample
                     result = (audio, label, augmentation_id)
-                elif len(sample) == 3:  # (audio, prosodic, label)
-                    audio, prosodic, label = sample
-                    result = (audio, prosodic, label, augmentation_id)
                 else:
                     raise ValueError(f"Unexpected sample format with {len(sample)} elements")
             
@@ -550,10 +450,8 @@ class BalancedAugmentedDataset(Dataset):
     @property
     def class_distribution(self):
         """Calculate class distribution without actually accessing samples"""        
-        
         # Use the class counts and augmentations needed to directly calculate
         # the final distribution 
-        
         counts = {}
         for class_id in range(self.num_classes):
             original_count = self.class_counts.get(class_id, 0)
@@ -561,7 +459,7 @@ class BalancedAugmentedDataset(Dataset):
             counts[class_id] = original_count + augmented_count
                 
         return counts
-
+    
     def print_distribution_stats(self):
         """Print class distribution statistics before and after augmentation."""
         print("\n=== Class Distribution Statistics ===")
@@ -585,85 +483,3 @@ class BalancedAugmentedDataset(Dataset):
         
         print(f"\nTotal samples: {total_orig} → {total_final} (+{total_final-total_orig})")
         print("=====================================\n")
-
-    @property
-    def column_names(self):
-        """Return the column names to be compatible with HF datasets."""
-        return self._column_names
-    
-    @property
-    def features(self):
-        """Return the features dictionary from the original dataset if available."""
-        if hasattr(self.original_dataset, 'features'):
-            return self.original_dataset.features
-        return None
-    
-    def select(self, indices):
-        """Implement select method for HF datasets compatibility."""
-        from datasets import Dataset as HFDataset
-        
-        # Convert indices to list if it's not already
-        if not isinstance(indices, list):
-            indices = [indices]
-        
-        # Map indices to our internal sample_indices
-        selected_indices = [int(self.sample_indices[i]) for i in indices 
-                           if i >= 0 and i < len(self.sample_indices)]
-        
-        # Get augmentation IDs for these indices
-        selected_aug_ids = [self.augmentation_ids[i] for i in indices 
-                           if i >= 0 and i < len(self.augmentation_ids)]
-        
-        # Create a new dataset with these indices
-        selected_data = []
-        for idx, aug_id in zip(selected_indices, selected_aug_ids):
-            sample = self.original_dataset[idx]
-            if isinstance(sample, dict):
-                result = dict(sample)  # Make a copy
-                if aug_id is not None:
-                    result["augmentation_id"] = aug_id
-                selected_data.append(result)
-                
-        # If using HF datasets, try to convert back to an HFDataset
-        if self._is_hf_dataset:
-            try:
-                return HFDataset.from_dict({k: [item[k] for item in selected_data] 
-                                           for k in self.column_names if all(k in item for item in selected_data)})
-            except:
-                # Fallback to returning the list of dictionaries
-                return selected_data
-        
-        return selected_data
-    
-    def map(self, function, batched=False, batch_size=None, **kwargs):
-        """Implement map method for HF datasets compatibility."""
-        from datasets import Dataset as HFDataset
-        
-        # Apply the function to each item or batch
-        if batched:
-            batch_size = batch_size or 1000
-            results = []
-            
-            for i in range(0, len(self), batch_size):
-                batch_indices = list(range(i, min(i + batch_size, len(self))))
-                batch_data = [self[idx] for idx in batch_indices]
-                batch_results = function(batch_data)
-                results.extend(batch_results)
-        else:
-            results = [function(self[i]) for i in range(len(self))]
-            
-        # If using HF datasets, try to convert back to an HFDataset
-        if self._is_hf_dataset:
-            try:
-                return HFDataset.from_dict({k: [item[k] for item in results] 
-                                           for k in results[0].keys()})
-            except:
-                # Fallback to returning the processed data
-                return results
-                
-        return results
-    
-    # Add compatibility check method
-    def is_huggingface_compatible(self):
-        """Check if this dataset is compatible with HuggingFace API."""
-        return hasattr(self, '_supports_huggingface_api') and self._supports_huggingface_api
