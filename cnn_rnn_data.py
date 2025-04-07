@@ -261,11 +261,65 @@ class PreloadedAudioDataset(Dataset):
     def __getitem__(self, idx):
         return self.samples[idx]
 
+class CachedAudioDataset(Dataset):
+    """PyTorch dataset that uses cached audio samples."""
+    def __init__(self, samples):
+        self.samples = samples
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+def save_pytorch_dataset(dataset_dict, save_path):
+    """Save PyTorch datasets to disk."""
+    os.makedirs(save_path, exist_ok=True)
+    
+    for split_name, dataset in dataset_dict.items():
+        split_path = os.path.join(save_path, f"{split_name}.pt")
+        print(f"Saving {split_name} split to {split_path}...")
+        
+        # Extract samples to avoid saving the whole dataset class
+        samples = dataset.samples
+        
+        # Save samples to disk
+        torch.save(samples, split_path)
+        print(f"Saved {len(samples)} samples for {split_name} split")
+    
+    print(f"All splits saved to {save_path}")
+
+
+def load_cached_pytorch_dataset(cache_path):
+    """Load cached PyTorch datasets from disk."""
+    datasets = {}
+    
+    for split_name in ["train", "validation", "test"]:
+        split_path = os.path.join(cache_path, f"{split_name}.pt")
+        if os.path.exists(split_path):
+            print(f"Loading {split_name} split from {split_path}...")
+            samples = torch.load(split_path)
+            print(f"Loaded {len(samples)} samples for {split_name} split")
+            
+            # Create a dataset with the loaded samples
+            dataset = CachedAudioDataset(samples)
+            datasets[split_name] = dataset
+        else:
+            raise FileNotFoundError(f"Cannot find cached dataset at {split_path}")
+    
+    return datasets
+
 
 def prepare_cnn_rnn_dataset():
     """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF."""
     myData.DownloadAndExtract()
     
+    # Check if cached PyTorch dataset exists
+    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+    if os.path.exists(pytorch_dataset_path) and len(os.listdir(pytorch_dataset_path)) > 0:
+        print(f"Loading cached PyTorch dataset from {pytorch_dataset_path}")
+        return load_cached_pytorch_dataset(pytorch_dataset_path)
+    print("No cached dataset found. Creating new dataset...")
     # Check if dataframe.csv exists
     data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")
     if os.path.exists(data_file_path):
@@ -297,6 +351,7 @@ def prepare_cnn_rnn_dataset():
         "validation": PreloadedAudioDataset(val_df, max_duration=100.0, sample_rate=16000),
         "test": PreloadedAudioDataset(test_df, max_duration=100.0, sample_rate=16000)
     }
+    save_pytorch_dataset(dataset, pytorch_dataset_path)
     return dataset
 
 
