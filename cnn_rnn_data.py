@@ -127,11 +127,15 @@ def collate_fn_cnn_rnn(batch):
     # Track original indices if available
     if "original_idx" in batch[0]:
         result["original_idx"] = [item["original_idx"] for item in batch]
-    
+        
     # Pass augmentation IDs if present
     if "augmentation_id" in batch[0]:
         result["augmentation_id"] = [item.get("augmentation_id") for item in batch]
     
+    # Include audio_id for chunk aggregation
+    if "audio_id" in batch[0]:
+        result["audio_id"] = [item["audio_id"] for item in batch]
+        
     return result
 
 
