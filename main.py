@@ -528,7 +528,7 @@ if __name__ == "__main__":
         elif args.mode == "cv":
             if has_threshold_functions:
                 print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
-                run_cross_validation(, n_folds=args.folds)
+                run_cross_validation(n_folds=args.folds)
             else:
                 print("Cross-validation not implemented. Please check your installation.")
         elif args.mode == "hpo":
