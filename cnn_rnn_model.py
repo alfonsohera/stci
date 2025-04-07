@@ -119,11 +119,7 @@ class DualPathAudioClassifier(nn.Module):
         
         # SpecAugment for data augmentation during training
         if apply_specaugment:
-            self.spec_augment = SpecAugment(
-                time_mask_param=30,
-                freq_mask_param=20,
-                p=0.5
-            )
+            self.spec_augment = SpecAugment()
     
         # CNN path
         self.cnn_extractor = nn.Sequential(
