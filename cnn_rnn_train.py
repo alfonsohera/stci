@@ -115,56 +115,6 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
     return avg_train_loss
 
 
-def train_epoch_amp(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True, scaler=None):
-    """Train with mixed precision."""
-    model.train()
-    train_loss = 0.0
-    
-    for i, batch in enumerate(tqdm(train_loader, desc="Training")):
-        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        
-        optimizer.zero_grad()
-        
-        # Forward pass with autocast for mixed precision
-        with torch.cuda.amp.autocast():
-            if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    prosodic_features=batch["prosodic_features"], 
-                    augmentation_id=batch.get("augmentation_id")
-                )
-            else:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    augmentation_id=batch.get("augmentation_id")
-                )
-                
-            loss = criterion(logits, batch["labels"].to(device))
-        
-        # Scale loss and backward
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        
-        scheduler.step()
-        train_loss += loss.item()
-        
-        # Cleanup with less frequency (every 50 batches)
-        logits_detached = logits.detach()
-        del logits, loss, batch
-        del logits_detached
-        
-        if i % 50 == 0:
-            gc.collect()
-            
-    torch.cuda.empty_cache()
-    gc.collect()
-    
-    return train_loss / len(train_loader)
-
-
 def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
     """Evaluate the model on validation data."""
     model.eval()
@@ -1112,10 +1062,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
                 final_div_factor=1000,
                 anneal_strategy='cos',
                 three_phase=False
-            )
-            
-            # Add mixed precision training to accelerate trials
-            scaler = torch.cuda.amp.GradScaler()
+            )                       
 
             # training loop  length
             max_training_epochs = n_epochs
@@ -1133,10 +1080,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             for epoch in range(max_training_epochs):
                 try:
                     # Train
-                    train_loss = train_epoch_amp(
+                    train_loss = train_epoch(
                         model, train_loader, optimizer, 
                         criterion, device, scheduler, 
-                        use_prosodic_features, scaler
+                        use_prosodic_features
                     )
                     # Evaluate 
                     val_loss, val_labels, val_preds = evaluate(
