@@ -262,8 +262,17 @@ class DualPathAudioClassifier(nn.Module):
         cnn_features = self.cnn_extractor(mel_db)  # [B, 256]
         
         # Process audio for Attention path
-        audio_downsampled = self.audio_downsample(audio.squeeze(1))  # [B, 8, T/25]
-        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
+        # Ensure audio has shape [B, 1, T] for Conv1d
+        if len(audio.shape) == 3 and audio.shape[1] > 1:
+            # If we have [B, C, T] where C > 1, convert to mono by averaging
+            audio_mono = audio.mean(dim=1, keepdim=True)  # [B, 1, T]
+        elif len(audio.shape) == 2:
+            # If we have [B, T], add channel dimension
+            audio_mono = audio.unsqueeze(1)  # [B, 1, T]
+        else:
+            # Already in correct format [B, 1, T]
+            audio_mono = audio
+        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 8, T/25]        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
         
         # Add positional embeddings
         seq_len = audio_downsampled.shape[1]
