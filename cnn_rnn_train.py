@@ -198,7 +198,7 @@ def evaluate(model, val_loader, criterion, device):
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
             # Extract audio_ids if available
-            audio_ids = batch.get("audio_ids", None)
+            audio_ids = batch.get("audio_id", None)
             
             # If no audio_ids, process normally (no chunking)
             if audio_ids is None:
