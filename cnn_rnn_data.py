@@ -102,7 +102,7 @@ class CNNRNNDataset(Dataset):
         }
         
         # Add audio_id for chunk handling
-        audio_id = f"{dataset_idx}_{chunk_idx}"
+        audio_id = f"{dataset_idx}" 
         result["audio_id"] = audio_id
                 
         return result
