@@ -91,30 +91,30 @@ class DualPathAudioClassifier(nn.Module):
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),  # Reduced from 0.2
             
             # Second convolutional block
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
+            nn.Dropout(0.1),  # Reduced from 0.2
             
             # Third convolutional block
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),  # Reduced from 0.3
             
             # Fourth convolutional block 
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),  # Reduced from 0.3
             
-            # Global average pooling instead of flattening
+            # Global average pooling 
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             
@@ -123,9 +123,9 @@ class DualPathAudioClassifier(nn.Module):
                 nn.Linear(256, 128),
                 nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(0.2),  # Reduced from 0.3
                 nn.Linear(128, 256),
-                nn.Dropout(0.4)
+                nn.Dropout(0.3)   # Reduced from 0.4
             )
         )
        
@@ -148,10 +148,10 @@ class DualPathAudioClassifier(nn.Module):
                 nn.Linear(prosodic_features_dim, 32),
                 nn.BatchNorm1d(32),
                 nn.ReLU(),
-                nn.Dropout(0.2),
+                nn.Dropout(0.1),  # Reduced from 0.2
                 nn.Linear(32, 32),
                 nn.ReLU(),
-                nn.Dropout(0.2)
+                nn.Dropout(0.1)   # Reduced from 0.2
             )
             fusion_input_dim = 256 + 256 + 32  
         else:
@@ -162,10 +162,10 @@ class DualPathAudioClassifier(nn.Module):
             nn.Linear(fusion_input_dim, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.3),  # Reduced from 0.4
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.3)
+            nn.Dropout(0.2)   # Reduced from 0.3
         )
 
         # Separate classifier layer
