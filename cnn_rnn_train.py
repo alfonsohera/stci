@@ -237,6 +237,7 @@ def evaluate(model, val_loader, criterion, device):
     
     # Process all remaining audios after going through the entire dataset
     if audio_chunks:
+        total_recordings = len(audio_chunks)
         for audio_id, chunk_outputs in audio_chunks.items():
             # Aggregate predictions from all chunks
             aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
@@ -246,7 +247,7 @@ def evaluate(model, val_loader, criterion, device):
             
             # Calculate loss using the aggregated output
             loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
-            val_loss += loss.item()
+            val_loss += loss.item() / total_recordings
             
             # Get prediction from aggregated output
             pred = torch.argmax(aggregated_output)
