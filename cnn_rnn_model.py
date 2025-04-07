@@ -156,10 +156,8 @@ class DualPathAudioClassifier(nn.Module):
             nn.Flatten()
         )
         
-        # Downsample raw audio for attention path - keeping original dimensions
-        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=25)
-        
-        # Attention layers instead of RNN
+        # Downsample raw audio for attention path
+        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=120)        
         self.position_embedding = nn.Parameter(torch.randn(1, 128, 8))  # Max seq length 128, feature dim 8
         
         # Self-attention layers
@@ -273,9 +271,11 @@ class DualPathAudioClassifier(nn.Module):
             # Already in correct format [B, 1, T]
             audio_mono = audio
         # Downsample audio for attention path
-        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 8, T/25]
+        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 8, T/120]
+        # Apply adaptive pooling to ensure fixed sequence length
+        audio_downsampled = F.adaptive_avg_pool1d(audio_downsampled, 128)  # [B, 8, 128]
         # Transpose to match positional embedding dimensions
-        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
+        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, 128, 8]
         # Add positional embeddings
         seq_len = audio_downsampled.shape[1]
         audio_downsampled = audio_downsampled + self.position_embedding[:, :seq_len, :]
