@@ -99,11 +99,10 @@ class SelfAttention(nn.Module):
         
         return x
 
+
 class DualPathAudioClassifier(nn.Module):
-        def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-apply_specaugment=True):
-        super(DualPathAudioClassifier, self).__init__()
-        
+    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, apply_specaugment=True):
+        super(DualPathAudioClassifier, self).__init__()        
         self.sample_rate = sample_rate
         self.n_mels = n_mels
         self.apply_specaugment = apply_specaugment
@@ -125,7 +124,7 @@ apply_specaugment=True):
                 freq_mask_param=20,
                 p=0.5
             )
-        
+    
         # CNN path
         self.cnn_extractor = nn.Sequential(
             # First convolutional block
@@ -324,6 +323,7 @@ apply_specaugment=True):
         """
         # Simple mean aggregation
         return torch.stack(chunk_outputs).mean(dim=0)
+
 
 class BalancedAugmentedDataset(Dataset):
     """
