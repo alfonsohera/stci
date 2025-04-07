@@ -64,108 +64,131 @@ class SpecAugment(nn.Module):
             
         return augmented
 
-class DualPathAudioClassifier(nn.Module):
-    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 use_prosodic_features=True, prosodic_features_dim=7,
-                 apply_specaugment=True):
-        super().__init__()
+class SelfAttention(nn.Module):
+    """Self-attention module to replace GRU"""
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
+        super(SelfAttention, self).__init__()
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(dropout)
         
-        # Spectrogram transform for CNN path
+        # Feed-forward network
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim * 4, embed_dim)
+        )
+        self.norm2 = nn.LayerNorm(embed_dim)
+        
+    def forward(self, x, mask=None):
+        # Self-attention with residual connection and normalization
+        attn_output, _ = self.attention(x, x, x, key_padding_mask=mask)
+        x = x + self.dropout(attn_output)
+        x = self.norm1(x)
+        
+        # Feed-forward with residual connection and normalization
+        ff_output = self.ff(x)
+        x = x + self.dropout(ff_output)
+        x = self.norm2(x)
+        
+        return x
+
+class DualPathAudioClassifier(nn.Module):
+        def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
+apply_specaugment=True):
+        super(DualPathAudioClassifier, self).__init__()
+        
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.apply_specaugment = apply_specaugment
+        
+        # Create mel spectrogram converter
         self.mel_spec = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=1024,
-            hop_length=128,
+            hop_length=512,
             n_mels=n_mels
         )
+        
         self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB()
         
-        # SpecAugment for training (only applied when in training mode)
-        self.apply_specaugment = apply_specaugment
+        # SpecAugment for data augmentation during training
         if apply_specaugment:
-            self.spec_augment = SpecAugment()
+            self.spec_augment = SpecAugment(
+                time_mask_param=30,
+                freq_mask_param=20,
+                p=0.5
+            )
         
-        # CNN path for mel spectrograms
+        # CNN path
         self.cnn_extractor = nn.Sequential(
             # First convolutional block
             nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.1),  # Reduced from 0.2
+            nn.Dropout(0.1),
             
             # Second convolutional block
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.1),  # Reduced from 0.2
+            nn.Dropout(0.1),
             
             # Third convolutional block
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),  # Reduced from 0.3
+            nn.Dropout(0.2),
             
             # Fourth convolutional block 
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),  # Reduced from 0.3
+            nn.Dropout(0.2),
             
             # Global average pooling 
             nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            
-            # MLP layer
-            nn.Sequential(
-                nn.Linear(256, 128),
-                nn.BatchNorm1d(128),
-                nn.ReLU(),
-                nn.Dropout(0.2),  # Reduced from 0.3
-                nn.Linear(128, 256),
-                nn.Dropout(0.3)   # Reduced from 0.4
-            )
-        )
-       
-        # RNN path for raw audio
-        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=50)
-               
-        self.rnn = nn.GRU(
-            input_size=8,
-            hidden_size=128,  
-            num_layers=2,
-            batch_first=True,
-            bidirectional=True,
-            dropout=0.3
+            nn.Flatten()
         )
         
-        # Prosodic features processing
-        self.use_prosodic_features = use_prosodic_features
-        if use_prosodic_features:
-            self.prosodic_feature_mlp = nn.Sequential(
-                nn.Linear(prosodic_features_dim, 32),
-                nn.BatchNorm1d(32),
-                nn.ReLU(),
-                nn.Dropout(0.1),  # Reduced from 0.2
-                nn.Linear(32, 32),
-                nn.ReLU(),
-                nn.Dropout(0.1)   # Reduced from 0.2
-            )
-            fusion_input_dim = 256 + 256 + 32  
-        else:
-            fusion_input_dim = 256 + 256 
+        # Downsample raw audio for attention path - keeping original dimensions
+        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=25)
         
-        # Fusion layer 
+        # Attention layers instead of RNN
+        self.position_embedding = nn.Parameter(torch.randn(1, 128, 8))  # Max seq length 128, feature dim 8
+        
+        # Self-attention layers
+        self.attention_layers = nn.ModuleList([
+            SelfAttention(embed_dim=8, num_heads=2, dropout=0.1)
+            for _ in range(2)  # 2 attention layers
+        ])
+        
+        # Attention output processing
+        self.attention_pooling = nn.Sequential(
+            nn.Linear(8, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2)
+        )
+        
+        # Fusion layer (CNN features + Attention features)
         self.fusion = nn.Sequential(
-            nn.Linear(fusion_input_dim, 256),
+            nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.3),  # Reduced from 0.4
+            nn.Dropout(0.3),
             nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(0.2)   # Reduced from 0.3
+            nn.Dropout(0.2)
         )
 
         # Separate classifier layer
@@ -174,32 +197,26 @@ class DualPathAudioClassifier(nn.Module):
         # Pre-initialize device tracking to avoid device checks at runtime
         self._device = None
         self._initialized_for_device = False
-        
-    def forward(self, audio, audio_lengths=None, prosodic_features=None, augmentation_id=None):
+
+    def forward(self, audio, audio_lengths=None, augmentation_id=None):
         """
-        Forward pass with optional augmentation ID to control augmentation.
+        Forward pass for chunked audio processing
         
         Args:
-            audio: Audio input tensor
-            audio_lengths: Optional lengths of audio sequences
-            prosodic_features: Optional prosodic features
-            augmentation_id: Optional ID to control augmentation type/seed
+            audio: Input audio tensor [B, C, T]
+            audio_lengths: Tensor of actual audio lengths [B]
+            augmentation_id: Optional IDs for deterministic augmentation
+            
+        Returns:
+            Class logits [B, num_classes]
         """
-        # Get device from input tensor
+        # Initialize for specific device if needed
         device = audio.device
-                
-        # Only perform one-time device initialization
+        
         if not self._initialized_for_device or self._device != device:
             self.mel_spec = self.mel_spec.to(device)
             self.amplitude_to_db = self.amplitude_to_db.to(device)
-            self.audio_downsample = self.audio_downsample.to(device)
-            self.rnn = self.rnn.to(device)            
-            self.fusion = self.fusion.to(device)
-            self.classifier = self.classifier.to(device)
             
-            if self.use_prosodic_features:
-                self.prosodic_feature_mlp = self.prosodic_feature_mlp.to(device)
-                
             if self.apply_specaugment:
                 self.spec_augment = self.spec_augment.to(device)
                 
@@ -208,7 +225,6 @@ class DualPathAudioClassifier(nn.Module):
         
         # Start with processing the audio through the CNN
         # If the audio is just a single channel, expand to [B, 1, T]
-        # Process the entire batch at once
         if len(audio.shape) == 2:
             audio = audio.unsqueeze(1)  # Add channel dimension
                
@@ -247,60 +263,67 @@ class DualPathAudioClassifier(nn.Module):
         # Normalization
         mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
         
-        cnn_features = self.cnn_extractor(mel_db)
+        # CNN feature extraction
+        cnn_features = self.cnn_extractor(mel_db)  # [B, 256]
         
-        # Process audio for RNN path
-        audio_downsampled = self.audio_downsample(audio)
-        audio_downsampled = audio_downsampled.transpose(1, 2)  # B, T, C
+        # Process audio for Attention path
+        audio_downsampled = self.audio_downsample(audio.squeeze(1))  # [B, 8, T/25]
+        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, T/25, 8]
         
+        # Add positional embeddings
+        seq_len = audio_downsampled.shape[1]
+        audio_downsampled = audio_downsampled + self.position_embedding[:, :seq_len, :]
+        
+        # Create attention mask if audio_lengths is provided
+        attention_mask = None
         if audio_lengths is not None:
-            # Adjust lengths for downsampling
-            downsample_factor = audio.shape[2] / audio_downsampled.shape[1]
-            downsampled_lengths = (audio_lengths / downsample_factor).long()
+            # Convert to downsampled lengths
+            downsampled_lengths = (audio_lengths / 25).long()
+            max_len = audio_downsampled.shape[1]
             
-            # Pack sequence
-            packed = nn.utils.rnn.pack_padded_sequence(
-                audio_downsampled, 
-                downsampled_lengths.cpu(),
-                batch_first=True, 
-                enforce_sorted=False
-            )
-            
-            # Run RNN on packed sequence
-            packed_output, hidden = self.rnn(packed)
-            
-            # Get the bidirectional hidden states and reshape
-            # hidden shape is [num_layers, num_directions, batch_size, hidden_size]
-            hidden_reshaped = hidden.view(self.rnn.num_layers, 2, -1, self.rnn.hidden_size)
-            
-            # Concatenate forward and backward of last layer
-            last_layer_hidden = hidden_reshaped[-1]  # [2, batch_size, hidden_size]
-            forward_hidden = last_layer_hidden[0]    # [batch_size, hidden_size]
-            backward_hidden = last_layer_hidden[1]   # [batch_size, hidden_size]
-            
-            # Concatenate to get the same 256 dimension output
-            rnn_features = torch.cat([forward_hidden, backward_hidden], dim=1)
+            # Create padding mask (True for padding positions)
+            attention_mask = torch.arange(max_len, device=device)[None, :] >= downsampled_lengths[:, None]
+        
+        # Process through attention layers
+        attn_output = audio_downsampled
+        for attention_layer in self.attention_layers:
+            attn_output = attention_layer(attn_output, mask=attention_mask)
+        
+        # Pool attention outputs - use mean pooling over sequence dimension
+        if attention_mask is not None:
+            # Apply mask before pooling (set padded positions to 0)
+            mask_expanded = (~attention_mask).float().unsqueeze(-1)
+            attn_output = attn_output * mask_expanded
+            # Mean over non-padded positions
+            attn_features = attn_output.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
         else:
-            # Fallback to original method
-            rnn_output, _ = self.rnn(audio_downsampled)
-            rnn_features = rnn_output[:, -1, :]
+            # Simple mean pooling if no mask
+            attn_features = attn_output.mean(dim=1)
         
+        # Process attention features through linear layer
+        attn_features = self.attention_pooling(attn_features)  # [B, 256]
         
-        # Combine CNN and RNN features
-        combined_features = torch.cat([cnn_features, rnn_features], dim=1)
-        
-        # Add prosodic features if available and enabled
-        if self.use_prosodic_features:
-            if prosodic_features is None:
-                raise ValueError("Prosodic features are enabled but not provided to the model")
-            processed = self.prosodic_feature_mlp(prosodic_features)
-            combined_features = torch.cat([combined_features, processed], dim=1)
-        
+        # Combine CNN and Attention features
+        combined_features = torch.cat([cnn_features, attn_features], dim=1)  # [B, 512]
         
         # Final classification
-        fusion_output = self.fusion(combined_features)
-        output = self.classifier(fusion_output)
+        fusion_output = self.fusion(combined_features)  # [B, 128]
+        output = self.classifier(fusion_output)  # [B, num_classes]
+        
         return output
+    
+    def aggregate_chunk_predictions(self, chunk_outputs):
+        """
+        Aggregate predictions from multiple chunks of the same audio
+        
+        Args:
+            chunk_outputs: List of prediction tensors, each of shape [num_classes]
+            
+        Returns:
+            Aggregated prediction of shape [num_classes]
+        """
+        # Simple mean aggregation
+        return torch.stack(chunk_outputs).mean(dim=0)
 
 class BalancedAugmentedDataset(Dataset):
     """

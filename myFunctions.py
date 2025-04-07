@@ -17,7 +17,7 @@ def preprocess_function(example):
     # Wav2Vec2 processing
     _, processor, _  = myModel.getModelDefinitions()
     inputs = processor(example["audio"]["array"], sampling_rate=example["audio"]["sampling_rate"], return_tensors="pt")
-
+    
     extracted_features = myConfig.selected_features
     feats = [example[col] for col in extracted_features]
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)

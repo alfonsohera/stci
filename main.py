@@ -57,15 +57,10 @@ def collate_fn(batch):
         padding=True
     ).input_values
 
-    prosodic_features = torch.stack([
-        torch.tensor(item["prosodic_features"]) for item in batch
-    ])
-
     labels = torch.tensor([item["label"] for item in batch])
 
     return {
         "input_values": input_values.to(device),
-        "prosodic_features": prosodic_features.to(device),
         "labels": labels.to(device)
     }
 
@@ -83,8 +78,7 @@ def testModel(model, dataset):
     with torch.inference_mode():
         for batch in tqdm(test_loader):
             logits = model(
-                input_values=batch["input_values"],
-                prosodic_features=batch["prosodic_features"]
+                input_values=batch["input_values"]
             ).logits
 
             preds = torch.argmax(logits, dim=-1)
@@ -127,8 +121,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Evaluating"):
             logits = model(
-                input_values=batch["input_values"],
-                prosodic_features=batch["prosodic_features"]
+                input_values=batch["input_values"]
             ).logits
             
             # Get probabilities
@@ -500,7 +493,8 @@ if __name__ == "__main__":
         except ImportError:
             has_threshold_functions = False
             
-        use_manual = not args.no_manual
+        #use_manual = not args.no_manual
+        use_manual = False # Set to False explicitly.
         feature_text = "without" if args.no_manual else "with"
         
         if args.mode == "train":

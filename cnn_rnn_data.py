@@ -13,94 +13,132 @@ import myFunctions
 import myAudio
 
 
+def chunk_audio(audio, chunk_size_seconds=5, sample_rate=16000):
+    """
+    Split audio into fixed-size chunks of specified duration
+    
+    Args:
+        audio: Audio tensor of shape [C, L]
+        chunk_size_seconds: Size of each chunk in seconds
+        sample_rate: Sample rate of the audio
+        
+    Returns:
+        List of audio chunks, each of shape [C, chunk_size*sample_rate]
+    """
+    chunk_size = int(chunk_size_seconds * sample_rate)
+    chunks = []
+    
+    # Get audio length (sequence dimension)
+    audio_length = audio.shape[1]
+    
+    # If audio is smaller than chunk size, pad it
+    if audio_length < chunk_size:
+        padding = torch.zeros((audio.shape[0], chunk_size - audio_length), dtype=audio.dtype)
+        padded_audio = torch.cat([audio, padding], dim=1)
+        return [padded_audio]
+    
+    # Split audio into chunks
+    num_chunks = audio_length // chunk_size
+    
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size
+        chunks.append(audio[:, start:end])
+    
+    # Handle the remaining part if it exists and is significant
+    remaining = audio_length % chunk_size
+    if remaining > 0.5 * chunk_size:  # If remaining part is more than half the chunk size
+        start = num_chunks * chunk_size
+        padding = torch.zeros((audio.shape[0], chunk_size - remaining), dtype=audio.dtype)
+        last_chunk = torch.cat([audio[:, start:], padding], dim=1)
+        chunks.append(last_chunk)
+    
+    return chunks
+
+
 class CNNRNNDataset(Dataset):
-    """Dataset wrapper specifically for CNN+RNN model requirements"""
-    def __init__(self, hf_dataset, use_prosodic_features=True):
-        self.dataset = hf_dataset
-        self.use_prosodic_features = use_prosodic_features
+    """Dataset wrapper specifically for CNN+RNN model requirements with fixed chunk size"""
+    def __init__(self, hf_dataset, chunk_size_seconds=5):
+        self.dataset = hf_dataset        
+        self.chunk_size_seconds = chunk_size_seconds
+        
+        # Always create chunk-based indices
+        self._create_chunk_indices()
+    
+    def _create_chunk_indices(self):
+        """Create mapping from chunk index to (dataset_idx, chunk_idx)"""
+        self.chunk_indices = []
+        
+        for dataset_idx in range(len(self.dataset)):
+            item = self.dataset[dataset_idx]
+            
+            # Ensure audio is a tensor
+            if not isinstance(item["audio"], torch.Tensor):
+                audio = torch.tensor(item["audio"], dtype=torch.float32)
+            else:
+                audio = item["audio"]
+                
+            # Add channel dimension if missing
+            if len(audio.shape) == 1:
+                audio = audio.unsqueeze(0)  # [C, L]
+                
+            # Chunk the audio
+            chunks = chunk_audio(audio, self.chunk_size_seconds)
+            
+            # Add mapping for each chunk
+            for chunk_idx in range(len(chunks)):
+                self.chunk_indices.append((dataset_idx, chunk_idx))
     
     def __len__(self):
-        return len(self.dataset)
+        return len(self.chunk_indices)
     
     def __getitem__(self, idx):
-        item = self.dataset[idx]
+        # Get original item index and chunk index
+        dataset_idx, chunk_idx = self.chunk_indices[idx]
+        item = self.dataset[dataset_idx]
         
-        # Ensure audio is a tensor with proper dimensions
+        # Ensure audio is a tensor
         if not isinstance(item["audio"], torch.Tensor):
-            item["audio"] = torch.tensor(item["audio"], dtype=torch.float32)
+            audio = torch.tensor(item["audio"], dtype=torch.float32)
+        else:
+            audio = item["audio"]
             
-        # Add channel dimension if missing (for CNN input)
-        if len(item["audio"].shape) == 1:
-            item["audio"] = item["audio"].unsqueeze(0)  # [C, L]
+        # Add channel dimension if missing
+        if len(audio.shape) == 1:
+            audio = audio.unsqueeze(0)  # [C, L]
             
-        result = {
-            "audio": item["audio"],
-            "label": item["label"]
-        }
+        # Get the specified chunk
+        chunks = chunk_audio(audio, self.chunk_size_seconds)
+        audio = chunks[chunk_idx]
         
-        # Include prosodic features only if needed
-        if self.use_prosodic_features:
-            if isinstance(item["prosodic_features"], list):
-                result["prosodic_features"] = torch.tensor(item["prosodic_features"], dtype=torch.float32)
-            else:
-                result["prosodic_features"] = item["prosodic_features"]
+        result = {
+            "audio": audio,
+            "label": item["label"],
+            "original_idx": dataset_idx
+        }
                 
         return result
 
 
 def collate_fn_cnn_rnn(batch):
     """
-    Collate function that handles variable-length audio more effectively.
+    Collate function that handles chunked audio.
+    All audio chunks should have the same length.
     """
-    # Get original lengths and convert to tensors
-    audio_tensors = []
-    audio_lengths = []
-    
-    for item in batch:
-        audio = item["audio"]
-        if isinstance(audio, list):
-            audio = torch.tensor(audio, dtype=torch.float32)
-        
-        # Ensure 2D format [C, T]
-        if len(audio.shape) == 1:
-            audio = audio.unsqueeze(0)
-            
-        audio_tensors.append(audio)
-        audio_lengths.append(audio.shape[1])
-    
-    # Find max length in this batch only
-    max_len = max(audio_lengths)
-    
-    # Cap maximum length to avoid OOM (e.g., 60 seconds at 16kHz)
-    max_allowed_len = 16000 * 60  
-    max_len = min(max_len, max_allowed_len)
-    
-    # Pad to max length in this batch (or cap)
-    padded_tensors = []
-    
-    # Use enumeration to get index directly
-    for i, (audio, orig_len) in enumerate(zip(audio_tensors, audio_lengths)):
-        if audio.shape[1] > max_len:
-            # Trim audio to max allowed length
-            padded_tensors.append(audio[:, :max_len])
-            # Update length using the index directly
-            audio_lengths[i] = max_len
-        elif audio.shape[1] < max_len:
-            padding = torch.zeros((audio.shape[0], max_len - audio.shape[1]), dtype=audio.dtype)
-            padded = torch.cat([audio, padding], dim=1)
-            padded_tensors.append(padded)
-        else:
-            padded_tensors.append(audio)
-    
-    # Stack tensors
-    audio = torch.stack(padded_tensors)
+    # For chunked audio, just stack them directly since they should be uniform size
+    audio = torch.stack([item["audio"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
     
     result = {
         "audio": audio,
         "labels": labels,
-        "audio_lengths": torch.tensor(audio_lengths)
+        # All chunks have same length
+        "audio_lengths": torch.tensor([item["audio"].shape[1] for item in batch])
     }
+    
+    # Track original indices if available
+    if "original_idx" in batch[0]:
+        result["original_idx"] = [item["original_idx"] for item in batch]
     
     # Add prosodic features if present
     if "prosodic_features" in batch[0]:
@@ -120,14 +158,14 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=True):
+def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=5):
     """
-    Creates appropriate dataloaders for CNN+RNN model training.
+    Creates appropriate dataloaders for CNN+RNN model training with chunked audio.
     
     Args:
         dataset_dict: Dictionary of datasets with train/validation/test splits
-        batch_size: Batch size for training and evaluation
-        use_prosodic_features: Whether to include prosodic features
+        batch_size: Batch size for training and evaluation        
+        chunk_size_seconds: Size of each chunk in seconds
         
     Returns:
         Dictionary with train, validation, and test dataloaders
@@ -137,9 +175,20 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
     processed_dataset = dataset_dict
     
     # Wrap the datasets in a custom dataset class
-    train_dataset = CNNRNNDataset(processed_dataset["train"], use_prosodic_features)
-    val_dataset = CNNRNNDataset(processed_dataset["validation"], use_prosodic_features)
-    test_dataset = CNNRNNDataset(processed_dataset["test"], use_prosodic_features)
+    train_dataset = CNNRNNDataset(
+        processed_dataset["train"],         
+        chunk_size_seconds=chunk_size_seconds
+    )
+    
+    val_dataset = CNNRNNDataset(
+        processed_dataset["validation"],         
+        chunk_size_seconds=chunk_size_seconds
+    )
+    
+    test_dataset = CNNRNNDataset(
+        processed_dataset["test"],         
+        chunk_size_seconds=chunk_size_seconds
+    )
     
     # Create dataloaders with appropriate settings
     train_loader = DataLoader(
@@ -177,7 +226,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, use_prosodic_features=T
 
 
 def prepare_cnn_rnn_dataset():
-    """Prepare the dataset specifically for CNN+RNN model"""
+    """Prepare data for CNN-RNN model training."""
     myData.DownloadAndExtract()
     
     # Check if dataframe.csv exists
@@ -216,10 +265,10 @@ def prepare_cnn_rnn_dataset():
     return dataset
 
 
-def load_waveform_from_file(file_path, target_sr=16000, max_duration=10.0):
+def load_waveform_from_file(file_path, target_sr=16000, max_duration=10.0, chunk_size_seconds=5):
     """
     Load and preprocess audio waveform from file for CNN+RNN model.
-    Handles resampling, normalization, and padding/trimming.
+    Handles resampling, normalization, and chunks the audio into fixed-size segments.
     """
     # Load audio
     waveform, sr = myAudio.load_audio(file_path)
@@ -232,4 +281,5 @@ def load_waveform_from_file(file_path, target_sr=16000, max_duration=10.0):
     if len(waveform.shape) == 1:
         waveform = waveform.unsqueeze(0)  # [C, L]
     
-    return waveform
+    # Always chunk the audio
+    return chunk_audio(waveform, chunk_size_seconds, target_sr)

@@ -57,45 +57,112 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True):
+def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
     """Train the model for one epoch."""
     import gc
     model.train()
     train_loss = 0.0
     
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    
     for i, batch in enumerate(tqdm(train_loader, desc="Training")):
         # Move batch to GPU if available
         batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
-        # Zero gradients more efficiently
-        optimizer.zero_grad()
+        # Extract audio_ids if available
+        audio_ids = batch.get("audio_ids", None)
         
-        # Forward pass
-        if use_prosodic_features and "prosodic_features" in batch:
+        # If no audio_ids, process normally (no chunking)
+        if audio_ids is None:
+            # Zero gradients more efficiently
+            optimizer.zero_grad()
+            
+            # Forward pass
             logits = model(
                 batch["audio"], 
                 audio_lengths=batch["audio_lengths"],  
-                prosodic_features=batch["prosodic_features"], 
                 augmentation_id=batch.get("augmentation_id")
             )
+                
+            # Calculate loss                
+            loss = criterion(logits, batch["labels"].to(device))
+            
+            # Backpropagation
+            loss.backward()                        
+            # Update weights
+            optimizer.step()        
+            # Update LR
+            scheduler.step()
+            # Track loss 
+            train_loss += loss.item()
         else:
+            # Process batches with audio_ids for chunking
+            # Group logits by audio_id for later aggregation
+            
+            # Forward pass to get logits for each chunk
             logits = model(
                 batch["audio"], 
                 audio_lengths=batch["audio_lengths"],  
                 augmentation_id=batch.get("augmentation_id")
             )
             
-        # Calculate loss                
-        loss = criterion(logits, batch["labels"].to(device))
+            # Store chunks by audio_id
+            for j, audio_id in enumerate(audio_ids):
+                if audio_id not in audio_chunks:
+                    audio_chunks[audio_id] = []
+                    # Store the label for this audio (all chunks should have the same label)
+                    audio_labels[audio_id] = batch["labels"][j]
+                
+                # Store the logits for this chunk
+                audio_chunks[audio_id].append(logits[j])
+            
+            # Process complete audios (all chunks received)
+            # Here we could add logic to determine when we have all chunks for an audio
+            # For simplicity, let's process any audio that has accumulated chunks each batch
+            complete_audio_ids = list(audio_chunks.keys())
+            
+            if complete_audio_ids:
+                # Zero gradients before processing complete audios
+                optimizer.zero_grad()
+                
+                # Accumulate loss for all complete audios
+                batch_loss = 0.0
+                
+                for audio_id in complete_audio_ids:
+                    # Aggregate predictions from all chunks
+                    chunk_outputs = audio_chunks[audio_id]
+                    aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+                    
+                    # Get label for this audio
+                    label = audio_labels[audio_id]
+                    
+                    # Calculate loss using the aggregated output
+                    # Need to unsqueeze to match expected dimensions [batch_size, num_classes]
+                    loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
+                    batch_loss += loss
+                
+                # Average loss across all processed audios
+                batch_loss = batch_loss / len(complete_audio_ids)
+                
+                # Backpropagation
+                batch_loss.backward()
+                
+                # Update weights
+                optimizer.step()
+                
+                # Update LR
+                scheduler.step()
+                
+                # Track loss
+                train_loss += batch_loss.item() * len(complete_audio_ids)
+                
+                # Clear processed audio chunks and labels
+                for audio_id in complete_audio_ids:
+                    del audio_chunks[audio_id]
+                    del audio_labels[audio_id]
         
-        # Backpropagation
-        loss.backward()                        
-        # Update weights
-        optimizer.step()        
-        # Update LR
-        scheduler.step()
-        # Track loss 
-        train_loss += loss.item()        
         # cleanup of tensors and loss
         logits_detached = logits.detach()        
         del logits, loss, batch
@@ -115,43 +182,81 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
     return avg_train_loss
 
 
-def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
+def evaluate(model, val_loader, criterion, device):
     """Evaluate the model on validation data."""
     model.eval()
     val_loss = 0.0
     all_preds = []
     all_labels = []
     
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    
     with torch.inference_mode():
         for batch in tqdm(val_loader, desc="Validation"):
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            if use_prosodic_features and "prosodic_features" in batch:
+            # Extract audio_ids if available
+            audio_ids = batch.get("audio_ids", None)
+            
+            # If no audio_ids, process normally (no chunking)
+            if audio_ids is None:
+                # Forward pass
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    prosodic_features=batch["prosodic_features"]
-                )
-            else:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"] 
+                    audio_lengths=batch["audio_lengths"]
                 )
                 
-            # Calculate loss
-            loss = criterion(logits, batch["labels"])
-            # Track loss
+                # Calculate loss
+                loss = criterion(logits, batch["labels"])
+                # Track loss
+                val_loss += loss.item()
+                # Get predictions
+                preds = torch.argmax(logits, dim=-1)
+                # Track predictions and labels
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(batch["labels"].cpu().numpy())
+            else:
+                # Process batches with audio_ids for chunking
+                # Forward pass to get logits for each chunk
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"]
+                )
+                
+                # Store chunks by audio_id
+                for j, audio_id in enumerate(audio_ids):
+                    if audio_id not in audio_chunks:
+                        audio_chunks[audio_id] = []
+                        # Store the label for this audio
+                        audio_labels[audio_id] = batch["labels"][j]
+                    
+                    # Store the logits for this chunk
+                    audio_chunks[audio_id].append(logits[j])
+    
+    # Process all remaining audios after going through the entire dataset
+    if audio_chunks:
+        for audio_id, chunk_outputs in audio_chunks.items():
+            # Aggregate predictions from all chunks
+            aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+            
+            # Get label for this audio
+            label = audio_labels[audio_id]
+            
+            # Calculate loss using the aggregated output
+            loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
             val_loss += loss.item()
-            # Get predictions
-            preds = torch.argmax(logits, dim=-1)
-            # Track predictions and labels
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(batch["labels"].cpu().numpy())
+            
+            # Get prediction from aggregated output
+            pred = torch.argmax(aggregated_output)
+            all_preds.append(pred.cpu().numpy())
+            all_labels.append(label.cpu().numpy())
     
     return val_loss, all_labels, all_preds
 
 
-def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features=True):
+def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     """Train the CNN+RNN model."""        
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -161,15 +266,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
         wandb.init(
             project=myConfig.wandb_project,
             entity=myConfig.wandb_entity,
-            name=f"cnn_rnn{'_manual' if use_prosodic_features else '_no_manual'}",
+            name="cnn_rnn",
             config={
                 "model_type": "CNN+RNN",
-                "use_prosodic_features": use_prosodic_features,
                 "learning_rate": 2e-4,
                 "epochs": num_epochs,
                 "batch_size": 96,
-                "weight_decay": 5.47e-5,
-                "prosodic_features_dim": len(myData.extracted_features) if use_prosodic_features else 0
+                "weight_decay": 5.47e-5
             }
         )
         
@@ -223,8 +326,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             optimizer, 
             criterion, 
             device, 
-            scheduler, 
-            use_prosodic_features
+            scheduler
         )
         
         # Validation phase
@@ -232,8 +334,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             model, 
             dataloaders["validation"], 
             criterion, 
-            device, 
-            use_prosodic_features
+            device
         )
                        
         # Calculate metrics
@@ -343,7 +444,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
+def test_cnn_rnn_model(model, test_loader):
     """Test the CNN+RNN model on the test set."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -356,17 +457,10 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
         for batch in tqdm(test_loader, desc="Testing"):
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            if use_prosodic_features and "prosodic_features" in batch:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    prosodic_features=batch["prosodic_features"]
-                )
-            else:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"] 
-                )
+            logits = model(
+                batch["audio"], 
+                audio_lengths=batch["audio_lengths"] 
+            )
                 
             preds = torch.argmax(logits, dim=-1)
             
@@ -384,11 +478,11 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
     print(report)
 
 
-def main_cnn_rnn(use_prosodic_features=True):
+def main_cnn_rnn():
     """Main function for the CNN+RNN pipeline."""
     from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
     
-    print(f"Running CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features")
+    print("Running CNN+RNN model")
     
     # Load and prepare dataset using the dedicated cnn_rnn_data module
     dataset = prepare_cnn_rnn_dataset()
@@ -414,16 +508,13 @@ def main_cnn_rnn(use_prosodic_features=True):
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=96,
-        use_prosodic_features=use_prosodic_features
+        batch_size=96
     )
     
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        sample_rate=16000
     )
     print("Model created!")
     
@@ -432,13 +523,12 @@ def main_cnn_rnn(use_prosodic_features=True):
     train_cnn_rnn_model(
         model, 
         dataloaders, 
-        num_epochs=10, 
-        use_prosodic_features=use_prosodic_features
+        num_epochs=10
     )
     print("Training complete!")
 
 
-def test_cnn_rnn(use_prosodic_features=True):
+def test_cnn_rnn():
     """Test function for the CNN+RNN pipeline."""
     from cnn_rnn_model import DualPathAudioClassifier
     
@@ -448,16 +538,13 @@ def test_cnn_rnn(use_prosodic_features=True):
     # Get dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=8
     )
     
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features)
+        sample_rate=16000
     )
     
     # Load the best model weights if available
@@ -469,10 +556,10 @@ def test_cnn_rnn(use_prosodic_features=True):
         print("No pre-trained model found. Using randomly initialized weights.")
     
     # Run evaluation
-    test_cnn_rnn_model(model, dataloaders["test"], use_prosodic_features)
+    test_cnn_rnn_model(model, dataloaders["test"])
 
 
-def optimize_cnn_rnn(use_prosodic_features=True):
+def optimize_cnn_rnn():
     """Function to run threshold optimization for CNN+RNN model"""    
     
     # Configure paths
@@ -488,9 +575,7 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        sample_rate=16000
     )
     
     # Load the best model weights if available
@@ -504,8 +589,7 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     # Create validation dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=8
     )["validation"]
     
     # Set output directory
@@ -515,45 +599,21 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     # Run threshold optimization
     class_names = ["Healthy", "MCI", "AD"]
     
-    # Custom prediction function for CNN+RNN model
-    def predict_fn(model, batch, device):
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        
-        if use_prosodic_features and "prosodic_features" in batch:
-            logits = model(
-                batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                prosodic_features=batch["prosodic_features"]
-            )
-        else:
-            logits = model(
-                batch["audio"], 
-                audio_lengths=batch["audio_lengths"]
-            )
-        
-        # Get probabilities
-        probs = torch.softmax(logits, dim=-1)
-        # Get true labels
-        labels = batch["labels"]
-        
-        return probs, labels
-    
     # Run optimization
-    print(f"Running threshold optimization for CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features...")
+    print("Running threshold optimization for CNN+RNN model...")
     optimize_thresholds_for_model(
         model=model,
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
-        use_prosodic_features=use_prosodic_features,
         is_cnn_rnn=True, 
-        log_to_wandb=not myConfig.running_offline,        
+        log_to_wandb=not myConfig.running_offline        
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
 
 
-def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
+def test_cnn_rnn_with_thresholds():
     """Test CNN+RNN model using the optimized thresholds"""
     import os
     import json
@@ -567,16 +627,14 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
         setattr(myConfig, key, path)
     
     # Prepare dataset
-    print(f"Loading dataset for testing with thresholds ({'with' if use_prosodic_features else 'without'} manual features)...")
+    print("Loading dataset for testing with thresholds...")
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
     from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        sample_rate=16000
     )
     
     # Load the best model weights
@@ -590,8 +648,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     # Create test dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=8
     )["test"]
     
     # Try to load threshold values from the optimization results
@@ -632,17 +689,10 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
                 for batch in tqdm(dataloader, desc="Evaluating"):
                     batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
                     
-                    if use_prosodic_features and "prosodic_features" in batch:
-                        logits = model(
-                            batch["audio"], 
-                            audio_lengths=batch["audio_lengths"],  
-                            prosodic_features=batch["prosodic_features"]
-                        )
-                    else:
-                        logits = model(
-                            batch["audio"], 
-                            audio_lengths=batch["audio_lengths"] 
-                        )
+                    logits = model(
+                        batch["audio"], 
+                        audio_lengths=batch["audio_lengths"]
+                    )
                     
                     # Get probabilities
                     probs = torch.softmax(logits, dim=-1)
@@ -755,7 +805,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
         print("Please run optimize_cnn_rnn() first to generate threshold values.")
 
 
-def run_cross_validation(use_prosodic_features=True, n_folds=5):
+def run_cross_validation(n_folds=5):
     """Run k-fold cross-validation for the CNN+RNN model."""
     from sklearn.model_selection import KFold
     from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
@@ -809,16 +859,13 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
         # Get dataloaders for this fold
         fold_dataloaders = get_cnn_rnn_dataloaders(
             fold_dataset,
-            batch_size=32,
-            use_prosodic_features=use_prosodic_features
+            batch_size=32
         )
         
         # Create new model for this fold
         fold_model = DualPathAudioClassifier(
             num_classes=3,
-            sample_rate=16000,
-            use_prosodic_features=use_prosodic_features,
-            prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+            sample_rate=16000
         )
         
         # Train the model on this fold
@@ -858,13 +905,13 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
             # Train
             train_loss = train_epoch(
                 fold_model, fold_dataloaders["train"], optimizer, 
-                criterion, device, scheduler, use_prosodic_features
+                criterion, device, scheduler
             )
             
             # Validate
             val_loss, val_labels, val_preds = evaluate(
                 fold_model, fold_dataloaders["validation"], 
-                criterion, device, use_prosodic_features
+                criterion, device
             )
             
             # Calculate metrics
@@ -887,7 +934,7 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
         # Test the best model on this fold
         test_loss, test_labels, test_preds = evaluate(
             fold_model, fold_dataloaders["test"],
-            criterion, device, use_prosodic_features
+            criterion, device
         )
         
         # Calculate test metrics
@@ -942,7 +989,7 @@ def run_cross_validation(use_prosodic_features=True, n_folds=5):
     return cv_results
 
 
-def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_study=False):
+def run_bayesian_optimization(n_trials=50, resume_study=False):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
     from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
     import json
@@ -956,7 +1003,6 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             name="hpo_cnn_rnn",
             config={
                 "model_type": "CNN+RNN HPO",
-                "use_prosodic_features": use_prosodic_features,
                 "n_trials": n_trials,
                 "optimization_type": "bayesian"
             },
@@ -990,8 +1036,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     # Get dataloaders with balanced training data
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset,
-        batch_size=96,
-        use_prosodic_features=use_prosodic_features
+        batch_size=96
     )
     
     train_loader = dataloaders["train"]
@@ -1023,8 +1068,6 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             model = DualPathAudioClassifier(
                 num_classes=3,
                 sample_rate=16000,
-                use_prosodic_features=use_prosodic_features,
-                prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
                 n_mels=n_mels,
                 apply_specaugment=True
             )
@@ -1082,12 +1125,11 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
                     # Train
                     train_loss = train_epoch(
                         model, train_loader, optimizer, 
-                        criterion, device, scheduler, 
-                        use_prosodic_features
+                        criterion, device, scheduler
                     )
                     # Evaluate 
                     val_loss, val_labels, val_preds = evaluate(
-                        model, val_loader, criterion, device, use_prosodic_features
+                        model, val_loader, criterion, device
                     )
                     val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
                     # Rest of the code...
@@ -1179,12 +1221,12 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     study_storage_path = os.path.join(
         myConfig.OUTPUT_PATH, 
         "hyperparameter_optimization",
-        f"hpo_study_{'with' if use_prosodic_features else 'no'}_manual.pkl"
+        "hpo_study_cnn_rnn.pkl"
     )
     
     # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials...")
-    study_name = f"cnn_rnn_{'with' if use_prosodic_features else 'without'}_manual_features"
+    study_name = "cnn_rnn"
     
     # Initialize or resume study
     if resume_study and os.path.exists(study_storage_path):
@@ -1229,11 +1271,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     # Save best hyperparameters
     result = {
         "best_params": best_params,
-        "best_value": best_value,
-        "feature_type": "with_manual" if use_prosodic_features else "without_manual"
+        "best_value": best_value
     }
     
-    with open(os.path.join(output_dir, f"best_hyperparams_{'with' if use_prosodic_features else 'no'}_manual.json"), "w") as f:
+    with open(os.path.join(output_dir, "best_hyperparams_cnn_rnn.json"), "w") as f:
         json.dump(result, f, indent=2)
     
     # Print importance of hyperparameters if optuna has enough trials
@@ -1252,11 +1293,11 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             
             # History plot
             fig1 = plot_optimization_history(study)
-            fig1.write_image(os.path.join(output_dir, f"optimization_history_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            fig1.write_image(os.path.join(output_dir, "optimization_history_cnn_rnn.png"))
             
             # Parameter importance plot
             fig2 = plot_param_importances(study)
-            fig2.write_image(os.path.join(output_dir, f"param_importances_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            fig2.write_image(os.path.join(output_dir, "param_importances_cnn_rnn.png"))
             
             print(f"Optimization visualizations saved to {output_dir}")
         except Exception as e:
@@ -1288,7 +1329,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     
     # Train final model with best hyperparameters (optional)
     if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
-        train_with_best_hyperparameters(dataset, best_params, use_prosodic_features)
+        train_with_best_hyperparameters(dataset, best_params)
     
     # Save study state for possible resumption
     os.makedirs(os.path.dirname(study_storage_path), exist_ok=True)
@@ -1301,7 +1342,7 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     return result
 
 
-def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=True):
+def train_with_best_hyperparameters(dataset, best_params):
     """Train a final model using the best hyperparameters from Bayesian optimization."""
     from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
     
@@ -1336,16 +1377,13 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Create dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=32,
-        use_prosodic_features=use_prosodic_features
+        batch_size=32
     )
     
     # Create model with optimized hyperparameters
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
         n_mels=n_mels,
         apply_specaugment=True
     )
@@ -1404,8 +1442,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             optimizer, 
             criterion, 
             device, 
-            scheduler, 
-            use_prosodic_features
+            scheduler
         )
         
         # Validation phase
@@ -1413,8 +1450,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             model, 
             dataloaders["validation"], 
             criterion, 
-            device, 
-            use_prosodic_features
+            device
         )
         
         # Calculate metrics
@@ -1456,7 +1492,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Test on test set
     print("\nTesting optimized model on test set...")
     test_loss, test_labels, test_preds = evaluate(
-        model, dataloaders["test"], criterion, device, use_prosodic_features
+        model, dataloaders["test"], criterion, device
     )
     
     # Calculate test metrics

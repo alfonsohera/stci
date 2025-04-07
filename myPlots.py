@@ -512,9 +512,8 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     # Load the CNN extractor 
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=False,  # Not needed for feature extraction
-        apply_specaugment=False  # We'll apply augmentation manually
+        sample_rate=16000,        
+        apply_specaugment=False
     ).to(device)
     model.eval()  # Set to evaluation mode
     
@@ -845,8 +844,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     print("Loading feature extraction model...")
     model = DualPathAudioClassifier(
         num_classes=3,  
-        sample_rate=16000,
-        use_prosodic_features=False,
+        sample_rate=16000,        
         apply_specaugment=False
     ).to(device)
     
