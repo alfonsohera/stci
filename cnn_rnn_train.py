@@ -530,7 +530,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     print("Creating balanced training dataset with augmentations...")
     balanced_train_dataset = BalancedAugmentedDataset(
         original_dataset=dataset["train"],
-        total_target_samples=1000,
+        total_target_samples=2000,
         num_classes=3
     )
     
