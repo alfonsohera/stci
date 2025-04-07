@@ -62,6 +62,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
     import gc
     model.train()
     train_loss = 0.0
+    total_samples = 0  # Track total number of samples or recordings
     
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
@@ -95,8 +96,11 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
             optimizer.step()        
             # Update LR
             scheduler.step()
-            # Track loss 
-            train_loss += loss.item()
+            
+            # Track loss (count each sample)
+            batch_size = batch["audio"].size(0)
+            train_loss += loss.item() * batch_size
+            total_samples += batch_size
         else:
             # Process batches with audio_ids for chunking
             # Group logits by audio_id for later aggregation
@@ -155,8 +159,9 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
                 # Update LR
                 scheduler.step()
                 
-                # Track loss
+                # Track loss by number of recordings (not multiplying by length)
                 train_loss += batch_loss.item() * len(complete_audio_ids)
+                total_samples += len(complete_audio_ids)
                 
                 # Clear processed audio chunks and labels
                 for audio_id in complete_audio_ids:
@@ -177,7 +182,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
     gc.collect()
     
     # Calculate average loss
-    avg_train_loss = train_loss / len(train_loader)
+    avg_train_loss = train_loss / total_samples if total_samples > 0 else 0
     
     return avg_train_loss
 
@@ -188,7 +193,6 @@ def evaluate(model, val_loader, criterion, device):
     val_loss = 0.0
     all_preds = []
     all_labels = []
-    
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
     audio_labels = {}
@@ -236,8 +240,7 @@ def evaluate(model, val_loader, criterion, device):
                     audio_chunks[audio_id].append(logits[j])
     
     # Process all remaining audios after going through the entire dataset
-    if audio_chunks:
-        total_recordings = len(audio_chunks)
+    if audio_chunks:        
         for audio_id, chunk_outputs in audio_chunks.items():
             # Aggregate predictions from all chunks
             aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
@@ -247,7 +250,7 @@ def evaluate(model, val_loader, criterion, device):
             
             # Calculate loss using the aggregated output
             loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
-            val_loss += loss.item() / total_recordings
+            val_loss += loss.item() 
             
             # Get prediction from aggregated output
             pred = torch.argmax(aggregated_output)
@@ -339,7 +342,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         )
                        
         # Calculate metrics
-        avg_val_loss = val_loss / len(dataloaders["validation"])
+        total_val_recordings = len(all_labels)  # This now represents total processed recordings
+        avg_val_loss = val_loss / total_val_recordings
         val_accuracy = accuracy_score(all_labels, all_preds)
         val_f1_macro = f1_score(all_labels, all_preds, average='macro')
         val_f1_per_class = f1_score(all_labels, all_preds, average=None)
@@ -1218,7 +1222,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                         wandb.log({f"trial_{trial.number}_epoch_{epoch}_error": str(epoch_error)})
                     raise  # Re-raise to be caught by the outer try/except
                 # Calculate average batch validation loss 
-                avg_val_loss = val_loss / len(val_loader)
+                total_val_recordings = len(val_labels)  # This now represents total processed recordings
+                avg_val_loss = val_loss / total_val_recordings
                             
                 # Append to history 
                 trial_history.append({
@@ -1533,7 +1538,8 @@ def train_with_best_hyperparameters(dataset, best_params):
         )
         
         # Calculate metrics
-        avg_val_loss = val_loss / len(dataloaders["validation"])
+        total_val_recordings = len(all_labels)  # This now represents total processed recordings
+        avg_val_loss = val_loss / total_val_recordings
         val_accuracy = accuracy_score(all_labels, all_preds)
         val_f1_macro = f1_score(all_labels, all_preds, average='macro')
         val_f1_per_class = f1_score(all_labels, all_preds, average=None)
