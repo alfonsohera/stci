@@ -100,6 +100,37 @@ class SelfAttention(nn.Module):
         return x
 
 
+class ImprovedSelfAttention(nn.Module): #TDO: test instead of SelfAttention
+    """Improved self-attention module with pre-LN and GELU"""
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embed_dim, num_heads=num_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Improved feed-forward with GELU and different expansion ratio
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 2),  # Smaller for efficiency
+            nn.GELU(),  # GELU often performs better than ReLU
+            nn.Dropout(dropout),
+            nn.Linear(embed_dim * 2, embed_dim)
+        )
+        self.norm2 = nn.LayerNorm(embed_dim)
+        
+    def forward(self, x, mask=None):
+        # Pre-LN architecture (more stable training)
+        x_norm = self.norm1(x)
+        attn_output, _ = self.attention(x_norm, x_norm, x_norm, key_padding_mask=mask)
+        x = x + self.dropout(attn_output)
+        
+        x_norm = self.norm2(x)
+        ff_output = self.ff(x_norm)
+        x = x + self.dropout(ff_output)
+        
+        return x
+
+
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, apply_specaugment=True):
         super(DualPathAudioClassifier, self).__init__()        
