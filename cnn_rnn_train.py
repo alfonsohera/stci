@@ -1171,15 +1171,16 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             gc.collect()
             
             # Focus HPO on learning dynamics parameters
-            lr = trial.suggest_float("learning_rate", 0.00015, 0.0003, log=True)  
-            weight_decay = trial.suggest_float("weight_decay", 3e-5, 1e-4, log=True)            
-            max_lr = trial.suggest_float("max_lr", 0.0005, 0.003, log=True)
-            gamma = trial.suggest_float("focal_loss_gamma", 1.4, 2.0) 
-            time_mask_param = trial.suggest_int("time_mask_param", 15, 30)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 40, 70) 
+            fixed_lr = trial.suggest_float("fixed_lr", 1e-5, 5e-4, log=True)
+            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)            
+            gamma = trial.suggest_float("focal_loss_gamma", 1.0, 2.5)
+            dropout_factor = trial.suggest_float("dropout_factor", 0.8, 1.5)  # Multiplier for all dropout rates            
+            # SpecAugment parameters
+            time_mask_param = trial.suggest_int("time_mask_param", 15, 40)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 30, 80)
             # New parameters for attention mechanism
-            attention_heads = trial.suggest_int("attention_heads", 2, 4)
-            attention_dropout = trial.suggest_float("attention_dropout", 0.05, 0.2)
+            attention_heads = trial.suggest_int("attention_heads", 1, 4)
+            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.5)
             
             # Fix other parameters to best values from previous HPO
             pct_start = 0.3031315684459232  # Best from previous HPO            
@@ -1206,16 +1207,24 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                 attn_layer.attention = nn.MultiheadAttention(
                     embed_dim=8,
                     num_heads=attention_heads,
-                    dropout=attention_dropout,
+                    dropout=attention_dropout * dropout_factor,
                     batch_first=True
                 )
-
+            # Adjust all dropout rates in the model
+            for module in model.modules():
+                if isinstance(module, nn.Dropout):
+                    # Get current dropout probability
+                    current_p = module.p
+                    # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
+                    new_p = min(current_p * dropout_factor, 0.7)
+                    # Set new dropout probability
+                    module.p = new_p
             model.to(device)
             
             # Create optimizer with trial hyperparameters
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=lr,
+                lr=fixed_lr,
                 weight_decay=weight_decay,
                 betas=(0.9, 0.999)
             )
@@ -1223,22 +1232,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             # Create focal loss with trial gamma
             criterion = FocalLoss(gamma=gamma)
             
-            # Calculate total steps for shorter training (3 epochs)
-            n_batches = len(train_loader)
-            n_epochs = 10  # Number of epochs for HPO
-            total_steps = n_batches * n_epochs
-            
-            # Create scheduler with trial hyperparameters
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=max_lr,
-                total_steps=total_steps,
-                pct_start=pct_start,
-                div_factor=25,
-                final_div_factor=1000,
-                anneal_strategy='cos',
-                three_phase=False
-            )                       
+            # Calculate total steps for shorter training (3 epochs)            
+            n_epochs = 20  # Number of epochs for HPO        
 
             # training loop  length
             max_training_epochs = n_epochs
@@ -1258,7 +1253,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                     # Train
                     train_loss = train_epoch(
                         model, train_loader, optimizer, 
-                        criterion, device, scheduler
+                        criterion, device
                     )
                     # Evaluate 
                     val_loss, val_labels, val_preds = evaluate(
@@ -1314,7 +1309,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                 torch.save(model.state_dict(), trial_model_path)
             
             # Clean up to free memory
-            del model, optimizer, scheduler, criterion
+            del model, optimizer, criterion
             torch.cuda.empty_cache()
             gc.collect()
             
