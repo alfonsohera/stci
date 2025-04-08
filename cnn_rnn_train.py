@@ -1170,20 +1170,21 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             torch.cuda.empty_cache()
             gc.collect()
             
-            # Focus HPO on learning dynamics parameters
-            fixed_lr = trial.suggest_float("fixed_lr", 1e-5, 5e-4, log=True)
-            weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-3, log=True)            
-            gamma = trial.suggest_float("focal_loss_gamma", 1.0, 2.5)
-            dropout_factor = trial.suggest_float("dropout_factor", 0.8, 1.5)  # Multiplier for all dropout rates            
-            # SpecAugment parameters
-            time_mask_param = trial.suggest_int("time_mask_param", 15, 40)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 30, 80)
-            # New parameters for attention mechanism
-            attention_heads = trial.suggest_int("attention_heads", 1, 4)
-            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.5)
+            # Primary focus (most important parameters)
+            fixed_lr = trial.suggest_float("fixed_lr", 0.00012, 0.00025, log=True)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.9, 1.5)
+
+            # Secondary focus (medium importance)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 35, 50)
+            attention_dropout = trial.suggest_float("attention_dropout", 0.3, 0.42) 
+            dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
+
+            # Minor parameters (can be fixed)
+            time_mask_param = 37  # Fixed from previous best
+            attention_heads = 1   # Fixed from previous best
+            weight_decay = 5e-5   # Fixed from previous best
             
-            # Fix other parameters to best values from previous HPO
-            pct_start = 0.3031315684459232  # Best from previous HPO            
+            # Fix other parameters to best values from previous HPO                        
             n_mels = 110                    # Best from previous HPO            
             
             trial_history = []
@@ -1230,7 +1231,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             )
             
             # Create focal loss with trial gamma
-            criterion = FocalLoss(gamma=gamma)
+            criterion = FocalLoss(gamma=focal_loss_gamma)
             
             # Calculate total steps for shorter training (3 epochs)            
             n_epochs = 20  # Number of epochs for HPO        
