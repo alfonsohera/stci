@@ -57,7 +57,7 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
+def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=None):
     """Train the model for one epoch."""
     import gc
     model.train()
@@ -99,7 +99,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
             # Update weights
             optimizer.step()        
             # Update LR
-            scheduler.step()
+            #scheduler.step()
             
             # Track loss (count each sample)
             batch_size = batch["audio"].size(0)
@@ -278,7 +278,6 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     model.to(device)
     
     # From HPO:
-    hpo_learning_rate = 0.00024174133542899717
     hpo_weight_decay = 1e-4
     hpo_max_lr = 0.0010081938657011827
     hpo_focal_loss_gamma = 1.7457434556481195
@@ -292,7 +291,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             name="cnn_rnn",
             config={
                 "model_type": "CNN+RNN",
-                "learning_rate": 2e-4,
+                "learning_rate": hpo_max_lr,
                 "epochs": num_epochs,
                 "batch_size": 96,
                 "weight_decay": 1e-4
@@ -309,7 +308,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=hpo_learning_rate,            # Starting LR (will be scaled by OneCycleLR)
+        lr=hpo_max_lr,            
         weight_decay=hpo_weight_decay,  # L2 regularization
         betas=(0.9, 0.999)  # Default Adam betas
     )
@@ -348,8 +347,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             dataloaders["train"], 
             optimizer, 
             criterion, 
-            device, 
-            scheduler
+            device
         )
         
         # Validation phase
@@ -380,7 +378,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             "val_loss": avg_val_loss,
             "val_accuracy": val_accuracy,
             "val_f1_macro": val_f1_macro,
-            "learning_rate": scheduler.get_last_lr()[0]
+            "learning_rate": hpo_max_lr
         }
         
         # Compute class-specific metrics
