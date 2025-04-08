@@ -163,7 +163,7 @@ class DualPathAudioClassifier(nn.Module):
             nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
-            nn.Dropout(0.2),  # Increase from 0.1
+            nn.Dropout(0.3),  # Increase from 0.1
             
             # Second block
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
