@@ -163,7 +163,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
                 optimizer.step()
                 
                 # Update LR
-                scheduler.step()
+                #scheduler.step()
                 
                 # Track loss by number of recordings (not multiplying by length)
                 train_loss += batch_loss.item() * len(complete_audio_ids)
