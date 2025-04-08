@@ -1170,12 +1170,16 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             gc.collect()
             
             # Focus HPO on learning dynamics parameters
-            lr = trial.suggest_float("learning_rate", 0.00008, 0.0003, log=True)  
-            weight_decay = trial.suggest_float("weight_decay", 1e-5, 5e-4, log=True)            
-            max_lr = trial.suggest_float("max_lr", 0.0001, 0.003, log=True)
-            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0) 
-            time_mask_param = trial.suggest_int("time_mask_param", 10, 25)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 70) 
+            lr = trial.suggest_float("learning_rate", 0.00015, 0.0003, log=True)  
+            weight_decay = trial.suggest_float("weight_decay", 3e-5, 1e-4, log=True)            
+            max_lr = trial.suggest_float("max_lr", 0.0005, 0.003, log=True)
+            gamma = trial.suggest_float("focal_loss_gamma", 1.4, 2.0) 
+            time_mask_param = trial.suggest_int("time_mask_param", 15, 30)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 40, 70) 
+            # New parameters for attention mechanism
+            attention_heads = trial.suggest_int("attention_heads", 2, 4)
+            attention_dropout = trial.suggest_float("attention_dropout", 0.05, 0.2)
+            
             # Fix other parameters to best values from previous HPO
             pct_start = 0.3031315684459232  # Best from previous HPO            
             n_mels = 110                    # Best from previous HPO            
@@ -1195,6 +1199,16 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                 model.spec_augment.time_mask_param = time_mask_param
                 model.spec_augment.freq_mask_param = freq_mask_param
             
+            # Update the attention layers with new hyperparameters
+            for attn_layer in model.attention_layers:
+                # Create a new attention module with desired parameters
+                attn_layer.attention = nn.MultiheadAttention(
+                    embed_dim=8,
+                    num_heads=attention_heads,
+                    dropout=attention_dropout,
+                    batch_first=True
+                )
+
             model.to(device)
             
             # Create optimizer with trial hyperparameters
