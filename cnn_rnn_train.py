@@ -277,7 +277,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     
     # From HPO:
     hpo_learning_rate = 0.00024174133542899717
-    hpo_weight_decay = 7.059491007656186e-05
+    hpo_weight_decay = 1e-4
     hpo_max_lr = 0.0010081938657011827
     hpo_focal_loss_gamma = 1.7457434556481195
     hpo_pct_start = 0.3031315684459232
@@ -293,7 +293,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                 "learning_rate": 2e-4,
                 "epochs": num_epochs,
                 "batch_size": 96,
-                "weight_decay": 5.47e-5
+                "weight_decay": 1e-4
             }
         )
         
