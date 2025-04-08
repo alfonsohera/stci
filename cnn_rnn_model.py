@@ -3,7 +3,7 @@ import torch.nn as nn
 import torchaudio
 import torchvision.models as vision_models
 import random
-import numpy as np
+import numpy np
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 from torchvision import transforms
@@ -132,8 +132,10 @@ class ImprovedSelfAttention(nn.Module): #TDO: test instead of SelfAttention
 
 
 class DualPathAudioClassifier(nn.Module):
-    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, apply_specaugment=True):
-        super(DualPathAudioClassifier, self).__init__()        
+    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
+                 apply_specaugment=True, use_prosodic_features=True, 
+                 prosodic_feature_dim=7):
+        super(DualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels
         self.apply_specaugment = apply_specaugment
@@ -204,16 +206,46 @@ class DualPathAudioClassifier(nn.Module):
             nn.Dropout(0.2)
         )
         
-        # Fusion layer (CNN features + Attention features)
-        self.fusion = nn.Sequential(
-            nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2)
-        )
+        # Add prosodic feature processing
+        self.use_prosodic_features = use_prosodic_features        
+        if use_prosodic_features:
+            # Prosodic feature encoder
+            self.prosodic_encoder = nn.Sequential(
+                nn.Linear(prosodic_feature_dim, 64),
+                nn.LayerNorm(64),  # Use LayerNorm for better generalization
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(64, 128)
+            )
+            
+            # Chunk context encoder (relative position in the audio)
+            self.chunk_context = nn.Sequential(
+                nn.Linear(2, 32),  # 2 inputs: relative position and chunk length
+                nn.ReLU(),
+                nn.Linear(32, 32)
+            )
+            
+            # Modified fusion to include prosodic features
+            self.fusion = nn.Sequential(
+                nn.Linear(256 + 256 + 128 + 32, 384),  # CNN + Attention + Prosodic + Chunk
+                nn.BatchNorm1d(384),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(384, 128),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            )
+        else:
+            # Fusion layer (CNN features + Attention features)
+            self.fusion = nn.Sequential(
+                nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            )
 
         # Separate classifier layer
         self.classifier = nn.Linear(128, num_classes)
@@ -222,7 +254,10 @@ class DualPathAudioClassifier(nn.Module):
         self._device = None
         self._initialized_for_device = False
 
-    def forward(self, audio, audio_lengths=None, augmentation_id=None):
+        
+
+    def forward(self, audio, audio_lengths=None, augmentation_id=None, 
+                prosodic_features=None, chunk_context=None):
         """
         Forward pass for chunked audio processing
         
@@ -230,6 +265,8 @@ class DualPathAudioClassifier(nn.Module):
             audio: Input audio tensor [B, C, T]
             audio_lengths: Tensor of actual audio lengths [B]
             augmentation_id: Optional IDs for deterministic augmentation
+            prosodic_features: Optional prosodic features [B, prosodic_feature_dim]
+            chunk_context: Optional chunk context [B, 2]
             
         Returns:
             Class logits [B, num_classes]
@@ -340,12 +377,34 @@ class DualPathAudioClassifier(nn.Module):
         # Process attention features through linear layer
         attn_features = self.attention_pooling(attn_features)  # [B, 256]
         
-        # Combine CNN and Attention features
-        combined_features = torch.cat([cnn_features, attn_features], dim=1)  # [B, 512]
+        # Process prosodic features if available and enabled
+        if self.use_prosodic_features and prosodic_features is not None:
+            # Encode prosodic features
+            prosodic_encoded = self.prosodic_encoder(prosodic_features)  # [B, 128]
+            
+            # Process chunk context if available
+            if chunk_context is not None:
+                # chunk_context contains: [relative_position, relative_length]
+                chunk_encoding = self.chunk_context(chunk_context)  # [B, 32]
+            else:
+                # Default to zeros if no context provided
+                chunk_encoding = torch.zeros(prosodic_features.size(0), 32, 
+                                             device=prosodic_features.device)
+            
+            # Combine all features
+            combined_features = torch.cat([
+                cnn_features,          # [B, 256] - Spectral/frequency features
+                attn_features,         # [B, 256] - Temporal dynamics features
+                prosodic_encoded,      # [B, 128] - Global prosodic features
+                chunk_encoding         # [B, 32]  - Chunk position context
+            ], dim=1)
+        else:
+            # Original feature combination without prosodic features
+            combined_features = torch.cat([cnn_features, attn_features], dim=1)
         
         # Final classification
-        fusion_output = self.fusion(combined_features)  # [B, 128]
-        output = self.classifier(fusion_output)  # [B, num_classes]
+        fusion_output = self.fusion(combined_features)
+        output = self.classifier(fusion_output)
         
         return output
     
@@ -427,63 +486,26 @@ class BalancedAugmentedDataset(Dataset):
         return len(self.sample_indices)
     
     def __getitem__(self, idx):
-        """Get an item from the dataset with proper index handling."""
-        # Handle string indexing just in case (for compatibility with legacy code)
-        if isinstance(idx, str):
-            raise ValueError(f"String indexing with '{idx}' not supported in PyTorch dataset mode")
+        """Get a sample from the dataset, with optional augmentation."""
+        source_idx = self.sample_indices[idx]
+        augmentation_id = self.augmentation_ids[idx]
         
-        # Regular integer index access for DataLoader
-        try:
-            if isinstance(idx, (torch.Tensor, np.ndarray)):
-                idx = idx.item() if hasattr(idx, 'item') else int(idx)
-            elif not isinstance(idx, int):
-                idx = int(idx)
-            
-            # Check if index is in bounds
-            if idx < 0 or idx >= len(self.sample_indices):
-                raise IndexError(f"Index {idx} out of bounds for dataset of size {len(self.sample_indices)}")
-            
-            # Get data from original dataset with augmentation ID
-            original_idx = int(self.sample_indices[idx])
-            augmentation_id = self.augmentation_ids[idx]
-            
-            # Return cached result if available (for augmented samples)
-            if augmentation_id is not None:
-                cache_key = (original_idx, augmentation_id)
-                if cache_key in self.sample_cache:
-                    return self.sample_cache[cache_key]
-            
-            # Get the sample from the original dataset using direct PyTorch indexing
-            sample = self.original_dataset[original_idx]
-            
-            # Process the sample based on its format
-            if isinstance(sample, dict):
-                # Handle dictionary format
-                result = dict(sample)  # Create a copy to avoid modifying the original
-                result["augmentation_id"] = augmentation_id
-            else:
-                # Handle tuple format
-                if len(sample) == 2:  # (audio, label)
-                    audio, label = sample
-                    result = (audio, label, augmentation_id)
-                else:
-                    raise ValueError(f"Unexpected sample format with {len(sample)} elements")
-            
-            # Cache result if it's an augmented sample
-            if augmentation_id is not None and self.max_cache_size > 0:
-                cache_key = (original_idx, augmentation_id)
-                self.sample_cache[cache_key] = result
-                
-                # Trim cache if it gets too large
-                if len(self.sample_cache) > self.max_cache_size:
-                    # Remove oldest items (approximation of LRU)
-                    for _ in range(len(self.sample_cache) - self.max_cache_size):
-                        self.sample_cache.pop(next(iter(self.sample_cache)))
-            
-            return result
-        except Exception as e:
-            print(f"Error in __getitem__ with index {idx}: {str(e)}")
-            raise
+        # Get the original sample
+        sample = self.original_dataset[source_idx].copy()
+        
+        # Apply augmentation if needed
+        if augmentation_id is not None:
+            # Apply deterministic augmentation on the audio
+            sample["augmentation_id"] = augmentation_id
+        else:
+            sample["augmentation_id"] = None
+        
+        # Ensure prosodic features are passed through
+        if "prosodic_features" in sample:
+            # No augmentation for prosodic features, just pass them through
+            pass
+        
+        return sample
     
     @property
     def class_distribution(self):

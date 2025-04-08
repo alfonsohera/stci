@@ -95,11 +95,29 @@ class CNNRNNDataset(Dataset):
         chunks = chunk_audio(audio, self.chunk_size_seconds, self.sample_rate)
         audio_chunk = chunks[chunk_idx] if chunk_idx < len(chunks) else chunks[0]
         
+        # Calculate chunk context information
+        total_chunks = len(chunks)
+        audio_length = audio.shape[1]
+        chunk_length = audio_chunk.shape[1]
+        
+        # Relative position (0-1 range)
+        rel_position = chunk_idx / max(1, total_chunks - 1)
+        # Relative length compared to original
+        rel_length = chunk_length / audio_length
+        
+        # Create chunk context tensor
+        chunk_context = torch.tensor([rel_position, rel_length], dtype=torch.float32)
+        
         result = {
             "audio": audio_chunk,
             "label": item["label"],
-            "original_idx": dataset_idx
+            "original_idx": dataset_idx,
+            "chunk_context": chunk_context
         }
+        
+        # Pass prosodic features if available (same for all chunks from the same audio)
+        if "prosodic_features" in item:
+            result["prosodic_features"] = item["prosodic_features"]
         
         # Add audio_id for chunk handling
         audio_id = f"{dataset_idx}" 
@@ -109,20 +127,23 @@ class CNNRNNDataset(Dataset):
 
 
 def collate_fn_cnn_rnn(batch):
-    """
-    Collate function that handles chunked audio.
-    All audio chunks should have the same length.
-    """
-    # For chunked audio, just stack them directly since they should be uniform size
+    """Collate function that handles chunked audio with prosodic features."""
     audio = torch.stack([item["audio"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
     
     result = {
         "audio": audio,
         "labels": labels,
-        # All chunks have same length
         "audio_lengths": torch.tensor([item["audio"].shape[1] for item in batch])
     }
+    
+    # Include prosodic features if available
+    if "prosodic_features" in batch[0]:
+        result["prosodic_features"] = torch.stack([item["prosodic_features"] for item in batch])
+    
+    # Include chunk context if available
+    if "chunk_context" in batch[0]:
+        result["chunk_context"] = torch.stack([item["chunk_context"] for item in batch])
     
     # Track original indices if available
     if "original_idx" in batch[0]:
@@ -204,14 +225,25 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
 
 
 class PreloadedAudioDataset(Dataset):
-    """PyTorch dataset that preloads all audio data in memory with a duration limit."""
+    """PyTorch dataset that preloads all audio data and prosodic features."""
     def __init__(self, dataframe, max_duration=100.0, sample_rate=16000):
         self.dataframe = dataframe
         self.samples = []
         self.max_duration = max_duration
         self.sample_rate = sample_rate
         
-        print(f"Preloading {len(dataframe)} audio files (max {max_duration}s each)...")
+        # Define which prosodic features to use
+        self.prosodic_feature_columns = [
+            "num_pauses",
+            "total_pause_duration",
+            "phonation_time",
+            "shimmer_local",
+            "skewness",
+            "centre_of_gravity",
+            "wer"
+        ]
+        
+        print(f"Preloading {len(dataframe)} audio files with prosodic features...")
         for idx, row in tqdm(dataframe.iterrows(), total=len(dataframe), desc="Loading audio"):
             file_path = row["file_path"]
             label = row["label"]
@@ -219,8 +251,6 @@ class PreloadedAudioDataset(Dataset):
             try:
                 # Load audio directly with librosa, limiting duration
                 audio_path = myFunctions.resolve_audio_path(file_path)
-                
-                # Use direct librosa loading with duration limit (matching wav2vec2 pipeline)
                 audio, sr = self._load_audio_with_duration(audio_path)
                 
                 # Convert to tensor
@@ -231,20 +261,34 @@ class PreloadedAudioDataset(Dataset):
                 if len(audio.shape) == 1:
                     audio = audio.unsqueeze(0)  # [C, L]
                 
-                # Store the processed sample
+                # Extract prosodic features from dataframe
+                prosodic_features = []
+                for feature in self.prosodic_feature_columns:
+                    if feature in row:
+                        prosodic_features.append(float(row[feature]))
+                    else:
+                        prosodic_features.append(0.0)  # Default value if missing
+                
+                # Convert to tensor
+                prosodic_tensor = torch.tensor(prosodic_features, dtype=torch.float32)
+                
+                # Store the processed sample with prosodic features
                 self.samples.append({
                     "audio": audio,
                     "label": label,
-                    "file_path": file_path
+                    "file_path": file_path,
+                    "prosodic_features": prosodic_tensor
                 })
             except Exception as e:
                 print(f"Error loading audio {file_path}: {e}")
                 # Create a dummy sample for failed audio
-                dummy_audio = torch.zeros((1, 16000), dtype=torch.float32)  # 1 second of silence
+                dummy_audio = torch.zeros((1, 16000), dtype=torch.float32)
+                dummy_prosodic = torch.zeros(len(self.prosodic_feature_columns), dtype=torch.float32)
                 self.samples.append({
                     "audio": dummy_audio,
                     "label": label,
                     "file_path": file_path,
+                    "prosodic_features": dummy_prosodic,
                     "error": str(e)
                 })
     
