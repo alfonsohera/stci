@@ -598,7 +598,7 @@ def main_cnn_rnn(use_prosodic_features=False):
 def test_cnn_rnn():
     """Test function for the CNN+RNN pipeline."""
     from cnn_rnn_model import DualPathAudioClassifier
-    
+    hpo_n_mels = 110
     # Prepare data
     dataset = prepare_cnn_rnn_dataset()
     
@@ -611,7 +611,8 @@ def test_cnn_rnn():
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000
+        sample_rate=16000,
+        n_mels=hpo_n_mels
     )
     
     # Load the best model weights if available
@@ -628,7 +629,7 @@ def test_cnn_rnn():
 
 def optimize_cnn_rnn():
     """Function to run threshold optimization for CNN+RNN model"""    
-    
+    hpo_n_mels = 110
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
@@ -642,7 +643,8 @@ def optimize_cnn_rnn():
     from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000
+        sample_rate=16000,
+        n_mels=hpo_n_mels
     )
     
     # Load the best model weights if available
@@ -688,6 +690,7 @@ def test_cnn_rnn_with_thresholds():
     import seaborn as sns
     from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
     
+    hpo_n_mels = 110
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
@@ -701,7 +704,8 @@ def test_cnn_rnn_with_thresholds():
     from cnn_rnn_model import DualPathAudioClassifier
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000
+        sample_rate=16000,
+        n_mels=hpo_n_mels
     )
     
     # Load the best model weights
@@ -924,6 +928,7 @@ def run_cross_validation(n_folds=5):
     import numpy as np
     import json
     
+    hpo_n_mels = 110
     cv_epochs = 10
     print(f"Running {n_folds}-fold cross-validation...")
     
@@ -978,7 +983,8 @@ def run_cross_validation(n_folds=5):
         # Create new model for this fold
         fold_model = DualPathAudioClassifier(
             num_classes=3,
-            sample_rate=16000
+            sample_rate=16000,
+            n_mels=hpo_n_mels
         )
         
         # Train the model on this fold
