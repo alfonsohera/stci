@@ -155,37 +155,26 @@ class DualPathAudioClassifier(nn.Module):
         if apply_specaugment:
             self.spec_augment = SpecAugment()
     
-        # CNN path
+        # Reduce CNN path complexity
         self.cnn_extractor = nn.Sequential(
-            # First convolutional block
-            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            # First block
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),  
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.1),
+            
+            # Second block
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),  
             nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.1),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.2),
             
-            # Second convolutional block
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            # Third block 
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),  
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.1),
-            
-            # Third convolutional block
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-            
-            # Fourth convolutional block 
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-            
-            # Global average pooling 
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten()
         )
@@ -196,13 +185,12 @@ class DualPathAudioClassifier(nn.Module):
         
         # Self-attention layers
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=8, num_heads=2, dropout=0.1)
-            for _ in range(2)  # 2 attention layers
+            ImprovedSelfAttention(embed_dim=8, num_heads=2, dropout=0.2)
         ])
         
         # Attention output processing
         self.attention_pooling = nn.Sequential(
-            nn.Linear(8, 256),
+            nn.Linear(8, 64),  # Reduced from 256
             nn.ReLU(),
             nn.Dropout(0.2)
         )
@@ -228,28 +216,28 @@ class DualPathAudioClassifier(nn.Module):
             
             # Modified fusion to include prosodic features
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256 + 128 + 32, 384),  # CNN + Attention + Prosodic + Chunk
-                nn.BatchNorm1d(384),
+                nn.Linear(64 + 64 + 128 + 32, 128),  
+                nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(384, 128),
+                nn.Dropout(0.2),  
+                nn.Linear(128, 64),  
                 nn.ReLU(),
                 nn.Dropout(0.2)
             )
         else:
             # Fusion layer (CNN features + Attention features)
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
-                nn.BatchNorm1d(256),
+                nn.Linear(64 + 64, 128),  
+                nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.3),
-                nn.Linear(256, 128),
+                nn.Dropout(0.2),  
+                nn.Linear(128, 64),
                 nn.ReLU(),
                 nn.Dropout(0.2)
             )
 
         # Separate classifier layer
-        self.classifier = nn.Linear(128, num_classes)
+        self.classifier = nn.Linear(64, num_classes)
         
         # Pre-initialize device tracking to avoid device checks at runtime
         self._device = None

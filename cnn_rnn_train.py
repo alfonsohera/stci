@@ -276,10 +276,10 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     model.to(device)
     
     # From HPO:
-    hpo_learning_rate = 0.00019615895743966543
-    hpo_weight_decay = 6.013861503416572e-05
-    hpo_max_lr = 0.0017371811084327452
-    hpo_focal_loss_gamma = 1.6660061929111718
+    hpo_learning_rate = 0.00024174133542899717
+    hpo_weight_decay = 7.059491007656186e-05
+    hpo_max_lr = 0.0010081938657011827
+    hpo_focal_loss_gamma = 1.7457434556481195
     hpo_pct_start = 0.3031315684459232
 
     # Initialize wandb
@@ -627,7 +627,7 @@ def test_cnn_rnn():
     test_cnn_rnn_model(model, dataloaders["test"])
 
 
-def optimize_cnn_rnn():
+def optimize_cnn_rnn(use_prosodic_features=True):
     """Function to run threshold optimization for CNN+RNN model"""    
     hpo_n_mels = 110
     # Configure paths
@@ -675,14 +675,15 @@ def optimize_cnn_rnn():
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
-        is_cnn_rnn=True, 
+        is_cnn_rnn=True,
+        use_prosodic_features=use_prosodic_features, 
         log_to_wandb=not myConfig.running_offline        
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
 
 
-def test_cnn_rnn_with_thresholds():
+def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     """Test CNN+RNN model using the optimized thresholds"""
     import os
     import json
