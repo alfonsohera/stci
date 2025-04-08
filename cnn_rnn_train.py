@@ -93,7 +93,9 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
             loss = criterion(logits, batch["labels"].to(device))
             
             # Backpropagation
-            loss.backward()                        
+            loss.backward() 
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)                       
             # Update weights
             optimizer.step()        
             # Update LR
@@ -322,7 +324,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         total_steps=total_steps,
         pct_start=hpo_pct_start,          # Warm up for 30% of training
         div_factor=25,          # Initial LR = max_lr/25
-        final_div_factor=1000,  # Final LR = max_lr/1000
+        final_div_factor=100,  # Final LR = max_lr/100
         anneal_strategy='cos',  # Cosine annealing
         three_phase=False       # Use standard two-phase schedule
     )
