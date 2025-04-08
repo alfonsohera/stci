@@ -605,7 +605,7 @@ def test_cnn_rnn():
     # Get dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8
+        batch_size=96
     )
     
     # Create model
@@ -658,7 +658,7 @@ def optimize_cnn_rnn():
     # Create validation dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8
+        batch_size=96
     )["validation"]
     
     # Set output directory
@@ -719,7 +719,7 @@ def test_cnn_rnn_with_thresholds():
     # Create test dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8
+        batch_size=96
     )["test"]
     
     # Try to load threshold values from the optimization results

@@ -24,7 +24,7 @@ from safetensors.torch import load_file
 def get_predictions(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    use_prosodic_features: bool = False,
+    use_prosodic_features: bool = True,
     is_cnn_rnn: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -65,9 +65,11 @@ Get model predictions and true labels from a dataloader.
                 if is_cnn_rnn:
                     if use_prosodic_features and "prosodic_features" in batch:
                         logits = model(
-                            batch["audio"],
+                            batch["audio"], 
                             audio_lengths=batch["audio_lengths"],
-                            prosodic_features=batch["prosodic_features"]
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
                         )
                     else:
                         logits = model(
