@@ -1137,13 +1137,14 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             lr = trial.suggest_float("learning_rate", 0.00008, 0.0003, log=True)  
             weight_decay = trial.suggest_float("weight_decay", 1e-5, 5e-4, log=True)            
             max_lr = trial.suggest_float("max_lr", 0.0001, 0.003, log=True)
-            
+            gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0) 
+            time_mask_param = trial.suggest_int("time_mask_param", 10, 25)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 10, 70) 
             # Fix other parameters to best values from previous HPO
-            pct_start = 0.3031315684459232  # Best from previous HPO
-            gamma = 0.7927673024435109      # Best from previous HPO
+            pct_start = 0.3031315684459232  # Best from previous HPO            
             n_mels = 110                    # Best from previous HPO
-            time_mask_param = 9             # Best from previous HPO
-            freq_mask_param = 66            # Best from previous HPO
+            """ time_mask_param = 9             # Best from previous HPO
+            freq_mask_param = 66            # Best from previous HPO """
             
             trial_history = []
                                     

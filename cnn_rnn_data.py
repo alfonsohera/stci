@@ -354,9 +354,9 @@ def prepare_cnn_rnn_dataset():
     
     print("Creating PyTorch datasets with preloaded audio...")
     dataset = {
-        "train": PreloadedAudioDataset(train_df, max_duration=100.0, sample_rate=16000),
-        "validation": PreloadedAudioDataset(val_df, max_duration=100.0, sample_rate=16000),
-        "test": PreloadedAudioDataset(test_df, max_duration=100.0, sample_rate=16000)
+        "train": PreloadedAudioDataset(train_df, max_duration=None, sample_rate=16000),
+        "validation": PreloadedAudioDataset(val_df, max_duration=None, sample_rate=16000),
+        "test": PreloadedAudioDataset(test_df, max_duration=None, sample_rate=16000)
     }
     save_pytorch_dataset(dataset, pytorch_dataset_path)
     return dataset

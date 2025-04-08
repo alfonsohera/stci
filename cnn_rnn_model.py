@@ -111,7 +111,7 @@ class DualPathAudioClassifier(nn.Module):
         self.mel_spec = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=1024,
-            hop_length=512,
+            hop_length=128,
             n_mels=n_mels
         )
         
