@@ -14,8 +14,8 @@ class SpecAugment(nn.Module):
     """
     def __init__(
         self,
-        freq_mask_param: int = 50,
-        time_mask_param: int = 50,
+        freq_mask_param=55,    # From HPO
+        time_mask_param=22,    # From HPO
         n_freq_masks: int = 2,
         n_time_masks: int = 2,
         apply_prob: float = 0.5,

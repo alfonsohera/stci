@@ -265,6 +265,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     
+    # From HPO:
+    hpo_learning_rate = 0.00019615895743966543
+    hpo_weight_decay = 6.013861503416572e-05
+    hpo_max_lr = 0.0017371811084327452
+    hpo_focal_loss_gamma = 1.6660061929111718
+    hpo_pct_start = 0.3031315684459232
+
     # Initialize wandb
     if not wandb.run:
         wandb.init(
@@ -285,13 +292,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             wandb.watch(model, log="all", log_freq=100)
 
     # Set up the loss function with default weighting
-    criterion = FocalLoss(gamma=0.8, weight=None)
+    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=None)
 
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=2e-4,            # Starting LR (will be scaled by OneCycleLR)
-        weight_decay=5.47e-5,  # L2 regularization
+        lr=hpo_learning_rate,            # Starting LR (will be scaled by OneCycleLR)
+        weight_decay=hpo_weight_decay,  # L2 regularization
         betas=(0.9, 0.999)  # Default Adam betas
     )
     
@@ -301,9 +308,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # 1cycle LR scheduler with optimized parameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=6e-3,           
+        max_lr=hpo_max_lr,
         total_steps=total_steps,
-        pct_start=0.3,          # Warm up for 30% of training
+        pct_start=hpo_pct_start,          # Warm up for 30% of training
         div_factor=25,          # Initial LR = max_lr/25
         final_div_factor=1000,  # Final LR = max_lr/1000
         anneal_strategy='cos',  # Cosine annealing
@@ -524,7 +531,7 @@ def test_cnn_rnn_model(model, test_loader):
 def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
     from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
-    
+    hpo_n_mels = 110
     print("Running CNN+RNN model")
     
     # Load and prepare dataset using the dedicated cnn_rnn_data module
@@ -557,7 +564,8 @@ def main_cnn_rnn(use_prosodic_features=False):
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000
+        sample_rate=16000,
+        n_mels=hpo_n_mels
     )
     print("Model created!")
     
@@ -1142,9 +1150,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             freq_mask_param = trial.suggest_int("freq_mask_param", 10, 70) 
             # Fix other parameters to best values from previous HPO
             pct_start = 0.3031315684459232  # Best from previous HPO            
-            n_mels = 110                    # Best from previous HPO
-            """ time_mask_param = 9             # Best from previous HPO
-            freq_mask_param = 66            # Best from previous HPO """
+            n_mels = 110                    # Best from previous HPO            
             
             trial_history = []
                                     
