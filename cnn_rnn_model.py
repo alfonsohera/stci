@@ -156,25 +156,27 @@ class DualPathAudioClassifier(nn.Module):
             self.spec_augment = SpecAugment()
     
         # Reduce CNN path complexity
+        # CNN path - gradual increase in dropout
         self.cnn_extractor = nn.Sequential(
             # First block
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),  
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),
             nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),  # Increase from 0.1
             
             # Second block
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),  
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.MaxPool2d(2, 2),
-            nn.Dropout(0.2),
+            nn.Dropout(0.3),  # Increase from 0.2
             
-            # Third block 
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),  
+            # Third block
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
+            nn.Dropout(0.4),  # Add dropout before pooling
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten()
         )
@@ -184,15 +186,16 @@ class DualPathAudioClassifier(nn.Module):
         self.position_embedding = nn.Parameter(torch.randn(1, 128, 8))  # Max seq length 128, feature dim 8
         
         # Self-attention layers
+        # Attention path - increase dropout
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=8, num_heads=2, dropout=0.2)
+            ImprovedSelfAttention(embed_dim=8, num_heads=2, dropout=0.3)  # Increase from 0.2
         ])
         
         # Attention output processing
         self.attention_pooling = nn.Sequential(
-            nn.Linear(8, 64),  # Reduced from 256
+            nn.Linear(8, 64),
             nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.Dropout(0.4)  # Increase from 0.2
         )
         
         # Add prosodic feature processing
@@ -215,14 +218,15 @@ class DualPathAudioClassifier(nn.Module):
             )
             
             # Modified fusion to include prosodic features
+            # Fusion layers - increase dropout
             self.fusion = nn.Sequential(
-                nn.Linear(64 + 64 + 128 + 32, 128),  
+                nn.Linear(64 + 64 + 128 + 32, 128),
                 nn.BatchNorm1d(128),
                 nn.ReLU(),
-                nn.Dropout(0.2),  
-                nn.Linear(128, 64),  
+                nn.Dropout(0.4),  # Increase from 0.2
+                nn.Linear(128, 64),
                 nn.ReLU(),
-                nn.Dropout(0.2)
+                nn.Dropout(0.4)
             )
         else:
             # Fusion layer (CNN features + Attention features)
