@@ -159,25 +159,25 @@ class DualPathAudioClassifier(nn.Module):
         # CNN path - gradual increase in dropout
         self.cnn_extractor = nn.Sequential(
             # First block
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),            
-            nn.ReLU(),
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),
             nn.BatchNorm2d(16),
-            nn.Dropout(0.3),  # Increase from 0.1
-            nn.MaxPool2d(2, 1),
-                        
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.2),  # Increase from 0.1
+            
             # Second block
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),            
-            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.BatchNorm2d(32),
-            nn.Dropout(0.3),  # Increase from 0.2
-            nn.MaxPool2d(2, 1),
-                        
-            # Third block
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),            
             nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.3),  # Increase from 0.2
+            
+            # Third block
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
-            nn.Dropout(0.3),  # Add dropout before pooling
-            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.ReLU(),
+            nn.Dropout(0.4),  # Add dropout before pooling
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten()
         )
         
