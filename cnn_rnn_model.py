@@ -101,7 +101,7 @@ class SelfAttention(nn.Module):
         return x
 
 
-class ImprovedSelfAttention(nn.Module): #TDO: test instead of SelfAttention
+class ImprovedSelfAttention(nn.Module): 
     """Improved self-attention module with pre-LN and GELU"""
     def __init__(self, embed_dim, num_heads=4, dropout=0.1):
         super().__init__()
@@ -134,7 +134,7 @@ class ImprovedSelfAttention(nn.Module): #TDO: test instead of SelfAttention
 
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 apply_specaugment=True, use_prosodic_features=True, 
+                 apply_specaugment=True, use_prosodic_features=False, 
                  prosodic_feature_dim=7):
         super(DualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
