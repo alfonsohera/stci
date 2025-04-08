@@ -64,6 +64,7 @@ class SpecAugment(nn.Module):
             
         return augmented
 
+
 class SelfAttention(nn.Module):
     """Self-attention module to replace GRU"""
     def __init__(self, embed_dim, num_heads=4, dropout=0.1):
@@ -195,7 +196,7 @@ class DualPathAudioClassifier(nn.Module):
         
         # Self-attention layers
         self.attention_layers = nn.ModuleList([
-            SelfAttention(embed_dim=8, num_heads=2, dropout=0.1)
+            ImprovedSelfAttention(embed_dim=8, num_heads=2, dropout=0.1)
             for _ in range(2)  # 2 attention layers
         ])
         
