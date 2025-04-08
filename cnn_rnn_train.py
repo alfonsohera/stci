@@ -83,8 +83,10 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
             # Forward pass
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                augmentation_id=batch.get("augmentation_id")
+                audio_lengths=batch["audio_lengths"],
+                augmentation_id=batch.get("augmentation_id", None),
+                prosodic_features=batch.get("prosodic_features", None),
+                chunk_context=batch.get("chunk_context", None)
             )
                 
             # Calculate loss                
@@ -108,8 +110,10 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler):
             # Forward pass to get logits for each chunk
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                augmentation_id=batch.get("augmentation_id")
+                audio_lengths=batch["audio_lengths"],
+                augmentation_id=batch.get("augmentation_id", None),
+                prosodic_features=batch.get("prosodic_features", None),
+                chunk_context=batch.get("chunk_context", None)
             )
             
             # Store chunks by audio_id
@@ -209,7 +213,10 @@ def evaluate(model, val_loader, criterion, device):
                 # Forward pass
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"]
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
                 # Calculate loss
@@ -226,7 +233,10 @@ def evaluate(model, val_loader, criterion, device):
                 # Forward pass to get logits for each chunk
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"]
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
                 # Store chunks by audio_id
@@ -480,7 +490,10 @@ def test_cnn_rnn_model(model, test_loader):
             if audio_ids is None:
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"]
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
                 preds = torch.argmax(logits, dim=-1)
@@ -490,7 +503,10 @@ def test_cnn_rnn_model(model, test_loader):
                 # Process batches with audio_ids for chunking
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"]
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
                 # Store chunks by audio_id
@@ -750,7 +766,10 @@ def test_cnn_rnn_with_thresholds():
                     if audio_ids is None:
                         logits = model(
                             batch["audio"], 
-                            audio_lengths=batch["audio_lengths"]
+                            audio_lengths=batch["audio_lengths"],
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
                         )
                         
                         # Get probabilities
@@ -762,7 +781,10 @@ def test_cnn_rnn_with_thresholds():
                         # Process batches with audio_ids for chunking
                         logits = model(
                             batch["audio"], 
-                            audio_lengths=batch["audio_lengths"]
+                            audio_lengths=batch["audio_lengths"],
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
                         )
                         
                         # Store chunks by audio_id

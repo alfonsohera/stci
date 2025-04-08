@@ -257,7 +257,7 @@ class DualPathAudioClassifier(nn.Module):
         
 
     def forward(self, audio, audio_lengths=None, augmentation_id=None, 
-                prosodic_features=True, chunk_context=None):
+                prosodic_features=None, chunk_context=None):
         """
         Forward pass for chunked audio processing
         
