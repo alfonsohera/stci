@@ -278,10 +278,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     model.to(device)
     
     # From HPO:
-    hpo_weight_decay = 1e-4
-    hpo_max_lr = 0.0010081938657011827
-    hpo_focal_loss_gamma = 1.7457434556481195
-    hpo_pct_start = 0.3031315684459232
+    hpo_weight_decay = 5e-5
+    hpo_max_lr = 0.00015
+    hpo_focal_loss_gamma = 2
 
     # Initialize wandb
     if not wandb.run:
@@ -294,7 +293,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                 "learning_rate": hpo_max_lr,
                 "epochs": num_epochs,
                 "batch_size": 96,
-                "weight_decay": 1e-4
+                "weight_decay": hpo_weight_decay
             }
         )
         
@@ -309,25 +308,11 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=hpo_max_lr,            
-        weight_decay=hpo_weight_decay,  # L2 regularization
-        betas=(0.9, 0.999)  # Default Adam betas
+        weight_decay=hpo_weight_decay,  # L2 regularization        
     )
+       
     
-    # Calculate total steps for 1cycle scheduler
-    total_steps = len(dataloaders["train"]) * num_epochs
-    
-    # 1cycle LR scheduler with optimized parameters
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=hpo_max_lr,
-        total_steps=total_steps,
-        pct_start=hpo_pct_start,          # Warm up for 30% of training
-        div_factor=25,          # Initial LR = max_lr/25
-        final_div_factor=100,  # Final LR = max_lr/100
-        anneal_strategy='cos',  # Cosine annealing
-        three_phase=False       # Use standard two-phase schedule
-    )
-    
+   
     # Create output directory for CNN+RNN model
     cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
     os.makedirs(cnn_rnn_output_dir, exist_ok=True)
