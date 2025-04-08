@@ -3,7 +3,7 @@ import torch.nn as nn
 import torchaudio
 import torchvision.models as vision_models
 import random
-import numpy np
+import numpy as np
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 from torchvision import transforms
