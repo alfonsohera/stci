@@ -1231,20 +1231,15 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                     num_classes=3
                 )
                 
-                # Create temporary dataset with the fold splits
-                fold_dataset = {
-                    "train": fold_train_balanced,
-                    "validation": fold_val
-                }
-                
-                # Get dataloaders for this fold
+                # Get dataloaders for this fold 
                 fold_train_loader = get_cnn_rnn_dataloaders(
-                    {"train": fold_dataset["train"]},
+                    {"train": fold_train_balanced},
                     batch_size=96
                 )["train"]
                 
+                # Create validation dataloader 
                 fold_val_loader = get_cnn_rnn_dataloaders(
-                    {"validation": fold_dataset["validation"]},
+                    {"validation": fold_val},
                     batch_size=96
                 )["validation"]
                 
@@ -1361,7 +1356,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                 # Clean up to free memory
                 del fold_model, optimizer, criterion
                 del fold_train_loader, fold_val_loader
-                del fold_dataset, fold_train, fold_val
+                del fold_train, fold_val
                 gc.collect()
                 torch.cuda.empty_cache()
             
