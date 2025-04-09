@@ -95,7 +95,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
             # Backpropagation
             loss.backward() 
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)                       
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)                       
             # Update weights
             optimizer.step()        
             # Update LR
@@ -542,7 +542,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     print("Creating balanced training dataset with augmentations...")
     balanced_train_dataset = BalancedAugmentedDataset(
         original_dataset=dataset["train"],
-        total_target_samples=2000,
+        total_target_samples=1000,
         num_classes=3
     )
     
