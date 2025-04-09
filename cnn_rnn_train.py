@@ -635,7 +635,7 @@ def test_cnn_rnn():
     test_cnn_rnn_model(model, dataloaders["test"])
 
 
-def optimize_cnn_rnn(use_prosodic_features=True):
+def optimize_cnn_rnn():
     """Function to run threshold optimization for CNN+RNN model"""    
     hpo_n_mels = 128
     # Configure paths
@@ -683,15 +683,14 @@ def optimize_cnn_rnn(use_prosodic_features=True):
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
-        is_cnn_rnn=True,
-        use_prosodic_features=use_prosodic_features, 
+        is_cnn_rnn=True, 
         log_to_wandb=not myConfig.running_offline        
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
 
 
-def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
+def test_cnn_rnn_with_thresholds():
     """Test CNN+RNN model using the optimized thresholds"""
     import os
     import json
