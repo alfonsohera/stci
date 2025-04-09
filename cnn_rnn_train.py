@@ -531,7 +531,7 @@ def test_cnn_rnn_model(model, test_loader):
 
 def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
-    from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
+    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier
     hpo_n_mels = 128
     print("Running CNN+RNN model")
     
@@ -540,18 +540,17 @@ def main_cnn_rnn(use_prosodic_features=False):
     
     # Create balanced training dataset with augmentations
     print("Creating balanced training dataset with augmentations...")
-    balanced_train_dataset = BalancedAugmentedDataset(
-        original_dataset=dataset["train"],
-        total_target_samples=1000,
+    augmented_train_dataset = AugmentedDataset(
+        original_dataset=dataset["train"],        
         num_classes=3
     )
     
     # Display class distribution
-    balanced_train_dataset.print_distribution_stats()
+    augmented_train_dataset.print_distribution_stats()
     
     # Update dataset with balanced training set
     balanced_dataset = {
-        "train": balanced_train_dataset,
+        "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
     }
@@ -1096,7 +1095,7 @@ def run_cross_validation(n_folds=5):
 
 def run_bayesian_optimization(n_trials=50, resume_study=False):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
     import json
     import joblib
     
@@ -1124,16 +1123,15 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     
     # Create balanced training dataset
     print("Creating balanced training dataset for optimization...")
-    balanced_train_dataset = BalancedAugmentedDataset(
-        original_dataset=dataset["train"],
-        total_target_samples=1000,
+    augmented_train_dataset = AugmentedDataset(
+        original_dataset=dataset["train"],        
         num_classes=3
     )
-    balanced_train_dataset.print_distribution_stats()
+    augmented_train_dataset.print_distribution_stats()
 
     # Update dataset with balanced training set
     balanced_dataset = {
-        "train": balanced_train_dataset,
+        "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
     }
@@ -1459,22 +1457,21 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
 
 def train_with_best_hyperparameters(dataset, best_params):
     """Train a final model using the best hyperparameters from Bayesian optimization."""
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
     
     print("\n=== Training with Best Hyperparameters ===")
     
     # Create balanced training dataset
     print("Creating balanced training dataset...")
-    balanced_train_dataset = BalancedAugmentedDataset(
-        original_dataset=dataset["train"],
-        total_target_samples=1000,
+    augmented_train_dataset = AugmentedDataset(
+        original_dataset=dataset["train"],        
         num_classes=3
     )
-    balanced_train_dataset.print_distribution_stats()
+    augmented_train_dataset.print_distribution_stats()
     
     # Create dataset with balanced training
     balanced_dataset = {
-        "train": balanced_train_dataset,
+        "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
     }

@@ -415,16 +415,15 @@ class DualPathAudioClassifier(nn.Module):
         return torch.stack(chunk_outputs).mean(dim=0)
 
 
-class BalancedAugmentedDataset(Dataset):
+class AugmentedDataset(Dataset):
     """
-    A dataset wrapper that balances classes by augmenting underrepresented samples
-    with different CNN spectrograms while keeping RNN and prosodic features intact.
-    Designed to work with standard PyTorch datasets.
+    A dataset wrapper that applies augmentation to the training data 
+    without artificially balancing class distributions.
     """
-    def __init__(self, original_dataset, total_target_samples=1000, num_classes=3):
+    def __init__(self, original_dataset, augmentations_per_sample=1, num_classes=3):
         self.original_dataset = original_dataset
         self.num_classes = num_classes
-        self.target_samples_per_class = total_target_samples // num_classes
+        self.augmentations_per_sample = augmentations_per_sample
         
         # Don't pre-generate augmentations, just store indices
         self.class_indices = {}
@@ -440,32 +439,20 @@ class BalancedAugmentedDataset(Dataset):
             self.class_indices[class_id].append(i)
             self.class_counts[class_id] += 1
         
-        # Calculate needed augmentations
-        self.augmentations_needed = {}
-        for class_id in range(num_classes):
-            orig_count = self.class_counts.get(class_id, 0)
-            self.augmentations_needed[class_id] = max(0, self.target_samples_per_class - orig_count)
-
         # Create sample indices and augmentation IDs upfront
         self.sample_indices = []
         self.augmentation_ids = []
 
         # Add original samples
-        for class_id in range(self.num_classes):
-            if class_id in self.class_indices:
-                for idx in self.class_indices[class_id]:
-                    self.sample_indices.append(idx)
-                    self.augmentation_ids.append(None)  # No augmentation for original samples
+        for i in range(len(self.original_dataset)):
+            self.sample_indices.append(i)
+            self.augmentation_ids.append(None)  # No augmentation for original samples
 
-        # Add augmented samples
-        for class_id in range(self.num_classes):
-            if class_id in self.class_indices and self.augmentations_needed.get(class_id, 0) > 0:
-                source_indices = self.class_indices[class_id]
-                for aug_id in range(self.augmentations_needed[class_id]):
-                    # Pick source sample deterministically
-                    source_idx = source_indices[aug_id % len(source_indices)]
-                    self.sample_indices.append(source_idx)
-                    self.augmentation_ids.append(aug_id)  # Augmentation ID for deterministic augmentation
+        # Add augmented samples - apply a fixed number of augmentations to each sample
+        for i in range(len(self.original_dataset)):
+            for aug_id in range(self.augmentations_per_sample):
+                self.sample_indices.append(i)  # Reference the original sample
+                self.augmentation_ids.append(aug_id)  # Augmentation ID for deterministic augmentation
 
         # Create small, efficient sample cache
         self.max_cache_size = 100  # Limit cache size to control memory
@@ -499,20 +486,7 @@ class BalancedAugmentedDataset(Dataset):
             pass
         
         return sample
-    
-    @property
-    def class_distribution(self):
-        """Calculate class distribution without actually accessing samples"""        
-        # Use the class counts and augmentations needed to directly calculate
-        # the final distribution 
-        counts = {}
-        for class_id in range(self.num_classes):
-            original_count = self.class_counts.get(class_id, 0)
-            augmented_count = self.augmentations_needed.get(class_id, 0)
-            counts[class_id] = original_count + augmented_count
-                
-        return counts
-    
+        
     def print_distribution_stats(self):
         """Print class distribution statistics before and after augmentation."""
         print("\n=== Class Distribution Statistics ===")
@@ -525,11 +499,15 @@ class BalancedAugmentedDataset(Dataset):
             print(f"  Class {class_id}: {count} samples ({percentage:.1f}%)")
         
         print("\nAfter augmentation:")
-        final_dist = self.class_distribution  
-        total_final = sum(final_dist.values())
-        for class_id in sorted(final_dist.keys()):
+        augmented_counts = {}
+        for class_id in self.class_counts:
+            # Original samples + augmented samples (maintaining original proportions)
+            augmented_counts[class_id] = self.class_counts[class_id] * (1 + self.augmentations_per_sample)
+            
+        total_final = sum(augmented_counts.values())
+        for class_id in sorted(augmented_counts.keys()):
             orig_count = self.class_counts.get(class_id, 0)
-            final_count = final_dist[class_id]
+            final_count = augmented_counts[class_id]
             aug_count = final_count - orig_count
             percentage = (final_count / total_final * 100) if total_final > 0 else 0
             print(f"  Class {class_id}: {final_count} samples ({percentage:.1f}%) - Added {aug_count} augmented samples")
