@@ -1251,12 +1251,12 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             )
                        
             # Calculate total steps for shorter training (3 epochs)            
-            n_epochs = 15  # Number of epochs for HPO        
+            n_epochs = 20  # Number of epochs for HPO        
 
             # training loop  length
             max_training_epochs = n_epochs
             
-            best_val_loss = float('inf')  # Initialize with infinity for minimization
+            best_trial_f1 = 0.0
             
             trial_name = f"trial_{trial.number}"
             
@@ -1303,29 +1303,29 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                         f"{trial_name}/val_loss": avg_val_loss,
                         f"{trial_name}/val_f1": val_f1_macro
                     })
-                # Save best model based on validation loss instead of F1
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    trial_model_dir = os.path.join(
-                        myConfig.OUTPUT_PATH, 
-                        "hyperparameter_optimization"
-                    )
-                    os.makedirs(trial_model_dir, exist_ok=True)
-                    
-                    # Remove any previous model for this trial if it exists
-                    trial_model_path = os.path.join(
-                        trial_model_dir, 
-                        f"trial_{trial.number}_model.pt"
-                    )
-                    if os.path.exists(trial_model_path):
-                        os.remove(trial_model_path)
-                    torch.save(model.state_dict(), trial_model_path)
-                
-                # Report val_loss for pruning
-                trial.report(avg_val_loss, epoch)
+                # Check for pruning
+                trial.report(val_f1_macro, epoch)
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned()
 
+            if val_f1_macro > best_trial_f1:
+                best_trial_f1 = val_f1_macro
+                                
+                trial_model_dir = os.path.join(
+                    myConfig.OUTPUT_PATH, 
+                    "hyperparameter_optimization"
+                )
+                os.makedirs(trial_model_dir, exist_ok=True)
+                
+                # Remove any previous model for this trial if it exists
+                trial_model_path = os.path.join(
+                    trial_model_dir, 
+                    f"trial_{trial.number}_model.pt"
+                )
+                if os.path.exists(trial_model_path):
+                    os.remove(trial_model_path)
+                torch.save(model.state_dict(), trial_model_path)
+            
             # Clean up to free memory
             del model, optimizer, criterion
             torch.cuda.empty_cache()
@@ -1346,12 +1346,13 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             
             # Log the final result to wandb
             if wandb.run:
-                wandb.run.summary[f"{trial_name}_best_val_loss"] = best_val_loss
+                wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
                         
             # Store the best validation loss as trial user attribute
-            trial.set_user_attr("val_loss", best_val_loss)
+            min_val_loss = min(entry["val_loss"] for entry in trial_history)
+            trial.set_user_attr("val_loss", min_val_loss)
             
-            return best_val_loss
+            return best_trial_f1
         except Exception as e:
             print(f"Trial {trial.number} failed with error: {str(e)}")            
             if wandb.run:
@@ -1360,8 +1361,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                     f"trial_{trial.number}_error_type": type(e).__name__,
                     f"trial_{trial.number}_hyperparams": trial.params
                 })
-            # Return a very high loss to indicate failure
-            return float('inf')
+            # Return a very low score to indicate failure
+            return -1.0
     
     # Define study storage path
     study_storage_path = os.path.join(
@@ -1370,7 +1371,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
         "hpo_study_cnn_rnn.pkl"
     )
     
-    # Create study for minimizing validation loss
+    # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials...")
     study_name = "cnn_rnn"
     
@@ -1391,12 +1392,12 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
 
         study = optuna.create_study(
             study_name=study_name,
-            direction="minimize",  # Changed to minimize
+            direction="maximize",
             pruner=pruner,
             sampler=sampler
         )
     
-    wandb_callback = WandbCallback(metric_name="val_loss")
+    wandb_callback = WandbCallback(metric_name="f1_macro")
 
     study.optimize(objective, n_trials=n_trials, callbacks=[wandb_callback])
     
@@ -1405,7 +1406,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     best_value = study.best_value
     
     print("\n=== Bayesian Optimization Results ===")
-    print(f"Best validation loss: {best_value:.4f}")
+    print(f"Best F1-macro on validation set: {best_value:.4f}")
     print("Best hyperparameters:")
     for param, value in best_params.items():
         print(f"  {param}: {value}")
@@ -1453,7 +1454,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     
     if wandb.run:
         # Log best parameters
-        wandb.run.summary["best_val_loss"] = best_value
+        wandb.run.summary["best_f1_macro"] = best_value
         wandb.run.summary["best_params"] = best_params
         
         # Log best model artifact
@@ -1468,7 +1469,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             artifact = wandb.Artifact(
                 f"hpo-best-model-{wandb.run.id}", 
                 type="model",
-                description=f"Best model from HPO with val_loss={best_value:.4f}"
+                description=f"Best model from HPO with F1={best_value:.4f}"
             )
             artifact.add_file(best_model_path, name="best_model.pt")
             wandb.log_artifact(artifact)
