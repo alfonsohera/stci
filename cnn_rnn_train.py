@@ -280,7 +280,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # From HPO:
     hpo_weight_decay = 5e-5
     hpo_max_lr = 0.00015
-    hpo_focal_loss_gamma = 2
+    hpo_focal_loss_gamma = 0
 
     # Initialize wandb
     if not wandb.run:
