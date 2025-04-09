@@ -407,7 +407,7 @@ def optimize_thresholds_for_model(
     dataloader: DataLoader,
     class_names: List[str],
     output_dir: str,
-    use_prosodic_features: bool = False,
+    use_prosodic_features: bool = True,
     is_cnn_rnn: bool = False,
     log_to_wandb: bool = False
 ) -> Dict[str, float]:
