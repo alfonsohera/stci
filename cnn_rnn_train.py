@@ -1138,11 +1138,11 @@ def run_cross_validation(n_folds=5):
     return cv_results
 
 
-def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
+def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
     from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
     from sklearn.utils.class_weight import compute_class_weight
-    from sklearn.model_selection import KFold
+    from sklearn.model_selection import StratifiedKFold
     import json
     import joblib
     
@@ -1171,13 +1171,15 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
     
     # Combine train and validation for cross-validation
     combined_data = []
+    combined_labels = []
     for split in ["train", "validation"]:
         for i in range(len(dataset[split])):
             combined_data.append(dataset[split][i])
+            combined_labels.append(dataset[split][i]["labels"])
     
-    # Prepare indices for k-fold splits
+    # Prepare indices for stratified k-fold splits to handle class imbalance
     indices = np.arange(len(combined_data))
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -1185,15 +1187,18 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
         try:            
             torch.cuda.empty_cache()
             gc.collect()
-                        
-            fixed_lr = trial.suggest_float("fixed_lr", 0.00012, 0.00025, log=True)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0, 2)
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.1, 1.0)            
-            time_mask_param = trial.suggest_int("time_mask_param", 35, 50)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 35, 50)            
-            dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
+            
+            # Expanded ranges for the most important hyperparameters
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 1.2)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.0, 2.5)
             weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)
             
+            # Refined ranges for less important hyperparameters
+            fixed_lr = trial.suggest_float("fixed_lr", 0.00015, 0.0003, log=True)
+            time_mask_param = trial.suggest_int("time_mask_param", 35, 50)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 40, 55)            
+            dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
+                                   
             trial_name = f"trial_{trial.number}"
             
             # Log trial parameters to wandb
@@ -1203,64 +1208,53 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                         param: value for param, value in trial.params.items()
                     }
                 })
-            
-            # Run k-fold cross-validation for this trial
+                        
             fold_f1_scores = []
             fold_val_losses = []
             n_mels = 128
             
-            # Number of epochs for HPO cross-validation (reduced)
-            n_epochs = 6  # Reduced from 10 to make HPO faster with k-fold
-            
-            print(f"\n--- Trial {trial.number}: Running {n_folds}-fold cross-validation ---")
-            
+            # Number of epochs for HPO cross-validation
+            n_epochs = 8            
+            print(f"\n--- Trial {trial.number}: Running {n_folds}-fold cross-validation ---")            
             # Store fold histories
             fold_histories = []
             
-            # For each fold
-            for fold_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
+            # For each fold - using stratified k-fold for better class balance
+            for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, combined_labels)):
                 print(f"  Processing fold {fold_idx+1}/{n_folds} for trial {trial.number}")
-                
                 # Create fold-specific datasets
                 fold_train = [combined_data[i] for i in train_idx]
                 fold_val = [combined_data[i] for i in val_idx]
-                
                 # Create balanced training dataset for this fold
                 fold_train_balanced = AugmentedDataset(
                     original_dataset=fold_train,            
                     num_classes=3
                 )
-                
                 # Create fold dataset dictionary
                 fold_dataset = {
                     "train": fold_train_balanced,
                     "validation": fold_val,
                     "test": dataset["test"]
                 }
-                
                 # Get dataloaders for this fold 
                 fold_dataloaders = get_cnn_rnn_dataloaders(
                     fold_dataset,
                     batch_size=96
                 )
-                
                 fold_train_loader = fold_dataloaders["train"]
                 fold_val_loader = fold_dataloaders["validation"]
-                
                 # Create new model for this fold with trial hyperparameters
                 fold_model = DualPathAudioClassifier(
                     num_classes=3,
                     sample_rate=16000,
                     n_mels=n_mels,
-                    apply_specaugment=True
+                    apply_specaugment=True,
                 )
                 fold_model.to(device)
-                
                 # Update SpecAugment parameters if the model has that module
                 if hasattr(fold_model, 'spec_augment'):
                     fold_model.spec_augment.time_mask_param = time_mask_param
                     fold_model.spec_augment.freq_mask_param = freq_mask_param
-                
                 # Calculate class weights with scaling factor
                 classes = np.array([0, 1, 2])  
                 class_counts = myConfig.num_samples_per_class
@@ -1278,7 +1272,6 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                 weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
                 # Set up the loss function with class weighting
                 criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
-                
                 # Adjust all dropout rates in the model
                 for module in fold_model.modules():
                     if isinstance(module, nn.Dropout):
@@ -1288,18 +1281,17 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                         new_p = min(current_p * dropout_factor, 0.7)
                         # Set new dropout probability
                         module.p = new_p
-                
                 # Create optimizer with trial hyperparameters
                 optimizer = torch.optim.Adam(
                     fold_model.parameters(),
                     lr=fixed_lr,
                     weight_decay=weight_decay,
                 )
-                
                 # Train for specified epochs in each fold
                 fold_history = []
                 best_fold_f1 = 0.0
-                
+                patience = 3
+                no_improvement = 0
                 for epoch in range(n_epochs):
                     try:
                         # Train
@@ -1307,17 +1299,14 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                             fold_model, fold_train_loader, optimizer, 
                             criterion, device
                         )
-                        
                         # Evaluate 
                         val_loss, val_labels, val_preds = evaluate(
                             fold_model, fold_val_loader, criterion, device
                         )
                         val_f1_macro = f1_score(val_labels, val_preds, average='macro')
-                        
                         # Calculate average validation loss
                         total_val_recordings = len(val_labels)
                         avg_val_loss = val_loss / total_val_recordings
-                        
                         # Append to fold history
                         fold_history.append({
                             "epoch": epoch,
@@ -1325,7 +1314,6 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                             "val_loss": avg_val_loss,
                             "val_f1": val_f1_macro
                         })
-                        
                         # Log to wandb
                         if wandb.run:
                             wandb.log({
@@ -1334,17 +1322,23 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                                 f"{trial_name}/fold_{fold_idx}/val_loss": avg_val_loss,
                                 f"{trial_name}/fold_{fold_idx}/val_f1": val_f1_macro
                             })
-                        
-                        # Track best F1 for this fold
+                        # Track best F1 for this fold with early stopping
                         if val_f1_macro > best_fold_f1:
                             best_fold_f1 = val_f1_macro
-                        
-                        # Report intermediate value for pruning
-                        if epoch == n_epochs // 2:  # Report halfway through training
+                            no_improvement = 0
+                        else:
+                            no_improvement += 1
+                            if no_improvement >= patience:
+                                print(f"    Early stopping at epoch {epoch} for fold {fold_idx+1}")
+                                break
+                        # Report intermediate value for pruning more aggressively
+                        if epoch >= 2:  # Report earlier for faster pruning of poor trials
                             trial.report(val_f1_macro, epoch + fold_idx * n_epochs)
                             if trial.should_prune():
+                                print(f"    Trial {trial.number} pruned at epoch {epoch} for fold {fold_idx+1}")
                                 raise optuna.exceptions.TrialPruned()
-                        
+                    except optuna.exceptions.TrialPruned:
+                        raise
                     except Exception as epoch_error:
                         print(f"Error in epoch {epoch} of fold {fold_idx} in trial {trial.number}: {str(epoch_error)}")
                         if wandb.run:
@@ -1368,7 +1362,15 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
             avg_f1_macro = np.mean(fold_f1_scores)
             avg_val_loss = np.mean(fold_val_losses)
             
-            print(f"Trial {trial.number} completed: Avg F1 across {n_folds} folds: {avg_f1_macro:.4f}")
+            # 10% above max observed loss
+            MAX_VAL_LOSS = max(np.max(fold_val_losses) * 1.1, 1.0)
+            # Normalize validation loss to [0,1] scale (lower is better)
+            norm_val_loss = max(0, 1 - (avg_val_loss / MAX_VAL_LOSS))
+            
+            # Combined objective: prioritize both high F1 and low validation loss
+            combined_score = avg_f1_macro * (0.8 + 0.2 * norm_val_loss)
+            
+            print(f"Trial {trial.number} completed: Avg F1 across {n_folds} folds: {avg_f1_macro:.4f}, Combined Score: {combined_score:.4f}")
             print(f"Individual fold F1 scores: {fold_f1_scores}")
             
             # Store all fold histories and metrics
@@ -1383,6 +1385,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                 "avg_f1_macro": avg_f1_macro,
                 "fold_val_losses": fold_val_losses,
                 "avg_val_loss": avg_val_loss,
+                "norm_val_loss": norm_val_loss,
+                "combined_score": combined_score,
                 "fold_histories": fold_histories
             }
             
@@ -1397,6 +1401,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                 wandb.log({
                     f"{trial_name}/avg_f1_across_folds": avg_f1_macro,
                     f"{trial_name}/avg_val_loss_across_folds": avg_val_loss,
+                    f"{trial_name}/norm_val_loss": norm_val_loss,
+                    f"{trial_name}/combined_score": combined_score,
                     **{f"{trial_name}/fold_{i}_f1": score for i, score in enumerate(fold_f1_scores)},
                     **{f"{trial_name}/fold_{i}_val_loss": loss for i, loss in enumerate(fold_val_losses)}
                 })
@@ -1405,7 +1411,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
             # Store the average validation loss as trial user attribute
             trial.set_user_attr("val_loss", avg_val_loss)
             
-            return avg_f1_macro  # Return average F1 across all folds as the objective value
+            return combined_score  # Return combined score that balances performance and consistency
             
         except Exception as e:
             print(f"Trial {trial.number} failed with error: {str(e)}")            
@@ -1434,15 +1440,19 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
         print(f"Resuming study from {study_storage_path}")
         study = joblib.load(study_storage_path)
     else:
-        # Pruner that balances exploration and exploitation
+        # More aggressive pruner to terminate underperforming trials earlier
         pruner = optuna.pruners.MedianPruner(
-            n_startup_trials=5,  # Don't prune the first 5 trials
-            n_warmup_steps=3,    # Don't prune before 3 epochs
+            n_startup_trials=3,  
+            n_warmup_steps=2,    
             interval_steps=1
         )
-
-        # Sampler for more efficient search
-        sampler = optuna.samplers.TPESampler(seed=42)
+        
+        sampler = optuna.samplers.TPESampler(
+            seed=42,
+            multivariate=True,  
+            n_startup_trials=5, 
+            constant_liar=True   
+        )
 
         study = optuna.create_study(
             study_name=study_name,
@@ -1450,8 +1460,20 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
             pruner=pruner,
             sampler=sampler
         )
+        
+        # Best previous hyperparameters as a starting point
+        previous_best = {
+            "fixed_lr": 0.0002035216880791326,
+            "focal_loss_gamma": 1.509293219544905,
+            "weight_scaling_factor": 0.5052154352450162,
+            "time_mask_param": 41,
+            "freq_mask_param": 46,
+            "dropout_factor": 0.9643396324550717,
+            "weight_decay": 4.361892113003308e-06,
+        }
+        study.enqueue_trial(previous_best)
     
-    wandb_callback = WandbCallback(metric_name="f1_macro")
+    wandb_callback = WandbCallback(metric_name="combined_score")
 
     study.optimize(objective, n_trials=n_trials, callbacks=[wandb_callback])
     
@@ -1460,7 +1482,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
     best_value = study.best_value
     
     print(f"\n=== Bayesian Optimization Results with {n_folds}-fold CV ===")
-    print(f"Best average F1-macro across folds: {best_value:.4f}")
+    print(f"Best combined score across folds: {best_value:.4f}")
     print("Best hyperparameters:")
     for param, value in best_params.items():
         print(f"  {param}: {value}")
@@ -1489,8 +1511,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
     # Create visualization if not in offline mode
     if not myConfig.running_offline:
         try:
-            # Save optimization plots
-            import matplotlib.pyplot as plt
+            # Save optimization plots            
             from optuna.visualization import plot_optimization_history, plot_param_importances
             
             # History plot
@@ -1509,7 +1530,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
     
     if wandb.run:
         # Log best parameters
-        wandb.run.summary["best_f1_macro"] = best_value
+        wandb.run.summary["best_combined_score"] = best_value
         wandb.run.summary["best_params"] = best_params
         wandb.run.summary["n_folds"] = n_folds
     
@@ -1521,8 +1542,192 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
     if wandb.run and wandb.run.name.startswith("hpo_cnn_rnn"):
         wandb.finish()
     
-    # Optionally train final model
+    # Optionally train final model with more epochs for better results
     if input(f"Train final model with best hyperparameters from {n_folds}-fold CV? (y/n): ").lower() == "y":
+        print("Training final model with 20 epochs instead of the default...")
         train_with_best_hyperparameters(dataset, best_params)
     
     return result
+
+
+def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=True):
+    """Train a final model using the best hyperparameters from Bayesian optimization."""
+    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    
+    print("\n=== Training with Best Hyperparameters ===")
+    
+    # Create balanced training dataset
+    print("Creating balanced training dataset...")
+    balanced_train_dataset = BalancedAugmentedDataset(
+        original_dataset=dataset["train"],
+        total_target_samples=1000,
+        num_classes=3
+    )
+    balanced_train_dataset.print_distribution_stats()
+    
+    # Create dataset with balanced training
+    balanced_dataset = {
+        "train": balanced_train_dataset,
+        "validation": dataset["validation"],
+        "test": dataset["test"]
+    }
+    
+    # Extract hyperparameters
+    lr = best_params.get("learning_rate", 2e-5)
+    weight_decay = best_params.get("weight_decay", 0.01)
+    max_lr = best_params.get("max_lr", 5e-4)
+    pct_start = best_params.get("pct_start", 0.3)
+    gamma = best_params.get("focal_loss_gamma", 0.0)
+    n_mels = best_params.get("n_mels", 128)
+    time_mask_param = best_params.get("time_mask_param", 50)
+    freq_mask_param = best_params.get("freq_mask_param", 50)
+    
+    # Create dataloaders
+    dataloaders = get_cnn_rnn_dataloaders(
+        balanced_dataset, 
+        batch_size=32,
+        use_prosodic_features=use_prosodic_features
+    )
+    
+    # Create model with optimized hyperparameters
+    model = DualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        use_prosodic_features=use_prosodic_features,
+        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
+        n_mels=n_mels,
+        apply_specaugment=True
+    )
+    
+    # Update SpecAugment parameters if the model has that module
+    if hasattr(model, 'spec_augment'):
+        model.spec_augment.time_mask_param = time_mask_param
+        model.spec_augment.freq_mask_param = freq_mask_param
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    
+    # Create optimizer with optimized hyperparameters
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+        betas=(0.9, 0.999)
+    )
+    
+    # Create focal loss with optimized gamma
+    criterion = FocalLoss(gamma=gamma)
+    
+    # Calculate total steps for full training (10 epochs)
+    total_steps = len(dataloaders["train"]) * 10
+    
+    # Create scheduler with optimized hyperparameters
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=max_lr,
+        total_steps=total_steps,
+        pct_start=pct_start,
+        div_factor=25,
+        final_div_factor=1000,
+        anneal_strategy='cos',
+        three_phase=False
+    )
+    
+    # Create output directory for optimized CNN+RNN model
+    optimized_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cnn_rnn_optimized")
+    os.makedirs(optimized_output_dir, exist_ok=True)
+    
+    # Tracking variables
+    best_f1_macro = 0.0
+    
+    # Training loop
+    for epoch in range(10):
+        torch.cuda.empty_cache()
+        gc.collect()
+        log_memory_usage(f"Epoch {epoch+1} start")
+        
+        # Training phase
+        avg_train_loss = train_epoch(
+            model, 
+            dataloaders["train"], 
+            optimizer, 
+            criterion, 
+            device, 
+            scheduler, 
+            use_prosodic_features
+        )
+        
+        # Validation phase
+        val_loss, all_labels, all_preds = evaluate(
+            model, 
+            dataloaders["validation"], 
+            criterion, 
+            device, 
+            use_prosodic_features
+        )
+        
+        # Calculate metrics
+        avg_val_loss = val_loss / len(dataloaders["validation"])
+        val_accuracy = accuracy_score(all_labels, all_preds)
+        val_f1_macro = f1_score(all_labels, all_preds, average='macro')
+        val_f1_per_class = f1_score(all_labels, all_preds, average=None)
+        
+        # Print metrics
+        print(f"Epoch {epoch+1}/10:")
+        print(f"  Train Loss: {avg_train_loss:.4f}")
+        print(f"  Val Loss: {avg_val_loss:.4f}")
+        print(f"  Val Accuracy: {val_accuracy:.4f}")
+        print(f"  Val F1-Macro: {val_f1_macro:.4f}")
+        print(f"  Val F1 per class: {val_f1_per_class}")
+        
+        # Save best model based on F1-macro
+        if val_f1_macro > best_f1_macro:
+            best_f1_macro = val_f1_macro
+            
+            # Save model to optimized directory
+            model_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")
+            torch.save(model.state_dict(), model_path)
+            print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
+            
+            # Save in safetensors format if available
+            try:
+                from safetensors.torch import save_file
+                safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
+                save_file(model.state_dict(), safetensors_path)
+                print(f"  Also saved model in safetensors format to {safetensors_path}")
+            except ImportError:
+                print("  safetensors not available, skipping safetensors format")
+    
+    # Test the best model
+    # Load the best model
+    model.load_state_dict(torch.load(os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")))
+    
+    # Test on test set
+    print("\nTesting optimized model on test set...")
+    test_loss, test_labels, test_preds = evaluate(
+        model, dataloaders["test"], criterion, device, use_prosodic_features
+    )
+    
+    # Calculate test metrics
+    test_accuracy = accuracy_score(test_labels, test_preds)
+    test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+    test_report = classification_report(test_labels, test_preds, target_names=["Healthy", "MCI", "AD"])
+    
+    print(f"Test Accuracy: {test_accuracy:.4f}")
+    print(f"Test F1-Macro: {test_f1_macro:.4f}")
+    print("Classification Report:")
+    print(test_report)
+    
+    # Save hyperparameters and test results
+    results = {
+        "hyperparameters": best_params,
+        "test_accuracy": test_accuracy,
+        "test_f1_macro": test_f1_macro,
+        "val_f1_macro": best_f1_macro
+    }
+    
+    with open(os.path.join(optimized_output_dir, "results.json"), "w") as f:
+        import json
+        json.dump(results, f, indent=2)
+    
+    print(f"Optimized model and results saved to {optimized_output_dir}")
