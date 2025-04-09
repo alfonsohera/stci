@@ -942,6 +942,8 @@ def run_cross_validation(n_folds=5):
     import numpy as np
     import json
     
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     # From HPO:    
     hpo_max_lr = 0.0001853610927135983
     hpo_focal_loss_gamma = 0.09290082543999545
@@ -1034,8 +1036,7 @@ def run_cross_validation(n_folds=5):
                 # Set new dropout probability
                 module.p = new_p
  
-        # Train the model on this fold
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Train the model on this fold        
         fold_model.to(device)
                         
         optimizer = torch.optim.Adam(
