@@ -1120,6 +1120,7 @@ def run_cross_validation(n_folds=5):
 def run_bayesian_optimization(n_trials=50, resume_study=False):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
     from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
+    from sklearn.utils.class_weight import compute_class_weight
     import json
     import joblib
     
@@ -1176,26 +1177,17 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
         try:            
             torch.cuda.empty_cache()
             gc.collect()
-            
-            # Primary focus (most important parameters)
+                        
             fixed_lr = trial.suggest_float("fixed_lr", 0.00012, 0.00025, log=True)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.9, 1.5)
-
-            # Secondary focus (medium importance)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 35, 50)
-            attention_dropout = trial.suggest_float("attention_dropout", 0.3, 0.42) 
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0, 2)
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.1, 1.0)            
+            time_mask_param = trial.suggest_int("time_mask_param", 35, 50)
+            freq_mask_param = trial.suggest_int("freq_mask_param", 35, 50)            
             dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
-
-            # Minor parameters (can be fixed)
-            time_mask_param = 37  # Fixed from previous best
-            attention_heads = 1   # Fixed from previous best
-            weight_decay = 5e-5   # Fixed from previous best
-            
-            # Fix other parameters to best values from previous HPO                        
-            n_mels = 110                    # Best from previous HPO            
+            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)
             
             trial_history = []
-                                    
+            n_mels = 128                        
             # Create model with trial hyperparameters
             model = DualPathAudioClassifier(
                 num_classes=3,
@@ -1203,21 +1195,42 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                 n_mels=n_mels,
                 apply_specaugment=True
             )
+            model.to(device)        
+            # Calculate class weights with scaling factor
+            classes = np.array([0, 1, 2])  
+            class_counts = myConfig.num_samples_per_class
+            y = np.array([])
+
+            # Create array with labels based on known counts
+            for class_id, count in class_counts.items():
+                y = np.append(y, [class_id] * count)
+
+            # Compute balanced weights
+            raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
+            
+            # Apply scaling factor to make weights less extreme
+            scaled_weights = np.power(raw_weights, weight_scaling_factor)
+            
+            # Normalize to maintain sum proportionality
+            scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+            
+            print(f"Trial {trial.number} - Gamma: {focal_loss_gamma}, Weight scaling: {weight_scaling_factor}")
+            print(f"Original weights: {raw_weights}")
+            print(f"Scaled weights: {scaled_weights}")
+            
+            # Convert to tensor
+            weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+            
+            # Create focal loss with trial gamma and scaled weights
+            criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+            
             
             # Update SpecAugment parameters if the model has that module
             if hasattr(model, 'spec_augment'):
                 model.spec_augment.time_mask_param = time_mask_param
                 model.spec_augment.freq_mask_param = freq_mask_param
-            
-            # Update the attention layers with new hyperparameters
-            for attn_layer in model.attention_layers:
-                # Create a new attention module with desired parameters
-                attn_layer.attention = nn.MultiheadAttention(
-                    embed_dim=8,
-                    num_heads=attention_heads,
-                    dropout=attention_dropout * dropout_factor,
-                    batch_first=True
-                )
+                        
+
             # Adjust all dropout rates in the model
             for module in model.modules():
                 if isinstance(module, nn.Dropout):
@@ -1236,10 +1249,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
                 weight_decay=weight_decay,
                 betas=(0.9, 0.999)
             )
-            
-            # Create focal loss with trial gamma
-            criterion = FocalLoss(gamma=focal_loss_gamma)
-            
+                       
             # Calculate total steps for shorter training (3 epochs)            
             n_epochs = 20  # Number of epochs for HPO        
 
