@@ -1234,7 +1234,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                 # Create fold dataset dictionary
                 fold_dataset = {
                     "train": fold_train_balanced,
-                    "validation": fold_val
+                    "validation": fold_val,
+                    "test": dataset["test"]
                 }
                 
                 # Get dataloaders for this fold 
