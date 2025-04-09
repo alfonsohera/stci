@@ -532,7 +532,7 @@ def test_cnn_rnn_model(model, test_loader):
 def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
     from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
-    hpo_n_mels = 110
+    hpo_n_mels = 128
     print("Running CNN+RNN model")
     
     # Load and prepare dataset using the dedicated cnn_rnn_data module
@@ -583,7 +583,7 @@ def main_cnn_rnn(use_prosodic_features=False):
 def test_cnn_rnn():
     """Test function for the CNN+RNN pipeline."""
     from cnn_rnn_model import DualPathAudioClassifier
-    hpo_n_mels = 110
+    hpo_n_mels = 128
     # Prepare data
     dataset = prepare_cnn_rnn_dataset()
     
@@ -614,7 +614,7 @@ def test_cnn_rnn():
 
 def optimize_cnn_rnn(use_prosodic_features=True):
     """Function to run threshold optimization for CNN+RNN model"""    
-    hpo_n_mels = 110
+    hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
@@ -676,7 +676,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     import seaborn as sns
     from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
     
-    hpo_n_mels = 110
+    hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
@@ -914,7 +914,7 @@ def run_cross_validation(n_folds=5):
     import numpy as np
     import json
     
-    hpo_n_mels = 110
+    hpo_n_mels = 128
     cv_epochs = 10
     print(f"Running {n_folds}-fold cross-validation...")
     

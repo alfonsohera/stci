@@ -14,11 +14,11 @@ class SpecAugment(nn.Module):
     """
     def __init__(
         self,
-        freq_mask_param=46,    # From HPO
-        time_mask_param=22,    # From HPO
-        n_freq_masks: int = 2,
-        n_time_masks: int = 2,
-        apply_prob: float = 0,
+        freq_mask_param=30,    # From HPO
+        time_mask_param=30,    # From HPO
+        n_freq_masks: int = 1,
+        n_time_masks: int = 1,
+        apply_prob: float = 1,
     ):
         super().__init__()
         self.freq_mask_param = freq_mask_param
@@ -182,18 +182,18 @@ class DualPathAudioClassifier(nn.Module):
         )
         
         # Downsample raw audio for attention path
-        self.audio_downsample = nn.Conv1d(1, 8, kernel_size=50, stride=120)        
-        self.position_embedding = nn.Parameter(torch.randn(1, 128, 8))  # Max seq length 128, feature dim 8
+        self.audio_downsample = nn.Conv1d(1, 32, kernel_size=100, stride=120)        
+        self.position_embedding = nn.Parameter(torch.randn(1, 128, 32))  # Max seq length 128, feature dim 8
         
         # Self-attention layers
         # Attention path - increase dropout
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=8, num_heads=1, dropout=0.1)  
+            ImprovedSelfAttention(embed_dim=32, num_heads=2, dropout=0.3)  
         ])
         
         # Attention output processing
         self.attention_pooling = nn.Sequential(
-            nn.Linear(8, 64),
+            nn.Linear(32, 64),
             nn.ReLU(),
             nn.Dropout(0.4)  # Increase from 0.2
         )
