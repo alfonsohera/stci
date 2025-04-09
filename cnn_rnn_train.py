@@ -301,8 +301,37 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
 
-    # Set up the loss function with default weighting
-    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=None)
+    # Calculate class weights using sklearn's compute_class_weight
+    print("Calculating class weights for imbalanced data...")
+    from sklearn.utils.class_weight import compute_class_weight
+    import numpy as np
+    
+    # Get all labels from the training dataset
+    all_labels = []
+    for i in range(len(dataloaders["train"].dataset)):
+        # Handle different dataset structures
+        if hasattr(dataloaders["train"].dataset, "original_dataset"):
+            # For augmented datasets, get labels from original data to calculate correct weights
+            item = dataloaders["train"].dataset.original_dataset[i]
+            label = item["label"]
+            all_labels.append(label)
+    
+    # Compute balanced weights
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(all_labels),
+        y=all_labels
+    )
+    
+    # Convert to tensor
+    weight_tensor = torch.tensor(class_weights, device=device, dtype=torch.float32)
+    
+    print("Class weights calculated:")
+    for i, weight in enumerate(class_weights):
+        print(f"  Class {i}: {weight:.4f}")
+
+    # Set up the loss function with class weighting
+    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
 
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.AdamW(
