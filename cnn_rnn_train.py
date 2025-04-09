@@ -274,13 +274,15 @@ def evaluate(model, val_loader, criterion, device):
 
 def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     """Train the CNN+RNN model."""        
+    from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     
-    # From HPO:
-    hpo_weight_decay = 5e-5
-    hpo_max_lr = 0.00015
-    hpo_focal_loss_gamma = 0
+    # From HPO:    
+    hpo_max_lr = 0.00016815333883045793
+    hpo_focal_loss_gamma = 0.7145207098349268
+    hpo_weight_scaling_factor = 0.10396082572306618
+    hpo_weight_decay = 1.06257214973275e-06
 
     # Initialize wandb
     if not wandb.run:
@@ -301,38 +303,29 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
 
-    # Calculate class weights using sklearn's compute_class_weight
-    print("Calculating class weights for imbalanced data...")
-    from sklearn.utils.class_weight import compute_class_weight
-    import numpy as np
-
-    # Define classes and their counts
+    # Calculate class weights with scaling factor
     classes = np.array([0, 1, 2])  
     class_counts = myConfig.num_samples_per_class
     y = np.array([])
-
-    # Create anarray with labels based on known counts
+    # Create array with labels based on known counts
     for class_id, count in class_counts.items():
         y = np.append(y, [class_id] * count)
-
     # Compute balanced weights
-    class_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
-
+    raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+    # Apply scaling factor to make weights less extreme
+    scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
+    # Normalize to maintain sum proportionality
+    scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
     # Convert to tensor
-    weight_tensor = torch.tensor(class_weights, device=device, dtype=torch.float32)
-
-    print("Class weights calculated:")
-    for i, weight in enumerate(class_weights):
-        print(f"  Class {i}: {weight:.4f}")
-
+    weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
     criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
 
     # Set up the optimizer with proper hyperparameters
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=hpo_max_lr,            
-        weight_decay=hpo_weight_decay,  # L2 regularization        
+        lr=hpo_max_lr,
+        weight_decay=hpo_weight_decay,  # L2 regularization
     )
        
     

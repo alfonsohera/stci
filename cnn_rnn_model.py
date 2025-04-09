@@ -12,10 +12,13 @@ class SpecAugment(nn.Module):
     """SpecAugment for mel spectrograms as described in the paper:
     "SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition"
     """
+    hpo_time_mask_param = 47  # From HPO
+    hpo_freq_mask_param = 35  # From HPO
+    
     def __init__(
         self,
-        freq_mask_param=30,    # From HPO
-        time_mask_param=30,    # From HPO
+        freq_mask_param=hpo_freq_mask_param,
+        time_mask_param=hpo_time_mask_param,
         n_freq_masks: int = 1,
         n_time_masks: int = 1,
         apply_prob: float = 1,
@@ -131,7 +134,7 @@ class ImprovedSelfAttention(nn.Module):
         
         return x
 
-
+        
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
                  apply_specaugment=True, use_prosodic_features=False, 
@@ -257,7 +260,6 @@ class DualPathAudioClassifier(nn.Module):
         self._initialized_for_device = False
 
         
-
     def forward(self, audio, audio_lengths=None, augmentation_id=None, 
                 prosodic_features=None, chunk_context=None):
         """
