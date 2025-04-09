@@ -945,11 +945,11 @@ def run_cross_validation(n_folds=5):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # From HPO:    
-    hpo_max_lr = 0.0001749508037956646
-    hpo_focal_loss_gamma = 1.412267303911459
-    hpo_weight_scaling_factor = 0.9725833997090791
-    hpo_weight_decay = 1.072231283804023e-06
-    hpo_dropout_factor = 0.9097065013330266
+    hpo_max_lr = 0.00024692501843698
+    hpo_focal_loss_gamma = 2.132851877562218
+    hpo_weight_scaling_factor = 0.3705412641765997
+    hpo_weight_decay = 3.855106137594842e-06
+    hpo_dropout_factor = 0.8899738095977145
     hpo_n_mels = 128
 
     cv_epochs = 15
