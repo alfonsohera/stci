@@ -1231,17 +1231,20 @@ def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
                     num_classes=3
                 )
                 
-                # Get dataloaders for this fold 
-                fold_train_loader = get_cnn_rnn_dataloaders(
-                    {"train": fold_train_balanced},
-                    batch_size=96
-                )["train"]
+                # Create fold dataset dictionary
+                fold_dataset = {
+                    "train": fold_train_balanced,
+                    "validation": fold_val
+                }
                 
-                # Create validation dataloader 
-                fold_val_loader = get_cnn_rnn_dataloaders(
-                    {"validation": fold_val},
+                # Get dataloaders for this fold 
+                fold_dataloaders = get_cnn_rnn_dataloaders(
+                    fold_dataset,
                     batch_size=96
-                )["validation"]
+                )
+                
+                fold_train_loader = fold_dataloaders["train"]
+                fold_val_loader = fold_dataloaders["validation"]
                 
                 # Create new model for this fold with trial hyperparameters
                 fold_model = DualPathAudioClassifier(
