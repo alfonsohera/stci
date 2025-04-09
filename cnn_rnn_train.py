@@ -1175,7 +1175,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     for split in ["train", "validation"]:
         for i in range(len(dataset[split])):
             combined_data.append(dataset[split][i])
-            combined_labels.append(dataset[split][i]["labels"])
+            combined_labels.append(dataset[split][i]["label"])
     
     # Prepare indices for stratified k-fold splits to handle class imbalance
     indices = np.arange(len(combined_data))
