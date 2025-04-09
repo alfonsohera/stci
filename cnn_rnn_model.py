@@ -137,7 +137,7 @@ class ImprovedSelfAttention(nn.Module):
         
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 apply_specaugment=True, use_prosodic_features=False, 
+                 apply_specaugment=True, use_prosodic_features=True, 
                  prosodic_feature_dim=7):
         super(DualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
