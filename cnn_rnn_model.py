@@ -200,7 +200,7 @@ class DualPathAudioClassifier(nn.Module):
         # Self-attention layers
         # Attention path - increase dropout
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=32, num_heads=2, dropout=0.3)  
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=0.3)  
         ])
         
         # Attention output processing
