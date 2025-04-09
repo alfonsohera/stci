@@ -95,7 +95,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
             # Backpropagation
             loss.backward() 
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)                       
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)                       
             # Update weights
             optimizer.step()        
             # Update LR
