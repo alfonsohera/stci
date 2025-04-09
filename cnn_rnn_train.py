@@ -276,13 +276,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     """Train the CNN+RNN model."""        
     from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
     
     # From HPO:    
-    hpo_max_lr = 0.00016815333883045793
-    hpo_focal_loss_gamma = 0.7145207098349268
-    hpo_weight_scaling_factor = 0.10396082572306618
-    hpo_weight_decay = 1.06257214973275e-06
+    hpo_max_lr = 0.0001853610927135983
+    hpo_focal_loss_gamma = 0.09290082543999545
+    hpo_weight_scaling_factor = 0.6467903667112945
+    hpo_weight_decay = 8.536189862866841e-05
+    hpo_dropout_factor = 0.9923328305879999
 
     # Initialize wandb
     if not wandb.run:
@@ -320,6 +320,18 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
     criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+    
+    # Adjust all dropout rates in the model
+    for module in model.modules():
+        if isinstance(module, nn.Dropout):
+            # Get current dropout probability
+            current_p = module.p
+            # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
+            new_p = min(current_p * hpo_dropout_factor, 0.7)
+            # Set new dropout probability
+            module.p = new_p
+    model.to(device)
+
 
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.Adam(
@@ -923,14 +935,22 @@ def test_cnn_rnn_with_thresholds():
 
 
 def run_cross_validation(n_folds=5):
+    from sklearn.utils.class_weight import compute_class_weight
     """Run k-fold cross-validation for the CNN+RNN model."""
     from sklearn.model_selection import KFold
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
     import numpy as np
     import json
     
+    # From HPO:    
+    hpo_max_lr = 0.0001853610927135983
+    hpo_focal_loss_gamma = 0.09290082543999545
+    hpo_weight_scaling_factor = 0.6467903667112945
+    hpo_weight_decay = 8.536189862866841e-05
+    hpo_dropout_factor = 0.9923328305879999
     hpo_n_mels = 128
-    cv_epochs = 10
+
+    cv_epochs = 15
     print(f"Running {n_folds}-fold cross-validation...")
     
     # Load and prepare dataset
@@ -961,12 +981,10 @@ def run_cross_validation(n_folds=5):
         
         # Create balanced training dataset
         print("Creating balanced dataset for this fold...")
-        fold_train_balanced = BalancedAugmentedDataset(
-            original_dataset=fold_train,
-            total_target_samples=1000,
+        fold_train_balanced = AugmentedDataset(
+            original_dataset=fold_train,            
             num_classes=3
-        )
-        fold_train_balanced.print_distribution_stats()
+        )        
         
         # Create temporary dataset with the fold splits
         fold_dataset = {
@@ -978,7 +996,7 @@ def run_cross_validation(n_folds=5):
         # Get dataloaders for this fold
         fold_dataloaders = get_cnn_rnn_dataloaders(
             fold_dataset,
-            batch_size=32
+            batch_size=96
         )
         
         # Create new model for this fold
@@ -988,32 +1006,42 @@ def run_cross_validation(n_folds=5):
             n_mels=hpo_n_mels
         )
         
+        # Calculate class weights with scaling factor
+        classes = np.array([0, 1, 2])  
+        class_counts = myConfig.num_samples_per_class
+        y = np.array([])
+        # Create array with labels based on known counts
+        for class_id, count in class_counts.items():
+            y = np.append(y, [class_id] * count)
+        # Compute balanced weights
+        raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+        # Apply scaling factor to make weights less extreme
+        scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
+        # Normalize to maintain sum proportionality
+        scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+        # Convert to tensor
+        weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+        # Set up the loss function with class weighting
+        criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+        
+        # Adjust all dropout rates in the model
+        for module in fold_model.modules():
+            if isinstance(module, nn.Dropout):
+                # Get current dropout probability
+                current_p = module.p
+                # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
+                new_p = min(current_p * hpo_dropout_factor, 0.7)
+                # Set new dropout probability
+                module.p = new_p
+ 
         # Train the model on this fold
         device = "cuda" if torch.cuda.is_available() else "cpu"
         fold_model.to(device)
-        
-        # Setup training for this fold with progress tracking
-        criterion = FocalLoss(gamma=0, weight=None)
-        optimizer = torch.optim.AdamW(
+                        
+        optimizer = torch.optim.Adam(
             fold_model.parameters(),
-            lr=2e-5,
-            weight_decay=0.01,
-            betas=(0.9, 0.999)
-        )
-        
-        # Calculate total steps for 1cycle scheduler
-        total_steps = len(fold_dataloaders["train"]) * cv_epochs  # Use 5 epochs for CV
-        
-        # 1cycle LR scheduler
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=5e-4,
-            total_steps=total_steps,
-            pct_start=0.3,
-            div_factor=25,
-            final_div_factor=1000,
-            anneal_strategy='cos',
-            three_phase=False
+            lr=hpo_max_lr,
+            weight_decay=hpo_weight_decay,            
         )
         
         # Train for fewer epochs in cross-validation
@@ -1025,7 +1053,7 @@ def run_cross_validation(n_folds=5):
             # Train
             train_loss = train_epoch(
                 fold_model, fold_dataloaders["train"], optimizer, 
-                criterion, device, scheduler
+                criterion, device
             )
             
             # Validate
@@ -1072,7 +1100,7 @@ def run_cross_validation(n_folds=5):
         print(f"Fold {fold_idx+1} test results: Acc={test_accuracy:.4f}, F1={test_f1_macro:.4f}")
         
         # Clean up to free memory
-        del fold_model, optimizer, scheduler, criterion
+        del fold_model, optimizer, criterion
         del fold_dataloaders, fold_dataset, fold_train, fold_val
         gc.collect()
         torch.cuda.empty_cache()
@@ -1515,7 +1543,7 @@ def train_with_best_hyperparameters(dataset, best_params):
     # Create dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         balanced_dataset, 
-        batch_size=32
+        batch_size=96
     )
     
     # Create model with optimized hyperparameters

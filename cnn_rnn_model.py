@@ -12,8 +12,8 @@ class SpecAugment(nn.Module):
     """SpecAugment for mel spectrograms as described in the paper:
     "SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition"
     """
-    hpo_time_mask_param = 47  # From HPO
-    hpo_freq_mask_param = 35  # From HPO
+    hpo_time_mask_param = 37  # From HPO
+    hpo_freq_mask_param = 36  # From HPO
     
     def __init__(
         self,
@@ -233,7 +233,7 @@ class DualPathAudioClassifier(nn.Module):
             # Fusion layers - increase dropout
             self.fusion = nn.Sequential(
                 nn.Linear(256 + 256 + 128 + 32, 384),  # CNN + Attention + Prosodic + Chunk
-                nn.BatchNorm1d(384),
+                nn.LayerNorm(384),
                 nn.ReLU(),
                 nn.Dropout(0.3),
                 nn.Linear(384, 128),
@@ -244,12 +244,12 @@ class DualPathAudioClassifier(nn.Module):
             # Fusion layer (CNN features + Attention features)
             self.fusion = nn.Sequential(
                 nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
-                nn.BatchNorm1d(256),
+                nn.LayerNorm(256),
                 nn.ReLU(),
                 nn.Dropout(0.3),
                 nn.Linear(256, 128),
                 nn.ReLU(),
-                nn.Dropout(0.2)
+                nn.Dropout(0.4)
             )
 
         # Separate classifier layer
@@ -469,8 +469,7 @@ class AugmentedDataset(Dataset):
         self.max_cache_size = 100  # Limit cache size to control memory
         self.sample_cache = {}  # For caching augmented samples
         
-        # Initialize RNG for reproducible augmentations
-        import numpy as np
+        # Initialize RNG for reproducible augmentations        
         self.rng = np.random.RandomState(42)
     
     def __len__(self):
