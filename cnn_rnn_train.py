@@ -277,13 +277,12 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # From HPO:    
-    #hpo_max_lr = 0.0001853610927135983
-    hpo_max_lr = 5e-4
-    hpo_focal_loss_gamma = 0.09290082543999545
-    hpo_weight_scaling_factor = 0.6467903667112945
-    hpo_weight_decay = 8.536189862866841e-05
-    hpo_dropout_factor = 0.9923328305879999
+    # From HPO:        
+    hpo_max_lr = 0.0001749508037956646
+    hpo_focal_loss_gamma = 1.412267303911459
+    hpo_weight_scaling_factor = 0.9725833997090791
+    hpo_weight_decay = 1.072231283804023e-06
+    hpo_dropout_factor = 0.9097065013330266
 
     # Initialize wandb
     if not wandb.run:
@@ -946,11 +945,11 @@ def run_cross_validation(n_folds=5):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # From HPO:    
-    hpo_max_lr = 0.0001853610927135983
-    hpo_focal_loss_gamma = 0.09290082543999545
-    hpo_weight_scaling_factor = 0.6467903667112945
-    hpo_weight_decay = 8.536189862866841e-05
-    hpo_dropout_factor = 0.9923328305879999
+    hpo_max_lr = 0.0001749508037956646
+    hpo_focal_loss_gamma = 1.412267303911459
+    hpo_weight_scaling_factor = 0.9725833997090791
+    hpo_weight_decay = 1.072231283804023e-06
+    hpo_dropout_factor = 0.9097065013330266
     hpo_n_mels = 128
 
     cv_epochs = 15
@@ -1139,10 +1138,11 @@ def run_cross_validation(n_folds=5):
     return cv_results
 
 
-def run_bayesian_optimization(n_trials=50, resume_study=False):
-    """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
+def run_bayesian_optimization(n_trials=50, resume_study=False, n_folds=5):
+    """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
     from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
     from sklearn.utils.class_weight import compute_class_weight
+    from sklearn.model_selection import KFold
     import json
     import joblib
     
@@ -1151,13 +1151,14 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
         wandb.init(
             project="CNN-RNN-HPO",
             entity=myConfig.wandb_entity,
-            name="hpo_cnn_rnn",
+            name=f"hpo_cnn_rnn_{n_folds}fold",
             config={
-                "model_type": "CNN+RNN HPO",
+                "model_type": "CNN+RNN HPO with CV",
                 "n_trials": n_trials,
-                "optimization_type": "bayesian"
+                "optimization_type": "bayesian",
+                "n_folds": n_folds
             },
-            tags=["hpo", "bayesian-optimization", "cnn-rnn"]
+            tags=["hpo", "bayesian-optimization", "cnn-rnn", "cross-validation"]
         )
     
     # Create output directory for hyperparameter optimization    
@@ -1165,33 +1166,18 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     os.makedirs(output_dir, exist_ok=True)
     
     # Load and prepare dataset
-    print("Loading dataset for hyperparameter optimization...")
+    print("Loading dataset for hyperparameter optimization with cross-validation...")
     dataset = prepare_cnn_rnn_dataset()
     
-    # Create balanced training dataset
-    print("Creating balanced training dataset for optimization...")
-    augmented_train_dataset = AugmentedDataset(
-        original_dataset=dataset["train"],        
-        num_classes=3
-    )
-    augmented_train_dataset.print_distribution_stats()
-
-    # Update dataset with balanced training set
-    balanced_dataset = {
-        "train": augmented_train_dataset,
-        "validation": dataset["validation"],
-        "test": dataset["test"]
-    }
+    # Combine train and validation for cross-validation
+    combined_data = []
+    for split in ["train", "validation"]:
+        for i in range(len(dataset[split])):
+            combined_data.append(dataset[split][i])
     
-    # Get dataloaders with balanced training data
-    dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset,
-        batch_size=96
-    )
-    
-    train_loader = dataloaders["train"]
-    val_loader = dataloaders["validation"]
-    test_loader = dataloaders["test"]
+    # Prepare indices for k-fold splits
+    indices = np.arange(len(combined_data))
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -1208,173 +1194,220 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
             weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)
             
-            trial_history = []
-            n_mels = 128                        
-            # Create model with trial hyperparameters
-            model = DualPathAudioClassifier(
-                num_classes=3,
-                sample_rate=16000,
-                n_mels=n_mels,
-                apply_specaugment=True
-            )
-            model.to(device)        
-            # Calculate class weights with scaling factor
-            classes = np.array([0, 1, 2])  
-            class_counts = myConfig.num_samples_per_class
-            y = np.array([])
-
-            # Create array with labels based on known counts
-            for class_id, count in class_counts.items():
-                y = np.append(y, [class_id] * count)
-
-            # Compute balanced weights
-            raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
-            
-            # Apply scaling factor to make weights less extreme
-            scaled_weights = np.power(raw_weights, weight_scaling_factor)
-            
-            # Normalize to maintain sum proportionality
-            scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
-            
-            print(f"Trial {trial.number} - Gamma: {focal_loss_gamma}, Weight scaling: {weight_scaling_factor}")
-            print(f"Original weights: {raw_weights}")
-            print(f"Scaled weights: {scaled_weights}")
-            
-            # Convert to tensor
-            weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
-            
-            # Create focal loss with trial gamma and scaled weights
-            criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
-            
-            
-            # Update SpecAugment parameters if the model has that module
-            if hasattr(model, 'spec_augment'):
-                model.spec_augment.time_mask_param = time_mask_param
-                model.spec_augment.freq_mask_param = freq_mask_param
-                        
-
-            # Adjust all dropout rates in the model
-            for module in model.modules():
-                if isinstance(module, nn.Dropout):
-                    # Get current dropout probability
-                    current_p = module.p
-                    # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
-                    new_p = min(current_p * dropout_factor, 0.7)
-                    # Set new dropout probability
-                    module.p = new_p
-            model.to(device)
-            
-            # Create optimizer with trial hyperparameters
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=fixed_lr,
-                weight_decay=weight_decay,
-                betas=(0.9, 0.999)
-            )
-                       
-            # Calculate total steps for shorter training (3 epochs)            
-            n_epochs = 10  # Number of epochs for HPO        
-
-            # training loop  length
-            max_training_epochs = n_epochs
-            
-            best_trial_f1 = 0.0
-            
             trial_name = f"trial_{trial.number}"
             
             # Log trial parameters to wandb
             if wandb.run:
-                wandb.run.summary[f"{trial_name}_params"] = {
-                    param: value for param, value in trial.params.items()
-                }
-            
-            for epoch in range(max_training_epochs):
-                try:
-                    # Train
-                    train_loss = train_epoch(
-                        model, train_loader, optimizer, 
-                        criterion, device
-                    )
-                    # Evaluate 
-                    val_loss, val_labels, val_preds = evaluate(
-                        model, val_loader, criterion, device
-                    )
-                    val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
-                    # Rest of the code...
-                except Exception as epoch_error:
-                    print(f"Error in epoch {epoch} of trial {trial.number}: {str(epoch_error)}")
-                    if wandb.run:
-                        wandb.log({f"trial_{trial.number}_epoch_{epoch}_error": str(epoch_error)})
-                    raise  # Re-raise to be caught by the outer try/except
-                # Calculate average batch validation loss 
-                total_val_recordings = len(val_labels)  # This now represents total processed recordings
-                avg_val_loss = val_loss / total_val_recordings
-                            
-                # Append to history 
-                trial_history.append({
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "val_loss": avg_val_loss,
-                    "val_f1": val_f1_macro
+                wandb.log({
+                    f"{trial_name}_params": {
+                        param: value for param, value in trial.params.items()
+                    }
                 })
-                # Log to wandb after each epoch evaluation
-                if wandb.run:
-                    wandb.log({
-                        f"{trial_name}/epoch": epoch,
-                        f"{trial_name}/train_loss": train_loss,
-                        f"{trial_name}/val_loss": avg_val_loss,
-                        f"{trial_name}/val_f1": val_f1_macro
-                    })
-                # Check for pruning
-                trial.report(val_f1_macro, epoch)
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
-
-            if val_f1_macro > best_trial_f1:
-                best_trial_f1 = val_f1_macro
-                                
-                trial_model_dir = os.path.join(
-                    myConfig.OUTPUT_PATH, 
-                    "hyperparameter_optimization"
-                )
-                os.makedirs(trial_model_dir, exist_ok=True)
+            
+            # Run k-fold cross-validation for this trial
+            fold_f1_scores = []
+            fold_val_losses = []
+            n_mels = 128
+            
+            # Number of epochs for HPO cross-validation (reduced)
+            n_epochs = 6  # Reduced from 10 to make HPO faster with k-fold
+            
+            print(f"\n--- Trial {trial.number}: Running {n_folds}-fold cross-validation ---")
+            
+            # Store fold histories
+            fold_histories = []
+            
+            # For each fold
+            for fold_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
+                print(f"  Processing fold {fold_idx+1}/{n_folds} for trial {trial.number}")
                 
-                # Remove any previous model for this trial if it exists
-                trial_model_path = os.path.join(
-                    trial_model_dir, 
-                    f"trial_{trial.number}_model.pt"
+                # Create fold-specific datasets
+                fold_train = [combined_data[i] for i in train_idx]
+                fold_val = [combined_data[i] for i in val_idx]
+                
+                # Create balanced training dataset for this fold
+                fold_train_balanced = AugmentedDataset(
+                    original_dataset=fold_train,            
+                    num_classes=3
                 )
-                if os.path.exists(trial_model_path):
-                    os.remove(trial_model_path)
-                torch.save(model.state_dict(), trial_model_path)
+                
+                # Create temporary dataset with the fold splits
+                fold_dataset = {
+                    "train": fold_train_balanced,
+                    "validation": fold_val
+                }
+                
+                # Get dataloaders for this fold
+                fold_train_loader = get_cnn_rnn_dataloaders(
+                    {"train": fold_dataset["train"]},
+                    batch_size=96
+                )["train"]
+                
+                fold_val_loader = get_cnn_rnn_dataloaders(
+                    {"validation": fold_dataset["validation"]},
+                    batch_size=96
+                )["validation"]
+                
+                # Create new model for this fold with trial hyperparameters
+                fold_model = DualPathAudioClassifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    n_mels=n_mels,
+                    apply_specaugment=True
+                )
+                fold_model.to(device)
+                
+                # Update SpecAugment parameters if the model has that module
+                if hasattr(fold_model, 'spec_augment'):
+                    fold_model.spec_augment.time_mask_param = time_mask_param
+                    fold_model.spec_augment.freq_mask_param = freq_mask_param
+                
+                # Calculate class weights with scaling factor
+                classes = np.array([0, 1, 2])  
+                class_counts = myConfig.num_samples_per_class
+                y = np.array([])
+                # Create array with labels based on known counts
+                for class_id, count in class_counts.items():
+                    y = np.append(y, [class_id] * count)
+                # Compute balanced weights
+                raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+                # Apply scaling factor to make weights less extreme
+                scaled_weights = np.power(raw_weights, weight_scaling_factor)
+                # Normalize to maintain sum proportionality
+                scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+                # Convert to tensor
+                weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+                # Set up the loss function with class weighting
+                criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+                
+                # Adjust all dropout rates in the model
+                for module in fold_model.modules():
+                    if isinstance(module, nn.Dropout):
+                        # Get current dropout probability
+                        current_p = module.p
+                        # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
+                        new_p = min(current_p * dropout_factor, 0.7)
+                        # Set new dropout probability
+                        module.p = new_p
+                
+                # Create optimizer with trial hyperparameters
+                optimizer = torch.optim.Adam(
+                    fold_model.parameters(),
+                    lr=fixed_lr,
+                    weight_decay=weight_decay,
+                )
+                
+                # Train for specified epochs in each fold
+                fold_history = []
+                best_fold_f1 = 0.0
+                
+                for epoch in range(n_epochs):
+                    try:
+                        # Train
+                        train_loss = train_epoch(
+                            fold_model, fold_train_loader, optimizer, 
+                            criterion, device
+                        )
+                        
+                        # Evaluate 
+                        val_loss, val_labels, val_preds = evaluate(
+                            fold_model, fold_val_loader, criterion, device
+                        )
+                        val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+                        
+                        # Calculate average validation loss
+                        total_val_recordings = len(val_labels)
+                        avg_val_loss = val_loss / total_val_recordings
+                        
+                        # Append to fold history
+                        fold_history.append({
+                            "epoch": epoch,
+                            "train_loss": train_loss,
+                            "val_loss": avg_val_loss,
+                            "val_f1": val_f1_macro
+                        })
+                        
+                        # Log to wandb
+                        if wandb.run:
+                            wandb.log({
+                                f"{trial_name}/fold_{fold_idx}/epoch": epoch,
+                                f"{trial_name}/fold_{fold_idx}/train_loss": train_loss,
+                                f"{trial_name}/fold_{fold_idx}/val_loss": avg_val_loss,
+                                f"{trial_name}/fold_{fold_idx}/val_f1": val_f1_macro
+                            })
+                        
+                        # Track best F1 for this fold
+                        if val_f1_macro > best_fold_f1:
+                            best_fold_f1 = val_f1_macro
+                        
+                        # Report intermediate value for pruning
+                        if epoch == n_epochs // 2:  # Report halfway through training
+                            trial.report(val_f1_macro, epoch + fold_idx * n_epochs)
+                            if trial.should_prune():
+                                raise optuna.exceptions.TrialPruned()
+                        
+                    except Exception as epoch_error:
+                        print(f"Error in epoch {epoch} of fold {fold_idx} in trial {trial.number}: {str(epoch_error)}")
+                        if wandb.run:
+                            wandb.log({f"{trial_name}/fold_{fold_idx}/error": str(epoch_error)})
+                        raise
+                
+                # Store best F1 and min val loss for this fold
+                fold_f1_scores.append(best_fold_f1)
+                min_fold_loss = min(entry["val_loss"] for entry in fold_history)
+                fold_val_losses.append(min_fold_loss)
+                fold_histories.append(fold_history)
+                
+                # Clean up to free memory
+                del fold_model, optimizer, criterion
+                del fold_train_loader, fold_val_loader
+                del fold_dataset, fold_train, fold_val
+                gc.collect()
+                torch.cuda.empty_cache()
             
-            # Clean up to free memory
-            del model, optimizer, criterion
-            torch.cuda.empty_cache()
-            gc.collect()
+            # Calculate average performance across all folds
+            avg_f1_macro = np.mean(fold_f1_scores)
+            avg_val_loss = np.mean(fold_val_losses)
             
-            # Store history
+            print(f"Trial {trial.number} completed: Avg F1 across {n_folds} folds: {avg_f1_macro:.4f}")
+            print(f"Individual fold F1 scores: {fold_f1_scores}")
+            
+            # Store all fold histories and metrics
             history_dir = os.path.join(
                 myConfig.OUTPUT_PATH, 
                 "hyperparameter_optimization"
             )
-            os.makedirs(history_dir, exist_ok=True)  
-
+            os.makedirs(history_dir, exist_ok=True)
+            
+            trial_results = {
+                "fold_f1_scores": fold_f1_scores,
+                "avg_f1_macro": avg_f1_macro,
+                "fold_val_losses": fold_val_losses,
+                "avg_val_loss": avg_val_loss,
+                "fold_histories": fold_histories
+            }
+            
             with open(os.path.join(
                 history_dir,
-                f"trial_{trial.number}_history.json"
+                f"trial_{trial.number}_cv_history.json"
             ), "w") as f:
-                json.dump(trial_history, f)
+                json.dump(trial_results, f)
             
-            # Log the final result to wandb
+            # Log the final results to wandb
             if wandb.run:
-                wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
-                        
-            # Store the best validation loss as trial user attribute
-            min_val_loss = min(entry["val_loss"] for entry in trial_history)
-            trial.set_user_attr("val_loss", min_val_loss)
+                wandb.log({
+                    f"{trial_name}/avg_f1_across_folds": avg_f1_macro,
+                    f"{trial_name}/avg_val_loss_across_folds": avg_val_loss,
+                    **{f"{trial_name}/fold_{i}_f1": score for i, score in enumerate(fold_f1_scores)},
+                    **{f"{trial_name}/fold_{i}_val_loss": loss for i, loss in enumerate(fold_val_losses)}
+                })
+                wandb.run.summary[f"{trial_name}_avg_f1"] = avg_f1_macro
             
-            return best_trial_f1
+            # Store the average validation loss as trial user attribute
+            trial.set_user_attr("val_loss", avg_val_loss)
+            
+            return avg_f1_macro  # Return average F1 across all folds as the objective value
+            
         except Exception as e:
             print(f"Trial {trial.number} failed with error: {str(e)}")            
             if wandb.run:
@@ -1390,12 +1423,12 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     study_storage_path = os.path.join(
         myConfig.OUTPUT_PATH, 
         "hyperparameter_optimization",
-        "hpo_study_cnn_rnn.pkl"
+        f"hpo_study_cnn_rnn_{n_folds}fold.pkl"
     )
     
     # Create study for maximizing F1-macro
-    print(f"Running Bayesian optimization with {n_trials} trials...")
-    study_name = "cnn_rnn"
+    print(f"Running Bayesian optimization with {n_trials} trials using {n_folds}-fold cross-validation...")
+    study_name = f"cnn_rnn_{n_folds}fold"
     
     # Initialize or resume study
     if resume_study and os.path.exists(study_storage_path):
@@ -1427,8 +1460,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     best_params = study.best_params
     best_value = study.best_value
     
-    print("\n=== Bayesian Optimization Results ===")
-    print(f"Best F1-macro on validation set: {best_value:.4f}")
+    print(f"\n=== Bayesian Optimization Results with {n_folds}-fold CV ===")
+    print(f"Best average F1-macro across folds: {best_value:.4f}")
     print("Best hyperparameters:")
     for param, value in best_params.items():
         print(f"  {param}: {value}")
@@ -1440,10 +1473,11 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     # Save best hyperparameters
     result = {
         "best_params": best_params,
-        "best_value": best_value
+        "best_value": best_value,
+        "n_folds": n_folds
     }
     
-    with open(os.path.join(output_dir, "best_hyperparams_cnn_rnn.json"), "w") as f:
+    with open(os.path.join(output_dir, f"best_hyperparams_cnn_rnn_{n_folds}fold.json"), "w") as f:
         json.dump(result, f, indent=2)
     
     # Print importance of hyperparameters if optuna has enough trials
@@ -1462,11 +1496,11 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             
             # History plot
             fig1 = plot_optimization_history(study)
-            fig1.write_image(os.path.join(output_dir, "optimization_history_cnn_rnn.png"))
+            fig1.write_image(os.path.join(output_dir, f"optimization_history_cnn_rnn_{n_folds}fold.png"))
             
             # Parameter importance plot
             fig2 = plot_param_importances(study)
-            fig2.write_image(os.path.join(output_dir, "param_importances_cnn_rnn.png"))
+            fig2.write_image(os.path.join(output_dir, f"param_importances_cnn_rnn_{n_folds}fold.png"))
             
             print(f"Optimization visualizations saved to {output_dir}")
         except Exception as e:
@@ -1478,27 +1512,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
         # Log best parameters
         wandb.run.summary["best_f1_macro"] = best_value
         wandb.run.summary["best_params"] = best_params
-        
-        # Log best model artifact
-        best_trial_number = study.best_trial.number
-        best_model_path = os.path.join(
-            myConfig.OUTPUT_PATH, 
-            "hyperparameter_optimization", 
-            f"trial_{best_trial_number}_model.pt"
-        )
-        
-        if os.path.exists(best_model_path):
-            artifact = wandb.Artifact(
-                f"hpo-best-model-{wandb.run.id}", 
-                type="model",
-                description=f"Best model from HPO with F1={best_value:.4f}"
-            )
-            artifact.add_file(best_model_path, name="best_model.pt")
-            wandb.log_artifact(artifact)
-    
-    # Train final model with best hyperparameters (optional)
-    if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
-        train_with_best_hyperparameters(dataset, best_params)
+        wandb.run.summary["n_folds"] = n_folds
     
     # Save study state for possible resumption
     os.makedirs(os.path.dirname(study_storage_path), exist_ok=True)
@@ -1508,182 +1522,8 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
     if wandb.run and wandb.run.name.startswith("hpo_cnn_rnn"):
         wandb.finish()
     
+    # Optionally train final model
+    if input(f"Train final model with best hyperparameters from {n_folds}-fold CV? (y/n): ").lower() == "y":
+        train_with_best_hyperparameters(dataset, best_params)
+    
     return result
-
-
-def train_with_best_hyperparameters(dataset, best_params):
-    """Train a final model using the best hyperparameters from Bayesian optimization."""
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
-    
-    print("\n=== Training with Best Hyperparameters ===")
-    
-    # Create balanced training dataset
-    print("Creating balanced training dataset...")
-    augmented_train_dataset = AugmentedDataset(
-        original_dataset=dataset["train"],        
-        num_classes=3
-    )
-    augmented_train_dataset.print_distribution_stats()
-    
-    # Create dataset with balanced training
-    balanced_dataset = {
-        "train": augmented_train_dataset,
-        "validation": dataset["validation"],
-        "test": dataset["test"]
-    }
-    
-    # Extract hyperparameters
-    lr = best_params.get("learning_rate", 2e-5)
-    weight_decay = best_params.get("weight_decay", 0.01)
-    max_lr = best_params.get("max_lr", 5e-4)
-    pct_start = best_params.get("pct_start", 0.3)
-    gamma = best_params.get("focal_loss_gamma", 0.0)
-    n_mels = best_params.get("n_mels", 128)
-    time_mask_param = best_params.get("time_mask_param", 50)
-    freq_mask_param = best_params.get("freq_mask_param", 50)
-    
-    # Create dataloaders
-    dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset, 
-        batch_size=96
-    )
-    
-    # Create model with optimized hyperparameters
-    model = DualPathAudioClassifier(
-        num_classes=3,
-        sample_rate=16000,
-        n_mels=n_mels,
-        apply_specaugment=True
-    )
-    
-    # Update SpecAugment parameters if the model has that module
-    if hasattr(model, 'spec_augment'):
-        model.spec_augment.time_mask_param = time_mask_param
-        model.spec_augment.freq_mask_param = freq_mask_param
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    
-    # Create optimizer with optimized hyperparameters
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=weight_decay,
-        betas=(0.9, 0.999)
-    )
-    
-    # Create focal loss with optimized gamma
-    criterion = FocalLoss(gamma=gamma)
-    
-    # Calculate total steps for full training (10 epochs)
-    total_steps = len(dataloaders["train"]) * 10
-    
-    # Create scheduler with optimized hyperparameters
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=max_lr,
-        total_steps=total_steps,
-        pct_start=pct_start,
-        div_factor=25,
-        final_div_factor=1000,
-        anneal_strategy='cos',
-        three_phase=False
-    )
-    
-    # Create output directory for optimized CNN+RNN model
-    optimized_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cnn_rnn_optimized")
-    os.makedirs(optimized_output_dir, exist_ok=True)
-    
-    # Tracking variables
-    best_f1_macro = 0.0
-    
-    # Training loop
-    for epoch in range(10):
-        torch.cuda.empty_cache()
-        gc.collect()
-        log_memory_usage(f"Epoch {epoch+1} start")
-        
-        # Training phase
-        avg_train_loss = train_epoch(
-            model, 
-            dataloaders["train"], 
-            optimizer, 
-            criterion, 
-            device, 
-            scheduler
-        )
-        
-        # Validation phase
-        val_loss, all_labels, all_preds = evaluate(
-            model, 
-            dataloaders["validation"], 
-            criterion, 
-            device
-        )
-        
-        # Calculate metrics
-        total_val_recordings = len(all_labels)  # This now represents total processed recordings
-        avg_val_loss = val_loss / total_val_recordings
-        val_accuracy = accuracy_score(all_labels, all_preds)
-        val_f1_macro = f1_score(all_labels, all_preds, average='macro')
-        val_f1_per_class = f1_score(all_labels, all_preds, average=None)
-        
-        # Print metrics
-        print(f"Epoch {epoch+1}/10:")
-        print(f"  Train Loss: {avg_train_loss:.4f}")
-        print(f"  Val Loss: {avg_val_loss:.4f}")
-        print(f"  Val Accuracy: {val_accuracy:.4f}")
-        print(f"  Val F1-Macro: {val_f1_macro:.4f}")
-        print(f"  Val F1 per class: {val_f1_per_class}")
-        
-        # Save best model based on F1-macro
-        if val_f1_macro > best_f1_macro:
-            best_f1_macro = val_f1_macro
-            
-            # Save model to optimized directory
-            model_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")
-            torch.save(model.state_dict(), model_path)
-            print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
-            
-            # Save in safetensors format if available
-            try:
-                from safetensors.torch import save_file
-                safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
-                save_file(model.state_dict(), safetensors_path)
-                print(f"  Also saved model in safetensors format to {safetensors_path}")
-            except ImportError:
-                print("  safetensors not available, skipping safetensors format")
-    
-    # Test the best model
-    # Load the best model
-    model.load_state_dict(torch.load(os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")))
-    
-    # Test on test set
-    print("\nTesting optimized model on test set...")
-    test_loss, test_labels, test_preds = evaluate(
-        model, dataloaders["test"], criterion, device
-    )
-    
-    # Calculate test metrics
-    test_accuracy = accuracy_score(test_labels, test_preds)
-    test_f1_macro = f1_score(test_labels, test_preds, average='macro')
-    test_report = classification_report(test_labels, test_preds, target_names=["Healthy", "MCI", "AD"])
-    
-    print(f"Test Accuracy: {test_accuracy:.4f}")
-    print(f"Test F1-Macro: {test_f1_macro:.4f}")
-    print("Classification Report:")
-    print(test_report)
-    
-    # Save hyperparameters and test results
-    results = {
-        "hyperparameters": best_params,
-        "test_accuracy": test_accuracy,
-        "test_f1_macro": test_f1_macro,
-        "val_f1_macro": best_f1_macro
-    }
-    
-    with open(os.path.join(optimized_output_dir, "results.json"), "w") as f:
-        import json
-        json.dump(results, f, indent=2)
-    
-    print(f"Optimized model and results saved to {optimized_output_dir}")
