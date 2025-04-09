@@ -278,11 +278,11 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    hpo_max_lr = 0.0001749508037956646
-    hpo_focal_loss_gamma = 1.412267303911459
-    hpo_weight_scaling_factor = 0.9725833997090791
-    hpo_weight_decay = 1.072231283804023e-06
-    hpo_dropout_factor = 0.9097065013330266
+    hpo_max_lr = 0.0002035216880791326
+    hpo_focal_loss_gamma = 1.509293219544905
+    hpo_weight_scaling_factor = 0.5052154352450162
+    hpo_weight_decay = 4.361892113003308e-06
+    hpo_dropout_factor = 0.9643396324550717
 
     # Initialize wandb
     if not wandb.run:

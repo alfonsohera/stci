@@ -12,8 +12,8 @@ class SpecAugment(nn.Module):
     """SpecAugment for mel spectrograms as described in the paper:
     "SpecAugment: A Simple Data Augmentation Method for Automatic Speech Recognition"
     """
-    hpo_time_mask_param = 49  # From HPO
-    hpo_freq_mask_param = 35  # From HPO
+    hpo_time_mask_param = 41  # From HPO
+    hpo_freq_mask_param = 46  # From HPO
     
     def __init__(
         self,
