@@ -278,7 +278,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:    
-    hpo_max_lr = 0.0001853610927135983
+    #hpo_max_lr = 0.0001853610927135983
+    hpo_max_lr = 5e-4
     hpo_focal_loss_gamma = 0.09290082543999545
     hpo_weight_scaling_factor = 0.6467903667112945
     hpo_weight_decay = 8.536189862866841e-05
@@ -943,7 +944,7 @@ def run_cross_validation(n_folds=5):
     import json
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
     # From HPO:    
     hpo_max_lr = 0.0001853610927135983
     hpo_focal_loss_gamma = 0.09290082543999545
