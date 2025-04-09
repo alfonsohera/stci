@@ -575,7 +575,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     train_cnn_rnn_model(
         model, 
         dataloaders, 
-        num_epochs=30
+        num_epochs=15
     )
     print("Training complete!")
 
