@@ -1251,7 +1251,7 @@ def run_bayesian_optimization(n_trials=50, resume_study=False):
             )
                        
             # Calculate total steps for shorter training (3 epochs)            
-            n_epochs = 20  # Number of epochs for HPO        
+            n_epochs = 10  # Number of epochs for HPO        
 
             # training loop  length
             max_training_epochs = n_epochs
