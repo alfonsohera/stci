@@ -305,27 +305,22 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     print("Calculating class weights for imbalanced data...")
     from sklearn.utils.class_weight import compute_class_weight
     import numpy as np
-    
-    # Get all labels from the training dataset
-    all_labels = []
-    for i in range(len(dataloaders["train"].dataset)):
-        # Handle different dataset structures
-        if hasattr(dataloaders["train"].dataset, "original_dataset"):
-            # For augmented datasets, get labels from original data to calculate correct weights
-            item = dataloaders["train"].dataset.original_dataset[i]
-            label = item["label"]
-            all_labels.append(label)
-    
+
+    # Define classes and their counts
+    classes = np.array([0, 1, 2])  
+    class_counts = myConfig.num_samples_per_class
+    y = np.array([])
+
+    # Create anarray with labels based on known counts
+    for class_id, count in class_counts.items():
+        y = np.append(y, [class_id] * count)
+
     # Compute balanced weights
-    class_weights = compute_class_weight(
-        class_weight='balanced',
-        classes=np.unique(all_labels),
-        y=all_labels
-    )
-    
+    class_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
+
     # Convert to tensor
     weight_tensor = torch.tensor(class_weights, device=device, dtype=torch.float32)
-    
+
     print("Class weights calculated:")
     for i, weight in enumerate(class_weights):
         print(f"  Class {i}: {weight:.4f}")
