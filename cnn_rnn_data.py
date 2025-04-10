@@ -362,7 +362,8 @@ def load_cached_pytorch_dataset(cache_path):
 
 
 def prepare_cnn_rnn_dataset():
-    """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF."""
+    """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF,
+    excluding files specified in exclude_list.csv."""
     myData.DownloadAndExtract()
     
     # Check if cached PyTorch dataset exists
@@ -370,7 +371,19 @@ def prepare_cnn_rnn_dataset():
     if os.path.exists(pytorch_dataset_path) and len(os.listdir(pytorch_dataset_path)) > 0:
         print(f"Loading cached PyTorch dataset from {pytorch_dataset_path}")
         return load_cached_pytorch_dataset(pytorch_dataset_path)
+    
     print("No cached dataset found. Creating new dataset...")
+    
+    # Load exclude list
+    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    if os.path.exists(exclude_list_path):
+        exclude_df = pd.read_csv(exclude_list_path)
+        exclude_filenames = set(exclude_df['filename'].tolist())
+        print(f"Loaded exclude list with {len(exclude_filenames)} files to exclude")
+    else:
+        print(f"Warning: Exclude list not found at {exclude_list_path}")
+        exclude_filenames = set()
+    
     # Check if dataframe.csv exists
     data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")
     if os.path.exists(data_file_path):
@@ -391,9 +404,29 @@ def prepare_cnn_rnn_dataset():
         data_df.to_csv(data_file_path, index=False)
         print(f"Created and saved dataframe to {data_file_path}")
     
-    # Perform dataset splits directly on the dataframe
+    # Apply the exclude list by filtering the dataframe
+    # Extract the base filename from file_path for comparison with exclude list
+    initial_count = len(data_df)
+    
+    # Create a function to extract base filename without directory and extension
+    def extract_base_filename(file_path):
+        # Get filename without directory
+        filename = os.path.basename(file_path)
+        # Remove extension
+        base_name = os.path.splitext(filename)[0]
+        return base_name
+    
+    # Apply filter to exclude files
+    data_df['base_filename'] = data_df['file_path'].apply(extract_base_filename)
+    filtered_df = data_df[~data_df['base_filename'].isin(exclude_filenames)]
+    filtered_df = filtered_df.drop('base_filename', axis=1)  # Remove temporary column
+    
+    excluded_count = initial_count - len(filtered_df)
+    print(f"Excluded {excluded_count} files from the dataset")
+    
+    # Perform dataset splits directly on the filtered dataframe
     print("Creating dataset splits...")
-    train_df, val_df, test_df = myData.datasetSplit(data_df)
+    train_df, val_df, test_df = myData.datasetSplit(filtered_df)
     train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
     
     print("Creating PyTorch datasets with preloaded audio...")
@@ -402,5 +435,9 @@ def prepare_cnn_rnn_dataset():
         "validation": PreloadedAudioDataset(val_df, max_duration=120, sample_rate=16000),
         "test": PreloadedAudioDataset(test_df, max_duration=120, sample_rate=16000)
     }
+    
+    print(f"Final dataset sizes: Train: {len(dataset['train'])}, "
+          f"Validation: {len(dataset['validation'])}, Test: {len(dataset['test'])}")
+    
     save_pytorch_dataset(dataset, pytorch_dataset_path)
     return dataset
