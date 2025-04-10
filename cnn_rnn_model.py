@@ -125,7 +125,7 @@ class CNN14Classifier(nn.Module):
             hop_size=320,
             mel_bins=64,
             fmin=50,
-            fmax=14000,
+            fmax=8000,
             classes_num=527  # AudioSet classes
         )
         print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")

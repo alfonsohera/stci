@@ -278,11 +278,11 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    hpo_max_lr = 0.0002035216880791326    
-    hpo_focal_loss_gamma = 1.509293219544905
-    hpo_weight_scaling_factor = 0.5052154352450162
-    hpo_weight_decay = 4.361892113003308e-06
-    hpo_dropout_factor = 0.9643396324550717
+    hpo_max_lr = 0.0013035123791853842   
+    hpo_focal_loss_gamma = 2.299264218662403
+    hpo_weight_scaling_factor = 0.3522752509513795
+    hpo_weight_decay = 1.5930522616241016e-05
+    hpo_dropout = 0.27799726016810133
 
     # Initialize wandb
     if not wandb.run:
@@ -322,7 +322,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
     
     # Adjust all dropout rates in the model
-    for module in model.modules():
+    """ for module in model.modules():
         if isinstance(module, nn.Dropout):
             # Get current dropout probability
             current_p = module.p
@@ -330,7 +330,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             new_p = min(current_p * hpo_dropout_factor, 0.7)
             # Set new dropout probability
             module.p = new_p
-    model.to(device)
+    model.to(device) """
 
 
     # Set up the optimizer with proper hyperparameters
@@ -596,11 +596,12 @@ def main_cnn_rnn(use_prosodic_features=False):
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
+    hpo_dropout = 0.27799726016810133
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-    dropout_rate=0.5,  
+    dropout_rate=hpo_dropout,  
     freeze_extractor=True  
     )
     
@@ -1505,11 +1506,11 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         
         # Best previous hyperparameters as a starting point
         previous_best = {
-            "learning_rate": 0.002,  
-            "dropout_rate": 0.5,     
-            "focal_loss_gamma": 1.5, 
-            "weight_scaling_factor": 0.5, 
-            "weight_decay": 1e-5,    
+            "learning_rate": 0.0013035123791853842,  
+            "dropout_rate": 0.27799726016810133,     
+            "focal_loss_gamma": 2.299264218662403, 
+            "weight_scaling_factor": 0.3522752509513795, 
+            "weight_decay": 1.5930522616241016e-05,    
         }
         study.enqueue_trial(previous_best)
     
