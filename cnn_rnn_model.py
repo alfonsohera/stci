@@ -249,6 +249,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             self.spec_augment = SpecAugment()
     
         # CNN path using pretrained CNN14
+        from panns_inference.panns_inference.models import Cnn14
         self.cnn_extractor = Cnn14(
             sample_rate=sample_rate,
             window_size=1024, 
@@ -262,7 +263,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         # Load pretrained weights if provided
         print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")
         checkpoint = torch.load(pretrained_cnn14_path, map_location='cpu')
-        self.feature_extractor.load_state_dict(checkpoint['model'])
+        self.cnn_extractor.load_state_dict(checkpoint['model'])
         
         
         # Freeze CNN14 weights for transfer learning
@@ -362,13 +363,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         # Initialize for specific device if needed
         device = audio.device
         
-        if not self._initialized_for_device or self._device != device:
-            self.mel_spec = self.mel_spec.to(device)
-            self.amplitude_to_db = self.amplitude_to_db.to(device)
-            
-            if self.apply_specaugment:
-                self.spec_augment = self.spec_augment.to(device)
-                
+        if not self._initialized_for_device or self._device != device:                            
             self._device = device
             self._initialized_for_device = True
         
@@ -378,51 +373,15 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             audio = audio.squeeze(1)  # Convert [B, 1, T] to [B, T]
             
         # Extract features using CNN14 - use no_grad if we froze the extractor during initialization
-        use_grad_enabled = any(param.requires_grad for param in self.feature_extractor.parameters())
+        use_grad_enabled = any(param.requires_grad for param in self.cnn_extractor.parameters())
         
         with torch.set_grad_enabled(use_grad_enabled):
-            output_dict = self.feature_extractor(audio)
+            output_dict = self.cnn_extractor(audio)
             cnn_embeddings = output_dict['embedding']  # [B, 2048]
         
         # Process CNN14 embeddings through adapter
         cnn_features = self.cnn_adapter(cnn_embeddings)  # [B, 256]
-        
-        # For the attention path, generate mel spectrograms 
-        mel = self.mel_spec(audio.squeeze(1))
-        mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
-        
-        # Apply SpecAugment based on augmentation_id
-        if self.training and self.apply_specaugment:            
-            if isinstance(augmentation_id, list) and any(aid is not None for aid in augmentation_id):
-                # Create a mask of which samples to augment with deterministic seeds
-                to_augment = [i for i, aid in enumerate(augmentation_id) if aid is not None]
-                no_aug = [i for i, aid in enumerate(augmentation_id) if aid is None]
-                
-                # Process samples with deterministic seeds
-                if to_augment:
-                    # Set random seeds once
-                    deterministic_batch = mel_db[to_augment]
-                    # Force apply augmentation to this entire subset
-                    deterministic_batch = self.spec_augment(deterministic_batch, force_apply=True)
-                    # Put back into the full batch
-                    for i, orig_idx in enumerate(to_augment):
-                        mel_db[orig_idx] = deterministic_batch[i]
-                    
-                # Process samples without deterministic seeds
-                if no_aug:
-                    # Regular probabilistic augmentation
-                    regular_batch = mel_db[no_aug]
-                    regular_batch = self.spec_augment(regular_batch, force_apply=False)
-                    # Put back into the full batch
-                    for i, orig_idx in enumerate(no_aug):
-                        mel_db[orig_idx] = regular_batch[i]
-            else:
-                # Process entire batch with standard augmentation
-                mel_db = self.spec_augment(mel_db, force_apply=False)
-        
-        # Normalization for the attention path
-        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
-        
+                        
         # Process audio for Attention path
         # Ensure audio has shape [B, 1, T] for Conv1d
         if len(audio.shape) == 3 and audio.shape[1] > 1:
