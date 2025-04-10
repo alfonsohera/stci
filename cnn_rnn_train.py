@@ -1253,10 +1253,12 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                         
             dropout_rate = trial.suggest_float("dropout_rate", 0.2, 0.7)
             weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 1.2)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.0, 2.5)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.5, 2.5)
             weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
-            learning_rate = trial.suggest_float("learning_rate", 5e-5, 5e-3, log=True)
-                                               
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 2e-4, 2e-3, log=True)
+            hpo_pct_start = trial.suggest_float("pct_start", 0.1, 0.4)  
+            hpo_div_factor = trial.suggest_float("div_factor", 10.0, 30.0)  
+            hpo_div_factor_final = trial.suggest_float("final_div_factor", 100.0, 1000.0, log=True)                                     
             trial_name = f"trial_{trial.number}"
             
             # Log trial parameters to wandb
@@ -1338,12 +1340,25 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
                 
                 # Create optimizer with trial hyperparameters
+                
                 optimizer = torch.optim.Adam(
                     fold_model.parameters(),
-                    lr=learning_rate,
+                    lr=hpo_max_learning_rate/hpo_div_factor,
                     weight_decay=weight_decay,
                 )
-
+                total_steps = len(fold_dataloaders["train"]) * n_epochs
+    
+                # Create scheduler with optimized hyperparameters
+                scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                    optimizer,
+                    max_lr=hpo_max_learning_rate,
+                    total_steps=total_steps,
+                    pct_start=hpo_pct_start,
+                    div_factor=hpo_div_factor,
+                    final_div_factor=hpo_div_factor_final,
+                    anneal_strategy='cos',
+                    three_phase=False
+                )
                 # Train for specified epochs in each fold
                 fold_history = []
                 best_fold_f1 = 0.0
@@ -1355,7 +1370,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                         # Train
                         train_loss = train_epoch(
                             fold_model, fold_train_loader, optimizer, 
-                            criterion, device
+                            criterion, device,scheduler
                         )
 
                         # Evaluate 
@@ -1528,7 +1543,10 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             "dropout_rate": 0.27799726016810133,     
             "focal_loss_gamma": 2.299264218662403, 
             "weight_scaling_factor": 0.3522752509513795, 
-            "weight_decay": 1.5930522616241016e-05,    
+            "weight_decay": 1.5930522616241016e-05,            
+            "pct_start": 0.25,
+            "div_factor": 25.0,
+            "final_div_factor": 1000.0
         }
         study.enqueue_trial(previous_best)
     
