@@ -560,7 +560,7 @@ def test_cnn_rnn_model(model, test_loader):
 
 def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
-    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier
+    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier
     hpo_n_mels = 128
     print("Running CNN+RNN model")
     
@@ -591,10 +591,17 @@ def main_cnn_rnn(use_prosodic_features=False):
     )
     
     # Create model
-    model = DualPathAudioClassifier(
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         n_mels=hpo_n_mels
+    ) """
+    model = CNN14Classifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        dropout_rate=0.5,  
+        freeze_extractor=True  
     )
     print("Model created!")
     

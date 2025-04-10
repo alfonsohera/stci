@@ -115,8 +115,8 @@ class CNN14Classifier(nn.Module):
         
         self.sample_rate = sample_rate
         
-        # Import CNN14 here to avoid import issues
-        from panns_inference.models import Cnn14
+        # Import CNN14 here 
+        from panns_inference.panns_inference.models import Cnn14
         
         # Initialize the CNN14 model with AudioSet classes
         self.feature_extractor = Cnn14(
@@ -154,12 +154,17 @@ class CNN14Classifier(nn.Module):
             nn.Linear(128, num_classes)
         )
         
-    def forward(self, audio, **kwargs):
+    def forward(self, audio, audio_lengths=None, augmentation_id=None, 
+            prosodic_features=None, chunk_context=None, **kwargs):
         """
         Forward pass
         
         Args:
             audio: Input audio tensor [B, T] or [B, 1, T]
+            audio_lengths: Tensor of actual audio lengths [B] (unused but included for compatibility)
+            augmentation_id: Optional IDs for deterministic augmentation (unused but included for compatibility)
+            prosodic_features: Optional prosodic features (unused but included for compatibility) 
+            chunk_context: Optional chunk context (unused but included for compatibility)
             **kwargs: Additional arguments (ignored, for compatibility)
             
         Returns:
