@@ -9,6 +9,10 @@ import os
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
+import plotly.graph_objs as go
+import plotly.io as pio
+from plotly.offline import plot
+import os
 
 def plotAgeDistribution(data_df):
     plt.style.use("default")
@@ -792,6 +796,86 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         import traceback
         traceback.print_exc()
 
+# Add these imports at the top of your file
+import plotly.graph_objs as go
+import plotly.io as pio
+from plotly.offline import plot
+import os
+
+def create_interactive_3d_plot(embeddings_3d, color_field, unique_categories, color_mapping, title, output_filename):
+    """
+    Creates an interactive 3D plot with manual rotation control using Plotly.
+    
+    Args:
+        embeddings_3d: The 3D t-SNE embeddings
+        color_field: List of category labels for each point
+        unique_categories: List of unique categories
+        color_mapping: Dictionary mapping categories to colors
+        title: Title for the plot
+        output_filename: Filename to save the HTML file to
+    """
+    print(f"Creating interactive 3D visualization for {title}...")
+    
+    # Convert matplotlib colors to hex format for plotly
+    def rgba_to_hex(rgba_color):
+        r, g, b, a = rgba_color
+        return f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}'
+    
+    hex_color_mapping = {cat: rgba_to_hex(color_mapping[cat]) for cat in unique_categories}
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add traces for each category
+    for category in unique_categories:
+        indices = [i for i, cat in enumerate(color_field) if cat == category]
+        if not indices:
+            continue
+            
+        fig.add_trace(go.Scatter3d(
+            x=embeddings_3d[indices, 0],
+            y=embeddings_3d[indices, 1],
+            z=embeddings_3d[indices, 2],
+            mode='markers',
+            marker=dict(
+                size=5,
+                color=hex_color_mapping[category],
+                opacity=0.7,
+                line=dict(width=0.5, color='#FFFFFF')
+            ),
+            name=f"{category} (n={len(indices)})"
+        ))
+    
+    # Set layout
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title="t-SNE Dimension 1",
+            yaxis_title="t-SNE Dimension 2",
+            zaxis_title="t-SNE Dimension 3"
+        ),
+        legend=dict(
+            title="Categories",
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        scene_camera=dict(
+            up=dict(x=0, y=0, z=1),
+            center=dict(x=0, y=0, z=0),
+            eye=dict(x=1.5, y=1.5, z=1.5)
+        )
+    )
+    
+    # Save to HTML file
+    html_filename = f"{output_filename.split('.')[0]}.html"
+    plot(fig, filename=html_filename, auto_open=False)
+    
+    print(f"Saved interactive 3D visualization to {html_filename}")
+    return html_filename
+
 
 
 def create_rotating_3d_plot(embeddings_3d, color_field, unique_categories, color_mapping, title, output_filename):
@@ -1402,147 +1486,121 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             f"3D t-SNE Visualization of {title}",
             gif_filename
         )
+        
+        # Create interactive 3D visualization for each viz_type
+        html_filename = create_interactive_3d_plot(
+            embeddings_3d,
+            color_field,
+            unique_categories,
+            color_mapping,
+            f"Interactive 3D t-SNE Visualization of {title}",
+            f"interactive_3d_{viz_type}.html"
+        )
     
-    # Create interactive 3D plot to highlight high similarity pairs
+    # Create interactive 3D visualization for high similarity pairs
     if high_similarity_pairs:
-        # Static 3D visualization with highlighted pairs
-        fig = plt.figure(figsize=(14, 12))
-        ax = fig.add_subplot(111, projection='3d')
+        print("Creating interactive 3D visualization for high similarity pairs...")
+        fig = go.Figure()
         
-        # First plot all points with low alpha
+        # Add traces for each category - background points with lower opacity
         for category in unique_categories:
             indices = [i for i, cat in enumerate(all_classes) if cat == category]
             if not indices:
                 continue
-            ax.scatter(
-                embeddings_3d[indices, 0], 
-                embeddings_3d[indices, 1],
-                embeddings_3d[indices, 2],
-                c=[color_mapping[category]],
-                label=f"{category}",
-                alpha=0.3,
-                s=30
-            )
-        
-        # Track points already plotted in high similarity pairs
-        plotted_high_sim_files = set()
-        
-        # Plot high similarity connections (limit to 50 to avoid clutter)
-        for pair in high_similarity_pairs[:50]:
-            file1, file2 = pair['file1'], pair['file2']
-            
-            # Find indices
-            try:
-                idx1 = all_file_ids.index(file1)
-                idx2 = all_file_ids.index(file2)
-            except ValueError:
-                continue  # Skip if file not found
                 
-            # Plot the connection in 3D
-            ax.plot(
-                [embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
-                [embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
-                [embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
-                'k-', alpha=0.5, linewidth=0.5
+            # Convert matplotlib colors to hex
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(color_mapping[category][0] * 255),
+                int(color_mapping[category][1] * 255),
+                int(color_mapping[category][2] * 255)
             )
             
-            # Plot the points with higher emphasis
-            for idx, file_id in [(idx1, file1), (idx2, file2)]:
-                if file_id not in plotted_high_sim_files:
-                    cat = all_classes[idx]
-                    ax.scatter(
-                        embeddings_3d[idx, 0],
-                        embeddings_3d[idx, 1],
-                        embeddings_3d[idx, 2],
-                        c=[color_mapping[cat]],
-                        edgecolors='black',
-                        linewidths=1,
-                        alpha=0.9,
-                        s=60
-                    )
-                    plotted_high_sim_files.add(file_id)
+            fig.add_trace(go.Scatter3d(
+                x=embeddings_3d[indices, 0],
+                y=embeddings_3d[indices, 1],
+                z=embeddings_3d[indices, 2],
+                mode='markers',
+                marker=dict(
+                    size=4,
+                    color=hex_color,
+                    opacity=0.3,
+                    line=dict(width=0, color='#FFFFFF')
+                ),
+                name=f"{category}",
+                hoverinfo="skip"  # Hide hover for background points
+            ))
         
-        ax.set_title(f"High Similarity Pairs in 3D Embedding Space (sim ≥ {similarity_threshold})", fontsize=14)
-        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
-        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
-        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
-        ax.legend(title="Classes")
-        
-        # Save the 3D static plot
-        plt.tight_layout()
-        plt.savefig("high_similarity_3d_embedding_space.png", dpi=300)
-        plt.close()
-        print("Saved 3D visualization of high similarity pairs to high_similarity_3d_embedding_space.png")
-        
-        # Create rotating animation of similarity pairs
-        print("Creating rotating 3D animation for high similarity pairs...")
-        fig = plt.figure(figsize=(14, 12))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # Plot all points with low alpha
-        for category in unique_categories:
-            indices = [i for i, cat in enumerate(all_classes) if cat == category]
-            if not indices:
-                continue
-            ax.scatter(
-                embeddings_3d[indices, 0], 
-                embeddings_3d[indices, 1],
-                embeddings_3d[indices, 2],
-                c=[color_mapping[category]],
-                label=f"{category}",
-                alpha=0.3,
-                s=30
-            )
-        
-        # Plot the high similarity pairs
-        for pair in high_similarity_pairs[:50]:  # Limit to 50 pairs
+        # Add high similarity connections
+        high_sim_traces = []
+        for i, pair in enumerate(high_similarity_pairs[:50]):  # Limit to 50 pairs
             try:
                 idx1 = all_file_ids.index(pair['file1'])
                 idx2 = all_file_ids.index(pair['file2'])
                 
-                # Plot the connection
-                ax.plot(
-                    [embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
-                    [embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
-                    [embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
-                    'k-', alpha=0.5, linewidth=0.5
-                )
+                # Add line trace
+                fig.add_trace(go.Scatter3d(
+                    x=[embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
+                    y=[embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
+                    z=[embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
+                    mode='lines',
+                    line=dict(color='rgba(0,0,0,0.5)', width=2),
+                    showlegend=False,
+                    hoverinfo="text",
+                    hovertext=f"Similarity: {pair['similarity']:.4f}"
+                ))
                 
-                # Plot the connected points with higher emphasis
-                for idx in [idx1, idx2]:
+                # Add highlighted points
+                for idx, file_id, split_name, class_name in [(idx1, pair['file1'], pair['split1'], pair['class1']), 
+                                         (idx2, pair['file2'], pair['split2'], pair['class2'])]:
                     cat = all_classes[idx]
-                    ax.scatter(
-                        embeddings_3d[idx, 0],
-                        embeddings_3d[idx, 1],
-                        embeddings_3d[idx, 2],
-                        c=[color_mapping[cat]],
-                        edgecolors='black',
-                        linewidths=1,
-                        alpha=0.9,
-                        s=60
+                    hex_color = "#{:02x}{:02x}{:02x}".format(
+                        int(color_mapping[cat][0] * 255),
+                        int(color_mapping[cat][1] * 255),
+                        int(color_mapping[cat][2] * 255)
                     )
+                    
+                    fig.add_trace(go.Scatter3d(
+                        x=[embeddings_3d[idx, 0]],
+                        y=[embeddings_3d[idx, 1]],
+                        z=[embeddings_3d[idx, 2]],
+                        mode='markers',
+                        marker=dict(
+                            size=7,
+                            color=hex_color,
+                            opacity=1,
+                            line=dict(width=1, color='#000000')
+                        ),
+                        showlegend=False,
+                        hoverinfo="text",
+                        hovertext=f"File: {os.path.basename(file_id)}<br>Split: {split_name}<br>Class: {class_name}"
+                    ))
+                
             except ValueError:
                 continue
         
-        ax.set_title(f"High Similarity Pairs (sim ≥ {similarity_threshold})", fontsize=14)
-        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
-        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
-        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
-        ax.legend(title="Classes")
+        # Set layout
+        fig.update_layout(
+            title=f"High Similarity Pairs (sim ≥ {similarity_threshold})",
+            scene=dict(
+                xaxis_title="t-SNE Dimension 1",
+                yaxis_title="t-SNE Dimension 2",
+                zaxis_title="t-SNE Dimension 3"
+            ),
+            legend=dict(
+                title="Classes",
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            margin=dict(l=0, r=0, b=0, t=30)
+        )
         
-        # Animation function
-        def rotate(angle):
-            ax.view_init(elev=20, azim=angle)
-            return fig,
-        
-        # Create animation with 360-degree rotation
-        anim = FuncAnimation(fig, rotate, frames=np.arange(0, 360, 5), interval=100)
-        
-        # Save as GIF
-        anim.save("high_similarity_3d_rotating.gif", writer='pillow', dpi=100)
-        plt.close()
-        print("Saved rotating 3D animation of high similarity pairs to high_similarity_3d_rotating.gif")
-        
+        # Save to HTML file
+        html_filename = "high_similarity_3d_interactive.html"
+        plot(fig, filename=html_filename, auto_open=False)
+        print(f"Saved interactive 3D visualization to {html_filename}")
+    
     # Save high similarity pairs to CSV for further analysis
     if high_similarity_pairs:
         df = pd.DataFrame(high_similarity_pairs)
