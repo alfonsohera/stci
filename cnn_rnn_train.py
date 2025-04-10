@@ -278,7 +278,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    hpo_max_lr = 0.002  
+    hpo_max_lr = 0.001  
     hpo_focal_loss_gamma = 2.299264218662403
     hpo_weight_scaling_factor = 0.3522752509513795
     hpo_weight_decay = 1.5930522616241016e-05
@@ -691,13 +691,14 @@ def optimize_cnn_rnn():
         n_mels=hpo_n_mels
     )
      """
+    hpo_dropout = 0.27799726016810133
     model = CNN14Classifier(
-        num_classes=3,
-        sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-        dropout_rate=0.5,  
-        freeze_extractor=True  
-    ) 
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=hpo_dropout,  
+    freeze_extractor=True  
+    )
     """ model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -763,12 +764,13 @@ def test_cnn_rnn_with_thresholds():
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
+    hpo_dropout = 0.27799726016810133
     model = CNN14Classifier(
-        num_classes=3,
-        sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-        dropout_rate=0.5,  
-        freeze_extractor=True  
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=hpo_dropout,  
+    freeze_extractor=True  
     )
     """ model = PretrainedDualPathAudioClassifier(
         num_classes=3,
