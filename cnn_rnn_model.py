@@ -131,13 +131,7 @@ class CNN14Classifier(nn.Module):
         print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")
         checkpoint = torch.load(pretrained_cnn14_path, map_location='cpu')
         self.feature_extractor.load_state_dict(checkpoint['model'])
-        
-        # Load pretrained weights if provided
-        """ if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
-            state_dict = torch.load(pretrained_cnn14_path, map_location='cpu')
-            self.feature_extractor.load_state_dict(state_dict)
-            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}") """
-        
+          
         # Freeze feature extractor parameters if specified
         if freeze_extractor:
             for param in self.feature_extractor.parameters():
@@ -227,7 +221,7 @@ class CNN14Classifier(nn.Module):
 
 class PretrainedDualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 apply_specaugment=True, use_prosodic_features=True, 
+                 apply_specaugment=True, use_prosodic_features=False, 
                  prosodic_feature_dim=7, pretrained_cnn14_path=None):
         super(PretrainedDualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate

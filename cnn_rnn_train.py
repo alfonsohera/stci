@@ -278,8 +278,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    #hpo_max_lr = 0.0002035216880791326
-    hpo_max_lr = 0.001
+    hpo_max_lr = 0.0002035216880791326    
     hpo_focal_loss_gamma = 1.509293219544905
     hpo_weight_scaling_factor = 0.5052154352450162
     hpo_weight_decay = 4.361892113003308e-06
@@ -583,11 +582,11 @@ def main_cnn_rnn(use_prosodic_features=False):
         "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
-    }
+    } 
     
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset, 
+        balanced_dataset,         
         batch_size=96
     )
     
@@ -597,21 +596,19 @@ def main_cnn_rnn(use_prosodic_features=False):
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    """ model = CNN14Classifier(
-        num_classes=3,
-        sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-        dropout_rate=0.5,  
-        freeze_extractor=True  
-    ) """
+    model = CNN14Classifier(
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=0.5,  
+    freeze_extractor=True  
+    )
     
-    model = PretrainedDualPathAudioClassifier(
+    """ model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-        dropout_rate=0.5,  
-        freeze_extractor=True  
-    )    
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+    )  """   
 
     print("Model created!")
     
@@ -670,7 +667,7 @@ def optimize_cnn_rnn():
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
     """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -683,7 +680,12 @@ def optimize_cnn_rnn():
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
         dropout_rate=0.5,  
         freeze_extractor=True  
-    )
+    ) 
+    """ model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+    ) """
     # Load the best model weights if available
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -738,7 +740,7 @@ def test_cnn_rnn_with_thresholds():
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
     """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
@@ -751,6 +753,11 @@ def test_cnn_rnn_with_thresholds():
         dropout_rate=0.5,  
         freeze_extractor=True  
     )
+    """ model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+    ) """
     # Load the best model weights
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -968,7 +975,7 @@ def run_cross_validation(n_folds=5):
     from sklearn.utils.class_weight import compute_class_weight
     """Run k-fold cross-validation for the CNN+RNN model."""
     from sklearn.model_selection import KFold
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier
     import numpy as np
     import json
     
@@ -1032,10 +1039,17 @@ def run_cross_validation(n_folds=5):
         )
         
         # Create new model for this fold
-        fold_model = DualPathAudioClassifier(
+        """ fold_model = DualPathAudioClassifier(
             num_classes=3,
             sample_rate=16000,
             n_mels=hpo_n_mels
+        ) """
+        fold_model = CNN14Classifier(
+            num_classes=3,
+            sample_rate=16000,
+            pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+            dropout_rate=0.5,  
+            freeze_extractor=True  
         )
         
         # Calculate class weights with scaling factor
@@ -1170,7 +1184,7 @@ def run_cross_validation(n_folds=5):
 
 def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier
     from sklearn.utils.class_weight import compute_class_weight
     from sklearn.model_selection import StratifiedKFold
     import json
@@ -1179,16 +1193,16 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     # Initialize wandb if not already running
     if not wandb.run:
         wandb.init(
-            project="CNN-RNN-HPO",
+            project="CNN14-HPO",
             entity=myConfig.wandb_entity,
-            name=f"hpo_cnn_rnn_{n_folds}fold",
+            name=f"hpo_cnn14_{n_folds}fold",
             config={
-                "model_type": "CNN+RNN HPO with CV",
+                "model_type": "CNN14 Classifier HPO with CV",
                 "n_trials": n_trials,
                 "optimization_type": "bayesian",
                 "n_folds": n_folds
             },
-            tags=["hpo", "bayesian-optimization", "cnn-rnn", "cross-validation"]
+            tags=["hpo", "bayesian-optimization", "cnn14", "cross-validation"]
         )
     
     # Create output directory for hyperparameter optimization    
@@ -1217,18 +1231,13 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         try:            
             torch.cuda.empty_cache()
             gc.collect()
-            
-            # Expanded ranges for the most important hyperparameters
+                        
+            dropout_rate = trial.suggest_float("dropout_rate", 0.2, 0.7)
             weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 1.2)
             focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.0, 2.5)
-            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)
-            
-            # Refined ranges for less important hyperparameters
-            fixed_lr = trial.suggest_float("fixed_lr", 0.00015, 0.0003, log=True)
-            time_mask_param = trial.suggest_int("time_mask_param", 35, 50)
-            freq_mask_param = trial.suggest_int("freq_mask_param", 40, 55)            
-            dropout_factor = trial.suggest_float("dropout_factor", 0.85, 1.0)
-                                   
+            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
+            learning_rate = trial.suggest_float("learning_rate", 5e-5, 5e-3, log=True)
+                                               
             trial_name = f"trial_{trial.number}"
             
             # Log trial parameters to wandb
@@ -1241,8 +1250,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                         
             fold_f1_scores = []
             fold_val_losses = []
-            n_mels = 128
-            
+                        
             # Number of epochs for HPO cross-validation
             n_epochs = 8            
             print(f"\n--- Trial {trial.number}: Running {n_folds}-fold cross-validation ---")            
@@ -1255,36 +1263,42 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 # Create fold-specific datasets
                 fold_train = [combined_data[i] for i in train_idx]
                 fold_val = [combined_data[i] for i in val_idx]
+
                 # Create balanced training dataset for this fold
                 fold_train_balanced = AugmentedDataset(
                     original_dataset=fold_train,            
                     num_classes=3
                 )
+
                 # Create fold dataset dictionary
                 fold_dataset = {
                     "train": fold_train_balanced,
                     "validation": fold_val,
                     "test": dataset["test"]
                 }
+
                 # Get dataloaders for this fold 
                 fold_dataloaders = get_cnn_rnn_dataloaders(
                     fold_dataset,
                     batch_size=96
                 )
                 fold_train_loader = fold_dataloaders["train"]
-                fold_val_loader = fold_dataloaders["validation"]
-                # Create new model for this fold with trial hyperparameters
-                fold_model = DualPathAudioClassifier(
+                fold_val_loader = fold_dataloaders["validation"]                
+                """ fold_model = DualPathAudioClassifier(
                     num_classes=3,
                     sample_rate=16000,
                     n_mels=n_mels,
                     apply_specaugment=True,
+                ) """
+                fold_model = CNN14Classifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+                    dropout_rate=dropout_rate,  # Direct control of dropout in classifier head  
+                    freeze_extractor=True  # Always keep extractor frozen  
                 )
                 fold_model.to(device)
-                # Update SpecAugment parameters if the model has that module
-                if hasattr(fold_model, 'spec_augment'):
-                    fold_model.spec_augment.time_mask_param = time_mask_param
-                    fold_model.spec_augment.freq_mask_param = freq_mask_param
+                
                 # Calculate class weights with scaling factor
                 classes = np.array([0, 1, 2])  
                 class_counts = myConfig.num_samples_per_class
@@ -1300,28 +1314,23 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
                 # Convert to tensor
                 weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+
                 # Set up the loss function with class weighting
                 criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
-                # Adjust all dropout rates in the model
-                for module in fold_model.modules():
-                    if isinstance(module, nn.Dropout):
-                        # Get current dropout probability
-                        current_p = module.p
-                        # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
-                        new_p = min(current_p * dropout_factor, 0.7)
-                        # Set new dropout probability
-                        module.p = new_p
+                
                 # Create optimizer with trial hyperparameters
                 optimizer = torch.optim.Adam(
                     fold_model.parameters(),
-                    lr=fixed_lr,
+                    lr=learning_rate,
                     weight_decay=weight_decay,
                 )
+
                 # Train for specified epochs in each fold
                 fold_history = []
                 best_fold_f1 = 0.0
                 patience = 3
                 no_improvement = 0
+
                 for epoch in range(n_epochs):
                     try:
                         # Train
@@ -1329,11 +1338,14 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                             fold_model, fold_train_loader, optimizer, 
                             criterion, device
                         )
+
                         # Evaluate 
                         val_loss, val_labels, val_preds = evaluate(
                             fold_model, fold_val_loader, criterion, device
                         )
+
                         val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+
                         # Calculate average validation loss
                         total_val_recordings = len(val_labels)
                         avg_val_loss = val_loss / total_val_recordings
@@ -1493,13 +1505,11 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         
         # Best previous hyperparameters as a starting point
         previous_best = {
-            "fixed_lr": 0.0002035216880791326,
-            "focal_loss_gamma": 1.509293219544905,
-            "weight_scaling_factor": 0.5052154352450162,
-            "time_mask_param": 41,
-            "freq_mask_param": 46,
-            "dropout_factor": 0.9643396324550717,
-            "weight_decay": 4.361892113003308e-06,
+            "learning_rate": 0.002,  
+            "dropout_rate": 0.5,     
+            "focal_loss_gamma": 1.5, 
+            "weight_scaling_factor": 0.5, 
+            "weight_decay": 1e-5,    
         }
         study.enqueue_trial(previous_best)
     
