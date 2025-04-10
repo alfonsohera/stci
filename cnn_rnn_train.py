@@ -99,7 +99,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
             # Update weights
             optimizer.step()        
             # Update LR
-            #scheduler.step()
+            scheduler.step()
             
             # Track loss (count each sample)
             batch_size = batch["audio"].size(0)
@@ -163,7 +163,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
                 optimizer.step()
                 
                 # Update LR
-                #scheduler.step()
+                scheduler.step()
                 
                 # Track loss by number of recordings (not multiplying by length)
                 train_loss += batch_loss.item() * len(complete_audio_ids)
@@ -278,7 +278,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    hpo_max_lr = 0.0013035123791853842   
+    hpo_max_lr = 0.002  
     hpo_focal_loss_gamma = 2.299264218662403
     hpo_weight_scaling_factor = 0.3522752509513795
     hpo_weight_decay = 1.5930522616241016e-05
@@ -334,12 +334,27 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     model.to(device)
 
     # Set up the optimizer with proper hyperparameters
+    div_factor = 25
+    initial_lr = hpo_max_lr / div_factor
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=hpo_max_lr,
+        lr=initial_lr,
         weight_decay=hpo_weight_decay,  # L2 regularization
     )
-       
+
+    total_steps = len(dataloaders["train"]) * num_epochs
+    
+    # Create scheduler with optimized hyperparameters
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=hpo_max_lr,
+        total_steps=total_steps,
+        pct_start=0.25,
+        div_factor=div_factor,
+        final_div_factor=1000,
+        anneal_strategy='cos',
+        three_phase=False
+    )    
     
    
     # Create output directory for CNN+RNN model
@@ -361,7 +376,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             dataloaders["train"], 
             optimizer, 
             criterion, 
-            device
+            device,
+            scheduler
         )
         
         # Validation phase
@@ -392,7 +408,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             "val_loss": avg_val_loss,
             "val_accuracy": val_accuracy,
             "val_f1_macro": val_f1_macro,
-            "learning_rate": hpo_max_lr
+            "learning_rate": scheduler.get_last_lr()[0]
         }
         
         # Compute class-specific metrics
