@@ -448,14 +448,14 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
             
-            # Also save in safetensors format if available
+            """ # Also save in safetensors format if available
             try:
                 from safetensors.torch import save_file
                 safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
                 save_file(model.state_dict(), safetensors_path)
                 print(f"  Also saved model in safetensors format to {safetensors_path}")
             except ImportError:
-                print("  safetensors not available, skipping safetensors format")
+                print("  safetensors not available, skipping safetensors format") """
     
     # End of training, log best model if enabled    
     if wandb.run:
@@ -1696,14 +1696,14 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
             
-            # Save in safetensors format if available
+            """ # Save in safetensors format if available
             try:
                 from safetensors.torch import save_file
                 safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
                 save_file(model.state_dict(), safetensors_path)
                 print(f"  Also saved model in safetensors format to {safetensors_path}")
             except ImportError:
-                print("  safetensors not available, skipping safetensors format")
+                print("  safetensors not available, skipping safetensors format") """
     
     # Test the best model
     # Load the best model

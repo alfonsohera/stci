@@ -128,12 +128,15 @@ class CNN14Classifier(nn.Module):
             fmax=14000,
             classes_num=527  # AudioSet classes
         )
+        print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")
+        checkpoint = torch.load(pretrained_cnn14_path, map_location='cpu')
+        self.feature_extractor.load_state_dict(checkpoint['model'])
         
         # Load pretrained weights if provided
-        if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
+        """ if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
             state_dict = torch.load(pretrained_cnn14_path, map_location='cpu')
             self.feature_extractor.load_state_dict(state_dict)
-            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}")
+            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}") """
         
         # Freeze feature extractor parameters if specified
         if freeze_extractor:
@@ -155,7 +158,7 @@ class CNN14Classifier(nn.Module):
         )
         
     def forward(self, audio, audio_lengths=None, augmentation_id=None, 
-            prosodic_features=None, chunk_context=None, **kwargs):
+        prosodic_features=None, chunk_context=None, **kwargs):
         """
         Forward pass
         
@@ -170,12 +173,15 @@ class CNN14Classifier(nn.Module):
         Returns:
             Class logits [B, num_classes]
         """
-        # Ensure input has the right shape [B, 1, T]
-        if len(audio.shape) == 2:
-            audio = audio.unsqueeze(1)
+        # CNN14 expects raw audio of shape [B, T] (no channel dimension)
+        # If input is [B, 1, T], remove the channel dimension
+        if len(audio.shape) == 3:
+            audio = audio.squeeze(1)  # Convert [B, 1, T] to [B, T]
             
-        # Extract features using CNN14
-        with torch.no_grad() if self.feature_extractor[0].conv_block1[0].weight.requires_grad == False else torch.enable_grad():
+        # Extract features using CNN14 - use no_grad if we froze the extractor during initialization
+        use_grad_enabled = any(param.requires_grad for param in self.feature_extractor.parameters())
+        
+        with torch.set_grad_enabled(use_grad_enabled):
             output_dict = self.feature_extractor(audio)
             embeddings = output_dict['embedding']  # [B, 2048]
             
