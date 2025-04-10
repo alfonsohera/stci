@@ -789,7 +789,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         import traceback
         traceback.print_exc()
 
-def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95):
+def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95, exclusion_csv=None):
     """
     Analyzes the similarity between samples across dataset splits (train, valid, test)
     to detect potential data leakage.
@@ -816,9 +816,34 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     import gc
     from datasets import load_from_disk
     import librosa
+    # from panns_inference.panns_inference.models import Cnn14
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Load exclusion list if provided
+    excluded_files = set()
+    if exclusion_csv:
+        try:
+            exclusion_df = pd.read_csv(exclusion_csv)
+            print(f"Loaded {len(exclusion_df)} files to exclude from analysis")
+            
+            # Extract the actual filenames (without split prefix)
+            for filename in exclusion_df['filename']:
+                # The actual filename starts after the second underscore
+                parts = filename.split('_', 2)
+                if len(parts) >= 3:
+                    actual_filename = parts[2]
+                    excluded_files.add(actual_filename)
+                else:
+                    # If the format is different, add the whole filename
+                    excluded_files.add(filename+'.wav')
+                    
+            print(f"Extracted {len(excluded_files)} unique filenames to exclude")
+        except Exception as e:
+            print(f"Error loading exclusion CSV file: {e}")
+            print("Continuing without exclusions")
+            excluded_files = set()
     
     # Load dataset from disk
     print(f"Loading dataset from {dataset_path}")
@@ -840,8 +865,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             print(f"Sample structure in {split} split: {list(sample.keys())}")
     
     # Load or create model
-    print("Loading feature extraction model...")
-    # Use DenseNet instead of DualPathAudioClassifier for feature extraction
+    print("Loading feature extraction model...")    
     import torchvision.models as models
     from torchvision import transforms
     
@@ -855,28 +879,46 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]
-    )
+    ) 
     
     # Define target size for DenseNet (224x224)
     target_size = (224, 224)
     
     print("Using DenseNet121 (pretrained on ImageNet) as feature extractor")
+        
+    """ print("Using CNN14 as feature extractor")
+
+    def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
+        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64,hop_size=320, window_size=1024,fmin=30, fmax=8000)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        model.load_state_dict(checkpoint['model'])
+        model.eval()
+        return model
+    feature_extractor = load_cnn14(myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth') """
     
     # Create feature extraction function
     def extract_features(audio_path, feature_extractor):
+        
+        # CNN14
+        """ def extract_embedding(model, sample_audio):
+            with torch.no_grad():
+                output = model(sample_audio)
+                embedding = output['embedding']
+            return embedding  # shape: [1, 2048] """
+                
         try:
             # Load audio
-            y, sr = librosa.load(audio_path, sr=16000)
-            
+            sample_audio, sr = librosa.load(audio_path, sr=16000)
             # Create log mel spectrogram
-            mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+            mel_spec = librosa.feature.melspectrogram(y=sample_audio, sr=sr, n_mels=128, fmax=8000)
             log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-            
-            # Convert to tensor
             log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
+            # CNN14
+            # sample_audio = torch.tensor(sample_audio).unsqueeze(0)  # [1, time]                     
             
             with torch.inference_mode():
                 # Normalize as in model preprocessing
+                # Code block needed for DenseNet
                 log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
                 
                 # Resize to model's expected input size
@@ -894,6 +936,8 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 
                 # Extract features using DenseNet
                 features = feature_extractor(log_mel_tensor).flatten().cpu().numpy()
+                # Extract features using CNN14
+                #features = extract_embedding(feature_extractor, sample_audio).flatten().cpu().numpy()
                 
             return features
         except Exception as e:
@@ -925,18 +969,17 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     file_info = {}      # Will store {file_id: {path, split, class_label}}
     
     print("Extracting features from all audio files...")
+    skipped_files = 0
     for split in dataset.keys():
         print(f"Processing {split} split...")
         
         for idx, sample in enumerate(tqdm(dataset[split], desc=f"Processing {split}")):
             try:
-                
+                # Get file path from sample
                 if 'file_path' in sample:
                     file_path = sample['file_path']
-                
                 elif 'audio' in sample and isinstance(sample['audio'], dict) and 'path' in sample['audio']:
                     file_path = sample['audio']['path']
-                
                 else:
                     potential_path_fields = [k for k in sample.keys() if 'path' in k.lower() or 'file' in k.lower()]
                     if potential_path_fields:
@@ -944,6 +987,16 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     else:
                         print(f"Cannot find file path in sample keys: {list(sample.keys())}")
                         continue
+                
+                # Check if this file should be excluded
+                basename = os.path.basename(file_path)
+                if basename in excluded_files:
+                    skipped_files += 1
+                    if skipped_files <= 5:
+                        print(f"Skipping excluded file: {basename}")
+                    elif skipped_files == 6:
+                        print("Skipping more excluded files...")
+                    continue
                 
                 # Create a unique file ID
                 file_id = f"{split}_{idx}_{os.path.basename(file_path)}"
@@ -964,11 +1017,9 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     'class': label
                 }
                 
-                # Resolve full path
+                # Resolve full path and extract features
                 try:
                     full_path = resolve_audio_path(file_path)
-                    
-                    # Extract features
                     features = extract_features(full_path, feature_extractor)
                     if features is not None:
                         features_dict[file_id] = features
@@ -986,6 +1037,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 gc.collect()
     
     print(f"Successfully extracted features for {len(features_dict)} files")
+    print(f"Skipped {skipped_files} files from the exclusion list")
     
     # Clean up memory
     del feature_extractor
@@ -1334,37 +1386,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 'max': np.max(similarities) if similarities else None,
             } for split, similarities in within_split_similarities.items()
         },
-        'problematic_files': sorted(list(set(
-            [pair['file1'] for pair in high_similarity_pairs] + 
-            [pair['file2'] for pair in high_similarity_pairs]
-        )))
-    }
-    
-    # Add the embedding data to the results
-    results['embeddings'] = {
-        'coordinates': embeddings_2d,
-        'file_ids': all_file_ids,
-        'classes': all_classes,
-        'splits': all_splits
-    }
-    
-    # Return results as a dictionary
-    results = {
-        'high_similarity_pairs': high_similarity_pairs,
-        'cross_split_statistics': {
-            'mean': np.mean(all_cross_similarities) if all_cross_similarities else None,
-            'std': np.std(all_cross_similarities) if all_cross_similarities else None,
-            'min': np.min(all_cross_similarities) if all_cross_similarities else None,
-            'max': np.max(all_cross_similarities) if all_cross_similarities else None,
-        },
-        'within_split_statistics': {
-            split: {
-                'mean': np.mean(similarities) if similarities else None,
-                'std': np.std(similarities) if similarities else None,
-                'min': np.min(similarities) if similarities else None,
-                'max': np.max(similarities) if similarities else None,
-            } for split, similarities in within_split_similarities.items()
-        },
+        'excluded_files_count': skipped_files,
         'problematic_files': sorted(list(set(
             [pair['file1'] for pair in high_similarity_pairs] + 
             [pair['file2'] for pair in high_similarity_pairs]
@@ -1400,7 +1422,8 @@ results = analyze_dataset_split_similarity(
     dataset_path=dataset_path,  # Path to your HF dataset
     audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
     model_path=None,  # Set to your model path if a trained model is available
-    similarity_threshold=0.95
+    similarity_threshold=0.95,
+    #exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/final_pruning_list_cnn14.csv"  # Path to exclusion list CSV
 )
 
 # Access results
