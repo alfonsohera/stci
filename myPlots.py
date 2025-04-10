@@ -6,6 +6,9 @@ import librosa.display
 import numpy as np
 import pandas as pd
 import os   
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
 
 def plotAgeDistribution(data_df):
     plt.style.use("default")
@@ -789,6 +792,61 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         import traceback
         traceback.print_exc()
 
+
+
+def create_rotating_3d_plot(embeddings_3d, color_field, unique_categories, color_mapping, title, output_filename):
+    """
+    Creates and saves a rotating 3D animation of the embeddings.
+    
+    Args:
+        embeddings_3d: The 3D t-SNE embeddings
+        color_field: List of category labels for each point
+        unique_categories: List of unique categories
+        color_mapping: Dictionary mapping categories to colors
+        title: Title for the plot
+        output_filename: Filename to save the animation to
+    """
+    print(f"Creating rotating 3D animation for {title}...")
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plot each category with its own color
+    for category in unique_categories:
+        indices = [i for i, cat in enumerate(color_field) if cat == category]
+        if not indices:
+            continue
+        
+        ax.scatter(
+            embeddings_3d[indices, 0],
+            embeddings_3d[indices, 1],
+            embeddings_3d[indices, 2],
+            c=[color_mapping[category]],
+            label=f"{category} (n={len(indices)})",
+            alpha=0.7,
+            s=50
+        )
+    
+    # Set labels and title
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+    ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+    ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+    ax.legend(title="Categories", bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Function to update the view for animation
+    def rotate(angle):
+        ax.view_init(elev=20, azim=angle)
+        return fig,
+    
+    # Create animation with 360-degree rotation
+    anim = FuncAnimation(fig, rotate, frames=np.arange(0, 360, 5), interval=100)
+    
+    # Save as GIF
+    anim.save(output_filename, writer='pillow', dpi=100)
+    plt.close()
+    print(f"Saved rotating 3D animation to {output_filename}")
+
+
 def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95, exclusion_csv=None):
     """
     Analyzes the similarity between samples across dataset splits (train, valid, test)
@@ -816,7 +874,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     import gc
     from datasets import load_from_disk
     import librosa
-    # from panns_inference.panns_inference.models import Cnn14
+    from panns_inference.panns_inference.models import Cnn14
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -870,7 +928,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     from torchvision import transforms
     
     # Load pre-trained DenseNet model
-    feature_extractor = models.densenet121(pretrained=True).to(device)
+    """ feature_extractor = models.densenet121(pretrained=True).to(device)
     # Remove the classifier layer - we just want the features
     feature_extractor.classifier = torch.nn.Identity()
     feature_extractor.eval()
@@ -884,42 +942,42 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     # Define target size for DenseNet (224x224)
     target_size = (224, 224)
     
-    print("Using DenseNet121 (pretrained on ImageNet) as feature extractor")
+    print("Using DenseNet121 (pretrained on ImageNet) as feature extractor") """
         
-    """ print("Using CNN14 as feature extractor")
+    print("Using CNN14 as feature extractor")
 
     def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
-        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64,hop_size=320, window_size=1024,fmin=30, fmax=8000)
+        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64,hop_size=320, window_size=1024,fmin=50, fmax=8000)
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model.load_state_dict(checkpoint['model'])
         model.eval()
         return model
-    feature_extractor = load_cnn14(myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth') """
+    feature_extractor = load_cnn14(myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth') 
     
     # Create feature extraction function
     def extract_features(audio_path, feature_extractor):
         
         # CNN14
-        """ def extract_embedding(model, sample_audio):
+        def extract_embedding(model, sample_audio):
             with torch.no_grad():
                 output = model(sample_audio)
                 embedding = output['embedding']
-            return embedding  # shape: [1, 2048] """
+            return embedding  # shape: [1, 2048]
                 
         try:
             # Load audio
             sample_audio, sr = librosa.load(audio_path, sr=16000)
-            # Create log mel spectrogram
-            mel_spec = librosa.feature.melspectrogram(y=sample_audio, sr=sr, n_mels=128, fmax=8000)
+            # Create log mel spectrogram (DenseNet)
+            """ mel_spec = librosa.feature.melspectrogram(y=sample_audio, sr=sr, n_mels=128, fmax=8000)
             log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
+            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time] """
             # CNN14
-            # sample_audio = torch.tensor(sample_audio).unsqueeze(0)  # [1, time]                     
+            sample_audio = torch.tensor(sample_audio).unsqueeze(0)  # [1, time]                     
             
             with torch.inference_mode():
                 # Normalize as in model preprocessing
                 # Code block needed for DenseNet
-                log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
+                """ log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
                 
                 # Resize to model's expected input size
                 log_mel_tensor = F.interpolate(log_mel_tensor, size=target_size, 
@@ -935,9 +993,9 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 log_mel_tensor = normalize(log_mel_tensor)
                 
                 # Extract features using DenseNet
-                features = feature_extractor(log_mel_tensor).flatten().cpu().numpy()
+                features = feature_extractor(log_mel_tensor).flatten().cpu().numpy() """
                 # Extract features using CNN14
-                #features = extract_embedding(feature_extractor, sample_audio).flatten().cpu().numpy()
+                features = extract_embedding(feature_extractor, sample_audio).flatten().cpu().numpy()
                 
             return features
         except Exception as e:
@@ -1250,6 +1308,11 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_matrix)-1))
     embeddings_2d = tsne.fit_transform(features_pca)
     
+    # Add 3D t-SNE visualization 
+    print("Applying t-SNE for 3D visualization...")
+    tsne_3d = TSNE(n_components=3, random_state=42, perplexity=min(30, len(feature_matrix)-1))
+    embeddings_3d = tsne_3d.fit_transform(features_pca)
+    
     # Create visualizations for clustering by split and by class
     for viz_type in ['split', 'class']:
         plt.figure(figsize=(12, 10))
@@ -1269,21 +1332,14 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         colors = plt.cm.tab10(np.linspace(0, 1, len(unique_categories)))
         color_mapping = {cat: colors[i] for i, cat in enumerate(unique_categories)}
         
-        # Plot each category with its own color
+        # Plot each category with its own color (2D plot - existing code)
         for category in unique_categories:
-            # Find indices for this category
             indices = [i for i, cat in enumerate(color_field) if cat == category]
-            
             if not indices:
                 continue
-                
-            # Get coordinates for this category
-            x_coords = embeddings_2d[indices, 0]
-            y_coords = embeddings_2d[indices, 1]
-            
-            # Plot points
             plt.scatter(
-                x_coords, y_coords,
+                embeddings_2d[indices, 0], 
+                embeddings_2d[indices, 1],
                 c=[color_mapping[category]],
                 label=f"{category} (n={len(indices)})",
                 alpha=0.7,
@@ -1297,24 +1353,71 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         plt.grid(alpha=0.3)
         plt.tight_layout()
         
-        # Save the plot
+        # Save the 2D plot
         filename = f"embeddings_by_{viz_type}.png"
         plt.savefig(filename, dpi=300)
         plt.close()
-        print(f"Saved visualization to {filename}")
+        print(f"Saved 2D visualization to {filename}")
+        
+        # Create static 3D plot
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot each category in 3D
+        for category in unique_categories:
+            indices = [i for i, cat in enumerate(color_field) if cat == category]
+            if not indices:
+                continue
+            
+            ax.scatter(
+                embeddings_3d[indices, 0],
+                embeddings_3d[indices, 1],
+                embeddings_3d[indices, 2],
+                c=[color_mapping[category]],
+                label=f"{category} (n={len(indices)})",
+                alpha=0.7,
+                s=50
+            )
+        
+        ax.set_title(f"3D t-SNE Visualization of {title}", fontsize=14)
+        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+        ax.legend(title="Categories", bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Save the 3D static plot
+        filename_3d = f"embeddings_3d_by_{viz_type}.png"
+        plt.tight_layout()
+        plt.savefig(filename_3d, dpi=300)
+        plt.close()
+        print(f"Saved static 3D visualization to {filename_3d}")
+        
+        # Create rotating 3D animation for this visualization type
+        gif_filename = f"embeddings_3d_rotating_{viz_type}.gif"
+        create_rotating_3d_plot(
+            embeddings_3d, 
+            color_field, 
+            unique_categories, 
+            color_mapping, 
+            f"3D t-SNE Visualization of {title}",
+            gif_filename
+        )
     
-    # Create interactive plot to highlight high similarity pairs
+    # Create interactive 3D plot to highlight high similarity pairs
     if high_similarity_pairs:
-        plt.figure(figsize=(14, 12))
+        # Static 3D visualization with highlighted pairs
+        fig = plt.figure(figsize=(14, 12))
+        ax = fig.add_subplot(111, projection='3d')
         
         # First plot all points with low alpha
         for category in unique_categories:
             indices = [i for i, cat in enumerate(all_classes) if cat == category]
             if not indices:
                 continue
-            plt.scatter(
-                embeddings_2d[indices, 0], 
-                embeddings_2d[indices, 1],
+            ax.scatter(
+                embeddings_3d[indices, 0], 
+                embeddings_3d[indices, 1],
+                embeddings_3d[indices, 2],
                 c=[color_mapping[category]],
                 label=f"{category}",
                 alpha=0.3,
@@ -1324,8 +1427,8 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         # Track points already plotted in high similarity pairs
         plotted_high_sim_files = set()
         
-        # Plot high similarity connections
-        for pair in high_similarity_pairs:
+        # Plot high similarity connections (limit to 50 to avoid clutter)
+        for pair in high_similarity_pairs[:50]:
             file1, file2 = pair['file1'], pair['file2']
             
             # Find indices
@@ -1335,10 +1438,11 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             except ValueError:
                 continue  # Skip if file not found
                 
-            # Plot the connection
-            plt.plot(
-                [embeddings_2d[idx1, 0], embeddings_2d[idx2, 0]],
-                [embeddings_2d[idx1, 1], embeddings_2d[idx2, 1]],
+            # Plot the connection in 3D
+            ax.plot(
+                [embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
+                [embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
+                [embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
                 'k-', alpha=0.5, linewidth=0.5
             )
             
@@ -1346,9 +1450,10 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             for idx, file_id in [(idx1, file1), (idx2, file2)]:
                 if file_id not in plotted_high_sim_files:
                     cat = all_classes[idx]
-                    plt.scatter(
-                        embeddings_2d[idx, 0],
-                        embeddings_2d[idx, 1],
+                    ax.scatter(
+                        embeddings_3d[idx, 0],
+                        embeddings_3d[idx, 1],
+                        embeddings_3d[idx, 2],
                         c=[color_mapping[cat]],
                         edgecolors='black',
                         linewidths=1,
@@ -1357,18 +1462,88 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     )
                     plotted_high_sim_files.add(file_id)
         
-        plt.title(f"High Similarity Pairs in Embedding Space (sim ≥ {similarity_threshold})", fontsize=14)
-        plt.xlabel("t-SNE Dimension 1", fontsize=12)
-        plt.ylabel("t-SNE Dimension 2", fontsize=12)
-        plt.legend(title="Classes")
-        plt.grid(alpha=0.3)
-        plt.tight_layout()
+        ax.set_title(f"High Similarity Pairs in 3D Embedding Space (sim ≥ {similarity_threshold})", fontsize=14)
+        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+        ax.legend(title="Classes")
         
-        # Save the plot
-        plt.savefig("high_similarity_embedding_space.png", dpi=300)
+        # Save the 3D static plot
+        plt.tight_layout()
+        plt.savefig("high_similarity_3d_embedding_space.png", dpi=300)
         plt.close()
-        print("Saved visualization of high similarity pairs to high_similarity_embedding_space.png")
-        # Save high similarity pairs to CSV for further analysis
+        print("Saved 3D visualization of high similarity pairs to high_similarity_3d_embedding_space.png")
+        
+        # Create rotating animation of similarity pairs
+        print("Creating rotating 3D animation for high similarity pairs...")
+        fig = plt.figure(figsize=(14, 12))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot all points with low alpha
+        for category in unique_categories:
+            indices = [i for i, cat in enumerate(all_classes) if cat == category]
+            if not indices:
+                continue
+            ax.scatter(
+                embeddings_3d[indices, 0], 
+                embeddings_3d[indices, 1],
+                embeddings_3d[indices, 2],
+                c=[color_mapping[category]],
+                label=f"{category}",
+                alpha=0.3,
+                s=30
+            )
+        
+        # Plot the high similarity pairs
+        for pair in high_similarity_pairs[:50]:  # Limit to 50 pairs
+            try:
+                idx1 = all_file_ids.index(pair['file1'])
+                idx2 = all_file_ids.index(pair['file2'])
+                
+                # Plot the connection
+                ax.plot(
+                    [embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
+                    [embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
+                    [embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
+                    'k-', alpha=0.5, linewidth=0.5
+                )
+                
+                # Plot the connected points with higher emphasis
+                for idx in [idx1, idx2]:
+                    cat = all_classes[idx]
+                    ax.scatter(
+                        embeddings_3d[idx, 0],
+                        embeddings_3d[idx, 1],
+                        embeddings_3d[idx, 2],
+                        c=[color_mapping[cat]],
+                        edgecolors='black',
+                        linewidths=1,
+                        alpha=0.9,
+                        s=60
+                    )
+            except ValueError:
+                continue
+        
+        ax.set_title(f"High Similarity Pairs (sim ≥ {similarity_threshold})", fontsize=14)
+        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+        ax.legend(title="Classes")
+        
+        # Animation function
+        def rotate(angle):
+            ax.view_init(elev=20, azim=angle)
+            return fig,
+        
+        # Create animation with 360-degree rotation
+        anim = FuncAnimation(fig, rotate, frames=np.arange(0, 360, 5), interval=100)
+        
+        # Save as GIF
+        anim.save("high_similarity_3d_rotating.gif", writer='pillow', dpi=100)
+        plt.close()
+        print("Saved rotating 3D animation of high similarity pairs to high_similarity_3d_rotating.gif")
+        
+    # Save high similarity pairs to CSV for further analysis
     if high_similarity_pairs:
         df = pd.DataFrame(high_similarity_pairs)
         df.to_csv('high_similarity_pairs.csv', index=False)
@@ -1420,7 +1595,7 @@ if __name__ == "__main__":
         audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
         model_path=None,  # Set to your model path if a trained model is available
         similarity_threshold=0.95,
-        #exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/final_pruning_list_cnn14.csv"  # Path to exclusion list CSV
+        exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
     )
 
     # Access results
