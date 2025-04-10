@@ -1368,7 +1368,11 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         plt.savefig("high_similarity_embedding_space.png", dpi=300)
         plt.close()
         print("Saved visualization of high similarity pairs to high_similarity_embedding_space.png")
-    
+        # Save high similarity pairs to CSV for further analysis
+    if high_similarity_pairs:
+        df = pd.DataFrame(high_similarity_pairs)
+        df.to_csv('high_similarity_pairs.csv', index=False)
+        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
     
     results = {
         'high_similarity_pairs': high_similarity_pairs,
@@ -1392,45 +1396,38 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             [pair['file2'] for pair in high_similarity_pairs]
         )))
     }
-    
-    # Save high similarity pairs to CSV for further analysis
-    if high_similarity_pairs:
-        df = pd.DataFrame(high_similarity_pairs)
-        df.to_csv('high_similarity_pairs.csv', index=False)
-        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
-    
+
     return results
 
-# Example usage (commented out)
+
+if __name__ == "__main__": 
+
+    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
+    dataset_path = myConfig.OUTPUT_PATH
+    data_df = pd.read_csv(data_file_path) 
+
+    # To visualize one sample per class:
+    #visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
+
+    # To visualize multiple augmentations of a single sample:
+    #visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
+
+    # Analyze how different your augmentations are in feature space
+    #analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
+   
+    results = analyze_dataset_split_similarity(
+        dataset_path=dataset_path,  # Path to your HF dataset
+        audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
+        model_path=None,  # Set to your model path if a trained model is available
+        similarity_threshold=0.95,
+        #exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/final_pruning_list_cnn14.csv"  # Path to exclusion list CSV
+    )
+
+    # Access results
+    print(f"Found {len(results['problematic_files'])} potentially problematic files")
 
 
-data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
-dataset_path = myConfig.OUTPUT_PATH
-data_df = pd.read_csv(data_file_path) 
-
-# To visualize one sample per class:
-#visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
-
-# To visualize multiple augmentations of a single sample:
-#visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
-
-# Analyze how different your augmentations are in feature space
-#analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
-
-
-results = analyze_dataset_split_similarity(
-    dataset_path=dataset_path,  # Path to your HF dataset
-    audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
-    model_path=None,  # Set to your model path if a trained model is available
-    similarity_threshold=0.95,
-    #exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/final_pruning_list_cnn14.csv"  # Path to exclusion list CSV
-)
-
-# Access results
-print(f"Found {len(results['problematic_files'])} potentially problematic files")
-
-
-# Example usage
-""" original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
-processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
-visualize_audio_comparison(original_audio_path, processed_audio_path) """
+    # Example usage
+    """ original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
+    processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
+    visualize_audio_comparison(original_audio_path, processed_audio_path) """
