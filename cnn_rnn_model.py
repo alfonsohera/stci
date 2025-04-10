@@ -260,10 +260,10 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         )
         
         # Load pretrained weights if provided
-        if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
-            state_dict = torch.load(pretrained_cnn14_path, map_location='cpu')
-            self.cnn_extractor.load_state_dict(state_dict)
-            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}")
+        print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")
+        checkpoint = torch.load(pretrained_cnn14_path, map_location='cpu')
+        self.feature_extractor.load_state_dict(checkpoint['model'])
+        
         
         # Freeze CNN14 weights for transfer learning
         for param in self.cnn_extractor.parameters():
@@ -372,15 +372,17 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             self._device = device
             self._initialized_for_device = True
         
-        # Ensure audio has shape [B, 1, T] for CNN14
-        if len(audio.shape) == 2:
-            audio = audio.unsqueeze(1)  # Add channel dimension
-               
-        # For the CNN path, pass audio through CNN14 and extract embeddings
-        with torch.no_grad():  # No gradients through the pretrained CNN
-            cnn_output_dict = self.cnn_extractor(audio)
-            # Extract the embedding from CNN14 (2048 dim)
-            cnn_embeddings = cnn_output_dict['embedding']  # [B, 2048]
+        # CNN14 expects raw audio of shape [B, T] (no channel dimension)
+        # If input is [B, 1, T], remove the channel dimension
+        if len(audio.shape) == 3:
+            audio = audio.squeeze(1)  # Convert [B, 1, T] to [B, T]
+            
+        # Extract features using CNN14 - use no_grad if we froze the extractor during initialization
+        use_grad_enabled = any(param.requires_grad for param in self.feature_extractor.parameters())
+        
+        with torch.set_grad_enabled(use_grad_enabled):
+            output_dict = self.feature_extractor(audio)
+            cnn_embeddings = output_dict['embedding']  # [B, 2048]
         
         # Process CNN14 embeddings through adapter
         cnn_features = self.cnn_adapter(cnn_embeddings)  # [B, 256]

@@ -278,7 +278,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # From HPO:        
-    hpo_max_lr = 0.0002035216880791326
+    #hpo_max_lr = 0.0002035216880791326
+    hpo_max_lr = 0.001
     hpo_focal_loss_gamma = 1.509293219544905
     hpo_weight_scaling_factor = 0.5052154352450162
     hpo_weight_decay = 4.361892113003308e-06
@@ -560,7 +561,7 @@ def test_cnn_rnn_model(model, test_loader):
 
 def main_cnn_rnn(use_prosodic_features=False):
     """Main function for the CNN+RNN pipeline."""
-    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier
+    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
     hpo_n_mels = 128
     print("Running CNN+RNN model")
     
@@ -596,13 +597,22 @@ def main_cnn_rnn(use_prosodic_features=False):
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    model = CNN14Classifier(
+    """ model = CNN14Classifier(
         num_classes=3,
         sample_rate=16000,
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
         dropout_rate=0.5,  
         freeze_extractor=True  
-    )
+    ) """
+    
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        dropout_rate=0.5,  
+        freeze_extractor=True  
+    )    
+
     print("Model created!")
     
     # Train model
@@ -610,7 +620,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     train_cnn_rnn_model(
         model, 
         dataloaders, 
-        num_epochs=15
+        num_epochs=20
     )
     print("Training complete!")
 
@@ -660,13 +670,20 @@ def optimize_cnn_rnn():
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier
-    model = DualPathAudioClassifier(
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         n_mels=hpo_n_mels
     )
-    
+     """
+    model = CNN14Classifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        dropout_rate=0.5,  
+        freeze_extractor=True  
+    )
     # Load the best model weights if available
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -721,13 +738,19 @@ def test_cnn_rnn_with_thresholds():
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier
-    model = DualPathAudioClassifier(
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         n_mels=hpo_n_mels
+    ) """
+    model = CNN14Classifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        dropout_rate=0.5,  
+        freeze_extractor=True  
     )
-    
     # Load the best model weights
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
