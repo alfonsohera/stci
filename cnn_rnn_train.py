@@ -330,8 +330,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             new_p = min(current_p * hpo_dropout_factor, 0.7)
             # Set new dropout probability
             module.p = new_p
-    model.to(device) """
-
+    """
+    model.to(device)
 
     # Set up the optimizer with proper hyperparameters
     optimizer = torch.optim.Adam(
