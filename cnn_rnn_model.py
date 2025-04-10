@@ -104,6 +104,408 @@ class SelfAttention(nn.Module):
         return x
 
 
+class CNN14Classifier(nn.Module):
+    """
+    A simple classifier that uses a pretrained CNN14 model for feature extraction
+    followed by a classification head.
+    """
+    def __init__(self, num_classes=3, sample_rate=16000, pretrained_cnn14_path=None, 
+                 dropout_rate=0.5, freeze_extractor=True):
+        super(CNN14Classifier, self).__init__()
+        
+        self.sample_rate = sample_rate
+        
+        # Import CNN14 here to avoid import issues
+        from panns_inference.models import Cnn14
+        
+        # Initialize the CNN14 model with AudioSet classes
+        self.feature_extractor = Cnn14(
+            sample_rate=sample_rate,
+            window_size=1024,
+            hop_size=320,
+            mel_bins=64,
+            fmin=50,
+            fmax=14000,
+            classes_num=527  # AudioSet classes
+        )
+        
+        # Load pretrained weights if provided
+        if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
+            state_dict = torch.load(pretrained_cnn14_path, map_location='cpu')
+            self.feature_extractor.load_state_dict(state_dict)
+            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}")
+        
+        # Freeze feature extractor parameters if specified
+        if freeze_extractor:
+            for param in self.feature_extractor.parameters():
+                param.requires_grad = False
+                
+        # CNN14 outputs 2048-dim embeddings
+        # Create classification head
+        self.classifier = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, audio, **kwargs):
+        """
+        Forward pass
+        
+        Args:
+            audio: Input audio tensor [B, T] or [B, 1, T]
+            **kwargs: Additional arguments (ignored, for compatibility)
+            
+        Returns:
+            Class logits [B, num_classes]
+        """
+        # Ensure input has the right shape [B, 1, T]
+        if len(audio.shape) == 2:
+            audio = audio.unsqueeze(1)
+            
+        # Extract features using CNN14
+        with torch.no_grad() if self.feature_extractor[0].conv_block1[0].weight.requires_grad == False else torch.enable_grad():
+            output_dict = self.feature_extractor(audio)
+            embeddings = output_dict['embedding']  # [B, 2048]
+            
+        # Apply classifier
+        output = self.classifier(embeddings)
+        
+        return output
+    
+    def extract_embeddings(self, audio):
+        """
+        Extract CNN14 embeddings without classification
+        
+        Args:
+            audio: Input audio tensor [B, T] or [B, 1, T]
+            
+        Returns:
+            Embeddings [B, 2048]
+        """
+        # Ensure input has the right shape [B, 1, T]
+        if len(audio.shape) == 2:
+            audio = audio.unsqueeze(1)
+            
+        # Extract features using CNN14
+        with torch.no_grad():
+            output_dict = self.feature_extractor(audio)
+            embeddings = output_dict['embedding']  # [B, 2048]
+            
+        return embeddings
+    
+    def aggregate_chunk_predictions(self, chunk_outputs):
+        """
+        Aggregate predictions from multiple chunks of the same audio
+        
+        Args:
+            chunk_outputs: List of prediction tensors, each of shape [num_classes]
+            
+        Returns:
+            Aggregated prediction of shape [num_classes]
+        """
+        # Simple mean aggregation
+        return torch.stack(chunk_outputs).mean(dim=0)
+
+
+class PretrainedDualPathAudioClassifier(nn.Module):
+    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
+                 apply_specaugment=True, use_prosodic_features=True, 
+                 prosodic_feature_dim=7, pretrained_cnn14_path=None):
+        super(PretrainedDualPathAudioClassifier, self).__init__()
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.apply_specaugment = apply_specaugment
+        
+        # Create mel spectrogram converter for the attention branch
+        self.mel_spec = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=1024,
+            hop_length=128,
+            n_mels=n_mels
+        )
+        
+        self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB()
+        
+        # SpecAugment for data augmentation during training
+        if apply_specaugment:
+            self.spec_augment = SpecAugment()
+    
+        # CNN path using pretrained CNN14
+        self.cnn_extractor = Cnn14(
+            sample_rate=sample_rate,
+            window_size=1024, 
+            hop_size=320,  # CNN14 default
+            mel_bins=64,   # CNN14 default
+            fmin=50,       # CNN14 default
+            fmax=14000,    # CNN14 default
+            classes_num=527  # AudioSet classes
+        )
+        
+        # Load pretrained weights if provided
+        if pretrained_cnn14_path and os.path.exists(pretrained_cnn14_path):
+            state_dict = torch.load(pretrained_cnn14_path, map_location='cpu')
+            self.cnn_extractor.load_state_dict(state_dict)
+            print(f"Loaded pretrained CNN14 weights from {pretrained_cnn14_path}")
+        
+        # Freeze CNN14 weights for transfer learning
+        for param in self.cnn_extractor.parameters():
+            param.requires_grad = False
+            
+        # CNN feature dimension adapter (CNN14 outputs 2048-dim embeddings)
+        self.cnn_adapter = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.LayerNorm(512),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256)
+        )
+        
+        # Downsample raw audio for attention path
+        self.audio_downsample = nn.Conv1d(1, 32, kernel_size=100, stride=120)        
+        self.position_embedding = nn.Parameter(torch.randn(1, 128, 32))  # Max seq length 128, feature dim 32
+        
+        # Self-attention layers
+        # Attention path - increase dropout
+        self.attention_layers = nn.ModuleList([
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=0.3)  
+        ])
+        
+        # Attention output processing
+        self.attention_pooling = nn.Sequential(
+            nn.Linear(32, 256),
+            nn.ReLU(),
+            nn.Dropout(0.4)
+        )
+        
+        # Add prosodic feature processing
+        self.use_prosodic_features = use_prosodic_features        
+        if use_prosodic_features:
+            # Prosodic feature encoder
+            self.prosodic_encoder = nn.Sequential(
+                nn.Linear(prosodic_feature_dim, 64),
+                nn.LayerNorm(64),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(64, 128)
+            )
+            
+            # Chunk context encoder (relative position in the audio)
+            self.chunk_context = nn.Sequential(
+                nn.Linear(2, 32),  # 2 inputs: relative position and chunk length
+                nn.ReLU(),
+                nn.Linear(32, 32)
+            )
+            
+            # Modified fusion to include prosodic features
+            # Fusion layers - increase dropout
+            self.fusion = nn.Sequential(
+                nn.Linear(256 + 256 + 128 + 32, 384),  # CNN + Attention + Prosodic + Chunk
+                nn.LayerNorm(384),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(384, 128),
+                nn.ReLU(),
+                nn.Dropout(0.4)
+            )
+        else:
+            # Fusion layer (CNN features + Attention features)
+            self.fusion = nn.Sequential(
+                nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
+                nn.LayerNorm(256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.4)
+            )
+
+        # Separate classifier layer
+        self.classifier = nn.Linear(128, num_classes)
+        
+        # Pre-initialize device tracking to avoid device checks at runtime
+        self._device = None
+        self._initialized_for_device = False
+
+    def forward(self, audio, audio_lengths=None, augmentation_id=None, 
+                prosodic_features=None, chunk_context=None):
+        """
+        Forward pass for chunked audio processing
+        
+        Args:
+            audio: Input audio tensor [B, C, T]
+            audio_lengths: Tensor of actual audio lengths [B]
+            augmentation_id: Optional IDs for deterministic augmentation
+            prosodic_features: Optional prosodic features [B, prosodic_feature_dim]
+            chunk_context: Optional chunk context [B, 2]
+            
+        Returns:
+            Class logits [B, num_classes]
+        """
+        # Initialize for specific device if needed
+        device = audio.device
+        
+        if not self._initialized_for_device or self._device != device:
+            self.mel_spec = self.mel_spec.to(device)
+            self.amplitude_to_db = self.amplitude_to_db.to(device)
+            
+            if self.apply_specaugment:
+                self.spec_augment = self.spec_augment.to(device)
+                
+            self._device = device
+            self._initialized_for_device = True
+        
+        # Ensure audio has shape [B, 1, T] for CNN14
+        if len(audio.shape) == 2:
+            audio = audio.unsqueeze(1)  # Add channel dimension
+               
+        # For the CNN path, pass audio through CNN14 and extract embeddings
+        with torch.no_grad():  # No gradients through the pretrained CNN
+            cnn_output_dict = self.cnn_extractor(audio)
+            # Extract the embedding from CNN14 (2048 dim)
+            cnn_embeddings = cnn_output_dict['embedding']  # [B, 2048]
+        
+        # Process CNN14 embeddings through adapter
+        cnn_features = self.cnn_adapter(cnn_embeddings)  # [B, 256]
+        
+        # For the attention path, generate mel spectrograms 
+        mel = self.mel_spec(audio.squeeze(1))
+        mel_db = self.amplitude_to_db(mel).unsqueeze(1)  # Add channel dim back
+        
+        # Apply SpecAugment based on augmentation_id
+        if self.training and self.apply_specaugment:            
+            if isinstance(augmentation_id, list) and any(aid is not None for aid in augmentation_id):
+                # Create a mask of which samples to augment with deterministic seeds
+                to_augment = [i for i, aid in enumerate(augmentation_id) if aid is not None]
+                no_aug = [i for i, aid in enumerate(augmentation_id) if aid is None]
+                
+                # Process samples with deterministic seeds
+                if to_augment:
+                    # Set random seeds once
+                    deterministic_batch = mel_db[to_augment]
+                    # Force apply augmentation to this entire subset
+                    deterministic_batch = self.spec_augment(deterministic_batch, force_apply=True)
+                    # Put back into the full batch
+                    for i, orig_idx in enumerate(to_augment):
+                        mel_db[orig_idx] = deterministic_batch[i]
+                    
+                # Process samples without deterministic seeds
+                if no_aug:
+                    # Regular probabilistic augmentation
+                    regular_batch = mel_db[no_aug]
+                    regular_batch = self.spec_augment(regular_batch, force_apply=False)
+                    # Put back into the full batch
+                    for i, orig_idx in enumerate(no_aug):
+                        mel_db[orig_idx] = regular_batch[i]
+            else:
+                # Process entire batch with standard augmentation
+                mel_db = self.spec_augment(mel_db, force_apply=False)
+        
+        # Normalization for the attention path
+        mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-5)
+        
+        # Process audio for Attention path
+        # Ensure audio has shape [B, 1, T] for Conv1d
+        if len(audio.shape) == 3 and audio.shape[1] > 1:
+            # If we have [B, C, T] where C > 1, convert to mono by averaging
+            audio_mono = audio.mean(dim=1, keepdim=True)  # [B, 1, T]
+        elif len(audio.shape) == 2:
+            # If we have [B, T], add channel dimension
+            audio_mono = audio.unsqueeze(1)  # [B, 1, T]
+        else:
+            # Already in correct format [B, 1, T]
+            audio_mono = audio
+        
+        # Downsample audio for attention path
+        audio_downsampled = self.audio_downsample(audio_mono)  # [B, 32, T/120]
+        # Apply adaptive pooling to ensure fixed sequence length
+        audio_downsampled = F.adaptive_avg_pool1d(audio_downsampled, 128)  # [B, 32, 128]
+        # Transpose to match positional embedding dimensions
+        audio_downsampled = audio_downsampled.transpose(1, 2)  # [B, 128, 32]
+        # Add positional embeddings
+        seq_len = audio_downsampled.shape[1]
+        audio_downsampled = audio_downsampled + self.position_embedding[:, :seq_len, :]
+        
+        # Create attention mask if audio_lengths is provided
+        attention_mask = None
+        if audio_lengths is not None:
+            # Convert to downsampled lengths
+            downsampled_lengths = (audio_lengths / 25).long()
+            max_len = audio_downsampled.shape[1]
+            
+            # Create padding mask (True for padding positions)
+            attention_mask = torch.arange(max_len, device=device)[None, :] >= downsampled_lengths[:, None]
+        
+        # Process through attention layers
+        attn_output = audio_downsampled
+        for attention_layer in self.attention_layers:
+            attn_output = attention_layer(attn_output, mask=attention_mask)
+        
+        # Pool attention outputs - use mean pooling over sequence dimension
+        if attention_mask is not None:
+            # Apply mask before pooling (set padded positions to 0)
+            mask_expanded = (~attention_mask).float().unsqueeze(-1)
+            attn_output = attn_output * mask_expanded
+            # Mean over non-padded positions
+            attn_features = attn_output.sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
+        else:
+            # Simple mean pooling if no mask
+            attn_features = attn_output.mean(dim=1)
+        
+        # Process attention features through linear layer
+        attn_features = self.attention_pooling(attn_features)  # [B, 256]
+        
+        # Process prosodic features if available and enabled
+        if self.use_prosodic_features and prosodic_features is not None:
+            # Encode prosodic features
+            prosodic_encoded = self.prosodic_encoder(prosodic_features)  # [B, 128]
+            
+            # Process chunk context if available
+            if chunk_context is not None:
+                # chunk_context contains: [relative_position, relative_length]
+                chunk_encoding = self.chunk_context(chunk_context)  # [B, 32]
+            else:
+                # Default to zeros if no context provided
+                chunk_encoding = torch.zeros(prosodic_features.size(0), 32, 
+                                            device=prosodic_features.device)
+            
+            # Combine all features
+            combined_features = torch.cat([
+                cnn_features,          # [B, 256] - Spectral/frequency features from CNN14
+                attn_features,         # [B, 256] - Temporal dynamics features
+                prosodic_encoded,      # [B, 128] - Global prosodic features
+                chunk_encoding         # [B, 32]  - Chunk position context
+            ], dim=1)
+        else:
+            # Original feature combination without prosodic features
+            combined_features = torch.cat([cnn_features, attn_features], dim=1)
+        
+        # Final classification
+        fusion_output = self.fusion(combined_features)
+        output = self.classifier(fusion_output)
+        
+        return output
+    
+    def aggregate_chunk_predictions(self, chunk_outputs):
+        """
+        Aggregate predictions from multiple chunks of the same audio
+        
+        Args:
+            chunk_outputs: List of prediction tensors, each of shape [num_classes]
+            
+        Returns:
+            Aggregated prediction of shape [num_classes]
+        """
+        # Simple mean aggregation
+        return torch.stack(chunk_outputs).mean(dim=0)
+
+
 class ImprovedSelfAttention(nn.Module): 
     """Improved self-attention module with pre-LN and GELU"""
     def __init__(self, embed_dim, num_heads=4, dropout=0.1):
