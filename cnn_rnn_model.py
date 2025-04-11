@@ -222,7 +222,7 @@ class CNN14Classifier(nn.Module):
 class PretrainedDualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
                  apply_specaugment=True, use_prosodic_features=False, 
-                 prosodic_feature_dim=7, pretrained_cnn14_path=None):
+                 prosodic_feature_dim=4, pretrained_cnn14_path=None):
         super(PretrainedDualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels
@@ -250,7 +250,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             hop_size=320,  # CNN14 default
             mel_bins=64,   # CNN14 default
             fmin=50,       # CNN14 default
-            fmax=14000,    # CNN14 default
+            fmax=8000,    
             classes_num=527  # AudioSet classes
         )
         
@@ -506,7 +506,7 @@ class ImprovedSelfAttention(nn.Module):
 class DualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
                  apply_specaugment=True, use_prosodic_features=True, 
-                 prosodic_feature_dim=7):
+                 prosodic_feature_dim=4):
         super(DualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels

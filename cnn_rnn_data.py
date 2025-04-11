@@ -236,10 +236,7 @@ class PreloadedAudioDataset(Dataset):
         self.prosodic_feature_columns = [
             "num_pauses",
             "total_pause_duration",
-            "phonation_time",
-            "shimmer_local",
-            "skewness",
-            "centre_of_gravity",
+            "phonation_time",            
             "wer"
         ]
         

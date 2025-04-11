@@ -595,7 +595,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     augmented_train_dataset.print_distribution_stats()
     
     # Update dataset with balanced training set
-    balanced_dataset = {
+    augmented_dataset = {
         "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
@@ -603,7 +603,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset,         
+        augmented_dataset,         
         batch_size=96
     )
     
