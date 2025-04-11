@@ -85,16 +85,27 @@ class GradCAM:
             # Model type check
             model_type = "cnn14" if hasattr(self.model, "feature_extractor") else "dualpath"
             
-            # Prepare input shape
+            # Prepare input shape based on the model type and current tensor dimensions
             if model_type == "cnn14":
-                if len(input_tensor.shape) == 3:  # [B, 1, T]
-                    input_tensor = input_tensor.squeeze(1)  # CNN14 expects [B, T]
+                # CNN14 expects shape [B, T] for processing
+                if len(input_tensor.shape) == 1:  # [T]
+                    input_tensor = input_tensor.unsqueeze(0)  # Add batch dimension -> [1, T]
+                elif len(input_tensor.shape) == 3 and input_tensor.shape[1] == 1:  # [B, 1, T]
+                    input_tensor = input_tensor.squeeze(1)  # Remove channel dim -> [B, T]
+                # For [B, T] shape, we keep as is
             else:
-                if len(input_tensor.shape) == 2:  # [B, T]
-                    input_tensor = input_tensor.unsqueeze(1)  # DualPath expects [B, 1, T]
+                # DualPath models expect shape [B, 1, T] (with channel dim)
+                if len(input_tensor.shape) == 1:  # [T]
+                    input_tensor = input_tensor.unsqueeze(0).unsqueeze(0)  # -> [1, 1, T]
+                elif len(input_tensor.shape) == 2:  # [B, T]
+                    input_tensor = input_tensor.unsqueeze(1)  # Add channel dim -> [B, 1, T]
+                # For [B, C, T] shape, we keep as is
             
             if self.cuda:
                 input_tensor = input_tensor.cuda()
+            
+            # Debug tensor shape
+            # print(f"Input tensor shape for {model_type} model: {input_tensor.shape}")
             
             # Forward pass
             if model_type == "cnn14" and hasattr(self.model, "classifier"):
@@ -343,92 +354,213 @@ def generate_spectrogram(audio, model, sr=16000):
     return log_mel_spec.numpy()
 
 
-def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None):
+def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
+                  audio_chunks=None, chunk_outputs=None):
     """
-    Visualize CAM for an audio input
-    """
-    # Create output directories if needed
-    if save_path:
-        os.makedirs(os.path.join(save_path, 'LogMelSpecs'), exist_ok=True)
-        os.makedirs(os.path.join(save_path, 'CAMs'), exist_ok=True)
+    Visualize CAM for an audio input, with support for chunked processing
     
+    Args:
+        audio: Audio tensor or a single chunk of audio 
+        model: Model to analyze
+        target_class: Target class for CAM
+        save_path: Directory to save visualizations
+        audio_id: ID of the audio sample
+        correct: Whether prediction is correct
+        audio_paths_dir: Directory to save audio paths
+        epoch: Current epoch number
+        audio_chunks: Optional list of already chunked audio or audio_id to fetch original audio
+        chunk_outputs: Optional list of chunk outputs (logits) from model
+    """
     # Get model's device
     device = next(model.parameters()).device
     
     # Move audio to device
     audio = audio.to(device)
     
-    # Make a clone of the input tensor to ensure it's not an inference tensor
+    # Make a clone of the input tensor
     audio_clone = audio.detach().clone()
     
     # Store original training state
     training_state = model.training
     
-    # Set model to eval mode temporarily
+    # Set model to eval mode
     model.eval()
     
     # Get target layer for CAM
     target_layer = get_model_target_layers(model)
     
-    # Get the actual model prediction first (without forcing a target)
-    with torch.no_grad():
-        # Calculate proper audio lengths
-        audio_lengths = torch.tensor([audio_clone.shape[-1]], device=audio_clone.device)
-        
-        # Check if model uses prosodic features
-        if hasattr(model, "prosodic_encoder"):
-            # Find proper prosodic feature size
-            if hasattr(model.prosodic_encoder, "0") and hasattr(model.prosodic_encoder[0], "in_features"):
-                prosodic_dim = model.prosodic_encoder[0].in_features
+    # Check if audio_chunks is just an ID - if so, we need to fetch the complete original audio
+    if isinstance(audio_chunks, str) or isinstance(audio_chunks, int):
+        try:
+            # Import the necessary function to fetch original audio
+            from cnn_rnn_data import get_original_audio_by_id, chunk_audio
+            
+            print(f"Fetching original audio for ID: {audio_chunks}")
+            full_audio = get_original_audio_by_id(audio_chunks)
+            
+            if full_audio is not None:
+                # Convert to tensor if needed
+                if not isinstance(full_audio, torch.Tensor):
+                    full_audio = torch.tensor(full_audio).float()
+                
+                # Ensure it has batch dimension [1, T] or [1, 1, T]
+                if len(full_audio.shape) == 1:
+                    full_audio = full_audio.unsqueeze(0)
+                    
+                # Move to device
+                full_audio = full_audio.to(device)
+                
+                # Chunk the full audio into 10-second segments
+                chunk_size_seconds = 10
+                sample_rate = 16000
+                
+                # Ensure audio is on CPU before chunking (to avoid device mismatch)
+                full_audio_cpu = full_audio.cpu()
+                
+                # Create chunks from full audio
+                audio_chunks_list = chunk_audio(full_audio_cpu, chunk_size_seconds=chunk_size_seconds, sample_rate=sample_rate)
+                print(f"Created {len(audio_chunks_list)} chunks from original full audio")
+                
+                # Move chunks back to device
+                audio_chunks_list = [chunk.to(device) for chunk in audio_chunks_list]
             else:
-                prosodic_dim = 4  # Default fallback
-            
-            # Create dummy prosodic features
-            prosodic_features = torch.zeros((1, prosodic_dim), device=audio_clone.device)
-            
-            # Get model's prediction with all required arguments
-            actual_logits = model(
-                audio_clone, 
-                audio_lengths=audio_lengths,
-                prosodic_features=prosodic_features
-            )
-        else:
-            # For models that don't use prosodic features
-            actual_logits = model(
-                audio_clone,
-                audio_lengths=audio_lengths
-            )
+                # Fallback to the provided audio if we couldn't get the original
+                print(f"Could not fetch original audio for ID: {audio_chunks}, using provided audio chunk")
+                audio_chunks_list = [audio_clone]
+        except ImportError:
+            print("Could not import get_original_audio_by_id, using provided audio chunk")
+            audio_chunks_list = [audio_clone]
+        except Exception as e:
+            print(f"Error fetching original audio: {str(e)}, using provided audio chunk")
+            audio_chunks_list = [audio_clone]
+    # If audio_chunks is already a dictionary with a list for the audio_id key
+    elif isinstance(audio_chunks, dict) and audio_id in audio_chunks and isinstance(audio_chunks[audio_id], list):
+        audio_chunks_list = audio_chunks[audio_id]
+    # If audio_chunks is already a list of audio chunks
+    elif isinstance(audio_chunks, list):
+        audio_chunks_list = audio_chunks
+    # Fallback
+    else:
+        print("Using provided audio chunk")
+        audio_chunks_list = [audio_clone]
+    
+    # Extract chunk outputs (logits) - similar logic as above
+    if isinstance(chunk_outputs, dict) and audio_id in chunk_outputs:
+        chunk_outputs_list = chunk_outputs[audio_id]
+    elif isinstance(chunk_outputs, list):
+        chunk_outputs_list = chunk_outputs
+    else:
+        # If no chunk outputs provided, we need to run the model on the chunks
+        chunk_outputs_list = []
+        with torch.no_grad():
+            for chunk in audio_chunks_list:
+                # Calculate audio lengths for this chunk
+                chunk_lengths = torch.tensor([chunk.shape[-1]], device=chunk.device)
+                
+                # Check if model uses prosodic features
+                if hasattr(model, "prosodic_encoder"):
+                    # Find proper prosodic feature size
+                    if hasattr(model.prosodic_encoder, "0") and hasattr(model.prosodic_encoder[0], "in_features"):
+                        prosodic_dim = model.prosodic_encoder[0].in_features
+                    else:
+                        prosodic_dim = 4  # Default fallback
+                    
+                    # Create dummy prosodic features
+                    prosodic_features = torch.zeros((1, prosodic_dim), device=chunk.device)
+                    
+                    # Get chunk prediction
+                    chunk_logits = model(
+                        chunk, 
+                        audio_lengths=chunk_lengths,
+                        prosodic_features=prosodic_features
+                    )
+                else:
+                    # For models without prosodic features
+                    chunk_logits = model(
+                        chunk,
+                        audio_lengths=chunk_lengths
+                    )
+                
+                # Store chunk output
+                chunk_outputs_list.append(chunk_logits[0])
+    
+    print(f"Processing {len(audio_chunks_list)} audio chunks with {len(chunk_outputs_list)} output chunks")
+
+    # Now aggregate the predictions from all chunks - exactly like evaluate()
+    aggregated_output = model.aggregate_chunk_predictions(chunk_outputs_list)
+    actual_pred_class = torch.argmax(aggregated_output).item()
+    actual_probs = F.softmax(aggregated_output, dim=-1)
+    actual_pred_prob = actual_probs[actual_pred_class].item()
+    
+    # Generate CAM for each chunk
+    all_cams = []
+    all_specs = []
+    
+    # Process each chunk for CAM visualization
+    for i, chunk in enumerate(audio_chunks_list):
+        # Check if the chunk is too small for STFT processing
+        # CNN14 requires at least 2*n_fft samples (typically 2*1024 = 2048)
+        min_required_length = 2048
         
-        actual_pred_class = actual_logits.argmax(dim=1).item()
-        actual_probs = F.softmax(actual_logits, dim=1)
-        actual_pred_prob = actual_probs[0, actual_pred_class].item()
+        # Get the actual length of the chunk (handling different tensor shapes)
+        chunk_length = chunk.shape[-1]
+        
+        # Skip chunks that are too small to be processed by CNN14's spectrogram extractor
+        if chunk_length < min_required_length:
+            print(f"WARNING: Skipping chunk {i} - length {chunk_length} is smaller than minimum required length {min_required_length}")
+            continue
+            
+        # Proceed with normal processing for chunks of valid size
+        grad_cam = GradCAM(model, target_layer, use_cuda=(device.type == 'cuda'))
+        # Use the target class for visualization
+        chunk_cam, _, _ = grad_cam(chunk, target_class)
+        all_cams.append(chunk_cam)
+        
+        # Generate spectrogram for this chunk
+        chunk_spec = generate_spectrogram(chunk, model)
+        all_specs.append(chunk_spec)
+        
+        # Clean up GradCAM hooks for this chunk
+        grad_cam.remove_hooks()
 
+    # Check if we have any valid CAMs
+    if not all_cams:
+        print("WARNING: No valid chunks available for CAM visualization. Creating dummy CAM.")
+        dummy_cam = np.ones((64, 64))  # Create a dummy CAM
+        all_cams = [dummy_cam]  # Create a list with the dummy CAM
+        all_specs = [np.zeros((64, 64))]  # Create a dummy spectrogram
     
-    # Create subdirectories if needed now that we've verified 'correct'
-    if save_path and correct is not None:
-        status = "correct" if correct else "incorrect"
-        os.makedirs(os.path.join(save_path, 'LogMelSpecs', status), exist_ok=True)
-        os.makedirs(os.path.join(save_path, 'CAMs', status), exist_ok=True)
-
-    # Add epoch parameter to function
-    if epoch is not None:
-        spec_subdir = os.path.join(f"epoch_{epoch}", 'LogMelSpecs')
-        cam_subdir = os.path.join(f"epoch_{epoch}", 'CAMs')
+    # Concatenate CAMs to show the full audio - FIX
+    if len(all_cams) > 1:
+        # Check CAM shape and determine how to concatenate
+        if len(all_cams[0].shape) == 1:  # 1D CAM (time dimension only)
+            cam = np.concatenate(all_cams)
+        elif len(all_cams[0].shape) == 2:  # 2D CAM (time x features)
+            # Concatenate along time dimension (axis 1)
+            cam = np.concatenate(all_cams, axis=1)
+        else:
+            # For any other shape, use first CAM
+            print(f"WARNING: Unexpected CAM shape {all_cams[0].shape}, using only first chunk.")
+            cam = all_cams[0]
+    else:
+        # Only one CAM
+        cam = all_cams[0]
     
-        os.makedirs(os.path.join(save_path, spec_subdir), exist_ok=True)
-        os.makedirs(os.path.join(save_path, cam_subdir), exist_ok=True)
-
-    # Now do the CAM visualization with the desired target class  
-    grad_cam = GradCAM(model, target_layer, use_cuda=(device.type == 'cuda'))
-    cam, logits, _ = grad_cam(audio_clone, target_class)
+    # Concatenate specs along time dimension (same as with CAMs)
+    if all_specs:
+        if len(all_specs[0].shape) == 3:  # [C, F, T]
+            spectrogram = np.concatenate(all_specs, axis=2)
+        else:  # [F, T]
+            spectrogram = np.concatenate(all_specs, axis=1)
+    else:
+        # Fallback
+        spectrogram = generate_spectrogram(audio, model)
+    
 
     # Map class indices to human-readable labels - DEFINE ONLY ONCE
     class_names = ["Healthy", "MCI", "AD"]
     pred_label = class_names[actual_pred_class]  # Use actual prediction  
     true_label = class_names[target_class] if target_class is not None else "Unknown"
-
-    # Debug print to verify values
-    # print(f"CAM Debug: audio_id={audio_id}, pred={actual_pred_class}({pred_label}), true={target_class}({true_label}), correct={correct}")
 
     # Create filename
     if audio_id is not None and ('pred' in audio_id or 'true' in audio_id):
@@ -438,15 +570,12 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         if target_class is not None:
             file_id += f"_pred{actual_pred_class}_true{target_class}"
 
-    # Generate spectrogram - no gradients needed for this
-    spectrogram = generate_spectrogram(audio, model)
-    
     # Handle single-channel vs multi-channel spectrogram
     if len(spectrogram.shape) == 3:
         spec_for_plot = spectrogram[0]  # Take first channel
     else:
         spec_for_plot = spectrogram
-    
+
     # Calculate actual frequency and time values
     def hz_to_mel(hz):
         return 2595 * np.log10(1 + hz / 700)
@@ -459,7 +588,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     n_mels = spec_for_plot.shape[0]
     hop_length = 320  # From your settings
     sr = 16000  # Sample rate
-
+    
     # Generate frequency ticks (Hz) from mel scale
     mel_points = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels)
     freq_hz = [int(mel_to_hz(m)) for m in mel_points]
@@ -468,51 +597,80 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     freq_ticks = np.linspace(0, n_mels-1, 8, dtype=int)
     freq_labels = [f"{freq_hz[i]}" for i in freq_ticks]
 
-    # Create time axis in seconds
-    time_frames = spec_for_plot.shape[1]
-    time_sec = np.arange(time_frames) * hop_length / sr
+    # Create time axis in seconds - FIXED to show total duration of all chunks
+    time_frames = spec_for_plot.shape[1]  
+    total_chunks = len(all_specs)
+    chunk_size_seconds = 10  # Each chunk is 10 seconds
+    
+    # Fix the time labels to show the full duration
+    if total_chunks > 1:
+        # Create time labels that span across all chunks
+        total_duration = total_chunks * chunk_size_seconds
+        time_sec = np.linspace(0, total_duration, time_frames)
+    else:
+        # Standard calculation for single chunk
+        time_sec = np.arange(time_frames) * hop_length / sr
+        
+    # Generate time ticks that span the entire duration
     time_ticks = np.linspace(0, time_frames-1, min(10, time_frames), dtype=int)
     time_labels = [f"{time_sec[i]:.1f}" for i in time_ticks]
+    
+    # For debugging
+    print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
+    print(f"Time labels: {time_labels}")
 
     # Create figure for visualization
     plt.figure(figsize=(12, 5))
     
-    # Plot spectrogram with actual time and frequency units
+    
     plt.subplot(1, 2, 1)
-    plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', cmap='viridis')
-    title = f"Log-Mel Spectrogram\nPred: {pred_label} ({actual_pred_prob:.2f})"
-    if target_class is not None:
-        title += f"\nTrue: {true_label}"
-    plt.title(title)
-    plt.colorbar(format='%+2.0f dB')
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Frequency (Hz)')
-    plt.xticks(time_ticks, time_labels)
-    plt.yticks(freq_ticks, freq_labels)
-    
-    # Plot CAM heatmap with actual time and frequency units
-    plt.subplot(1, 2, 2)
-    plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', alpha=0.6, cmap='viridis')
-
-    # Resize CAM to match spectrogram dimensions
-    cam_resized = resize(cam, (spec_for_plot.shape[1],), anti_aliasing=True)
-    cam_2d = np.zeros((spec_for_plot.shape[1], spec_for_plot.shape[0]))
-    for i in range(spec_for_plot.shape[0]):
-        cam_2d[:, i] = cam_resized
-
-    # Plot the resized CAM
-    plt.imshow(cam_2d, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
-    
-    title = f"Class Activation Map (Full Audio)\nPred: {pred_label} ({actual_pred_prob:.2f})"
+    plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
+    title = f"Log-Mel Spectrogram\nPred: {pred_label}, True: {true_label}"
     if target_class is not None:
         result = "✓" if actual_pred_class == target_class else "✗"
-        title += f"\nTrue: {true_label} {result}"
+        title += f" {result}"
+    plt.title(title)
+    plt.colorbar(format='%+2.0f dB')
+    plt.ylabel('Frequency (Hz)')
+    plt.xlabel('Time (seconds)')
+    plt.yticks(freq_ticks, freq_labels)
+    plt.xticks(time_ticks, time_labels)
         
-        # Add chunked prediction info if it differs
-        if 'pred' in audio_id:
-            chunked_pred = audio_id.split('_')[1].replace('pred', '')
-            if int(chunked_pred) != actual_pred_class:
-                title += f"\nNote: Chunked pred was {class_names[int(chunked_pred)]}"
+    plt.subplot(1, 2, 2)
+    plt.imshow(spec_for_plot, origin='lower', aspect='auto', alpha=0.6, cmap='viridis')
+
+    # Handle different CAM shapes properly
+    if len(cam.shape) == 1:
+        # For 1D CAM (time dimension only)
+        # Use proper interpolation to resize from 1D to 2D
+        from scipy.ndimage import zoom
+        # Calculate scaling factor
+        scale_x = spec_for_plot.shape[1] / cam.shape[0]
+        # Resize CAM to match spectrogram width
+        cam_resized = zoom(cam, scale_x, order=1)
+        # Replicate across frequency dimension
+        cam_2d = np.zeros((spec_for_plot.shape[0], spec_for_plot.shape[1]))
+        for i in range(spec_for_plot.shape[0]):
+            cam_2d[i, :] = cam_resized[:spec_for_plot.shape[1]]
+        
+        # Plot the resized CAM WITHOUT TRANSPOSING
+        plt.imshow(cam_2d, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
+    elif len(cam.shape) == 2:
+        # For 2D CAM (time x features or similar)
+        # Resize to match spectrogram dimensions
+        cam_resized = resize(cam, (spec_for_plot.shape[0], spec_for_plot.shape[1]), 
+                             anti_aliasing=True)
+        # Plot the resized 2D CAM WITHOUT TRANSPOSING
+        plt.imshow(cam_resized, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
+    else:
+        # For any other shape, just use the first channel/dimension
+        print(f"Warning: Unexpected CAM shape {cam.shape}, using first dimension only")
+        cam_1d = cam.reshape(-1)
+
+    title = f"Class Activation Map\nPred: {pred_label}, True: {true_label}" 
+    if target_class is not None:
+        result = "✓" if actual_pred_class == target_class else "✗"
+        title += f" {result}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.xlabel('Time (seconds)')
@@ -539,14 +697,18 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
             status = "correct" if correct else "incorrect" 
             spec_subdir = os.path.join(spec_subdir, status)
             cam_subdir = os.path.join(cam_subdir, status)
-        
-        # Create directories if they don't exist
+
         os.makedirs(os.path.join(save_path, spec_subdir), exist_ok=True)
         os.makedirs(os.path.join(save_path, cam_subdir), exist_ok=True)
-        
+
         # Save paths (using file_id that was created above)
         spec_path = os.path.join(save_path, spec_subdir, f"{file_id}_spec.png")
         cam_path = os.path.join(save_path, cam_subdir, f"{file_id}_cam.png")
+        
+        # Add chunk count to filename if multiple chunks
+        if total_chunks > 1:
+            spec_path = os.path.join(save_path, spec_subdir, f"{file_id}_{total_chunks}chunks_spec.png")
+            cam_path = os.path.join(save_path, cam_subdir, f"{file_id}_{total_chunks}chunks_cam.png")
         
         # Save figure
         plt.tight_layout()
@@ -554,13 +716,13 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         # Save spectrogram separately
         plt.figure(figsize=(6, 4))
-        plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', cmap='viridis')
+        plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
         plt.colorbar(format='%+2.0f dB')
-        plt.title(f"Log-Mel Spectrogram - {file_id}")
-        plt.xlabel('Time (seconds)')
+        plt.title(f"Log-Mel Spectrogram - {file_id} ({total_chunks} chunks)")
         plt.ylabel('Frequency (Hz)')
-        plt.xticks(time_ticks, time_labels)
+        plt.xlabel('Time (seconds)')
         plt.yticks(freq_ticks, freq_labels)
+        plt.xticks(time_ticks, time_labels)
         plt.tight_layout()
         plt.savefig(spec_path, dpi=150)
         
@@ -573,7 +735,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
             os.makedirs(audio_paths_dir, exist_ok=True)
             paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
             with open(os.path.join(audio_paths_dir, paths_filename), 'a') as f:
-                f.write(f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\n")
+                f.write(f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks\n")
     
     # Close figures to free memory
     plt.close('all')
@@ -640,7 +802,7 @@ def debug_model_gradients(model, input_tensor, target_class=0):
             # Create dummy prosodic features if needed
             if hasattr(model, "prosodic_encoder"):
                 # Determine prosodic feature dimension from model
-                if hasattr(model, "prosodic_encoder") and isinstance(model.prosodic_encoder, torch.nn.Sequential):
+                if hasattr(model, "prosodic_encoder") and isinstance(self.model.prosodic_encoder, torch.nn.Sequential):
                     first_layer = next(iter(self.model.prosodic_encoder.children()))
                     prosodic_dim = first_layer.in_features if hasattr(first_layer, "in_features") else 4
                 else:

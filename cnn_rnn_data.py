@@ -438,3 +438,56 @@ def prepare_cnn_rnn_dataset():
     
     save_pytorch_dataset(dataset, pytorch_dataset_path)
     return dataset
+
+
+def get_original_audio_by_id(audio_id):
+    """
+    Retrieve the original full-length audio file for a given audio ID.
+    
+    Args:
+        audio_id (str): The ID of the audio file to retrieve
+        
+    Returns:
+        torch.Tensor: The full audio tensor, or None if not found
+    """
+    import os
+    import torch
+    import torchaudio
+    import glob
+    
+    # Path to the audio files
+    PROCESSED_FILES_PATH = "/home/bosh/Documents/ML/zz_PP/00_SCTI/ProcessedFiles"
+    
+    # Try to find the audio file based on the ID
+    # Check common formats and paths
+    possible_paths = [
+        os.path.join(PROCESSED_FILES_PATH, f"**/{audio_id}.wav"),
+        os.path.join(PROCESSED_FILES_PATH, f"**/{audio_id}.flac"),
+        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/{audio_id}.wav"),
+        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/{audio_id}.flac"),
+        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/*{audio_id}*.wav"),
+        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/*{audio_id}*.flac"),
+    ]
+    
+    # Try each path
+    for path_pattern in possible_paths:
+        matching_files = glob.glob(path_pattern, recursive=True)
+        if matching_files:
+            try:
+                # Load the first matching audio file
+                waveform, sample_rate = torchaudio.load(matching_files[0])
+                
+                # Convert to mono if needed
+                if waveform.shape[0] > 1:
+                    waveform = waveform.mean(dim=0, keepdim=True)
+                
+                print(f"Found and loaded audio file: {matching_files[0]}")
+                print(f"Audio shape: {waveform.shape}, Sample rate: {sample_rate}")
+                
+                return waveform
+                
+            except Exception as e:
+                print(f"Error loading audio file {matching_files[0]}: {str(e)}")
+    
+    print(f"Could not find audio file for ID: {audio_id}")
+    return None

@@ -277,11 +277,15 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
                         
                         # Store audio tensor for later CAM visualization
                         if use_cam:
-                            # Get single sample from batch
-                            audio_tensors[audio_id] = batch["audio"][j:j+1].detach().clone()
+                            # Initialize list for this audio_id
+                            audio_tensors[audio_id] = []
                     
                     # Store the logits for this chunk
                     audio_chunks[audio_id].append(logits[j])
+                    
+                    # Also store the audio chunk itself for visualization
+                    if use_cam:
+                        audio_tensors[audio_id].append(batch["audio"][j:j+1].detach().clone())
     
     # Process all remaining audios after going through the entire dataset
     if audio_chunks:        
@@ -303,7 +307,6 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
             
             # Process CAM for chunked audio
             if use_cam and cam_output_dir and audio_id in audio_tensors:
-                audio = audio_tensors[audio_id]
                 true_class = label.item()
                 pred_class = pred.item()
                 
@@ -316,15 +319,24 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
                     # For incorrect predictions, use pred_class to visualize what the model actually saw
                     target_for_cam = pred_class if not is_correct else true_class
 
+                    # Now we're passing all collected audio chunks for this ID
+                    print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
+                    print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
+                    
+                    # Get first chunk as reference, but pass all chunks
+                    first_chunk = audio_tensors[audio_id][0]
+                    
                     visualize_cam(
-                        audio=audio,
+                        audio=first_chunk,  # Pass the first chunk for reference
                         model=model,
                         target_class=target_for_cam,
                         save_path=cam_output_dir,
                         audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
-                        epoch=epoch  
+                        epoch=epoch,
+                        audio_chunks=audio_tensors[audio_id],  # Pass all collected chunks
+                        chunk_outputs=chunk_outputs
                     )
                     
                     # Update counter
@@ -675,10 +687,15 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                         
                         # Store audio tensor for later CAM visualization
                         if use_cam:
-                            audio_tensors[audio_id] = batch["audio"][j:j+1].detach().clone()
+                            # Initialize list for this audio_id
+                            audio_tensors[audio_id] = []
                     
                     # Store the logits for this chunk
                     audio_chunks[audio_id].append(logits[j])
+                    
+                    # Also store the audio chunk itself for visualization
+                    if use_cam:
+                        audio_tensors[audio_id].append(batch["audio"][j:j+1].detach().clone())
     
     # Process all remaining audios after going through the entire dataset
     if audio_chunks:
@@ -696,7 +713,6 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
             
             # Process CAM for chunked audio
             if use_cam and cam_output_dir and audio_id in audio_tensors:
-                audio = audio_tensors[audio_id]
                 true_class = label.item()
                 pred_class = pred.item()
                 
@@ -704,17 +720,27 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                 is_correct = pred_class == true_class
                 status = 'correct' if is_correct else 'incorrect'
                 target_for_cam = pred_class if not is_correct else true_class
+                
                 # If we haven't reached max samples for this class/outcome
                 if cam_counters[status][true_class] < max_cam_samples:
+                    # Now we're passing all collected audio chunks
+                    print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
+                    print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
+                    
+                    # Get first chunk as reference, but pass all chunks
+                    first_chunk = audio_tensors[audio_id][0]
+                    
                     # Generate CAM visualization
                     visualize_cam(
-                        audio=audio,
+                        audio=first_chunk,
                         model=model,
-                        target_class=target_for_cam,  # This should be pred_class for incorrect samples
+                        target_class=target_for_cam,
                         save_path=cam_output_dir,
-                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Consistent format
+                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
                         correct=is_correct,
-                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths")
+                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                        audio_chunks=audio_tensors[audio_id],
+                        chunk_outputs=chunk_outputs
                     )
                     
                     # Update counter
