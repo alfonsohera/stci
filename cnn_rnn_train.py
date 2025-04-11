@@ -1371,7 +1371,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                     total_steps=total_steps,
                     pct_start=hpo_pct_start,
                     div_factor=hpo_div_factor,
-                    final_div_factor=hpo_div_factor_final,
+                    final_div_factor=hpo_final_div_factor,
                     anneal_strategy='cos',
                     three_phase=False
                 )
@@ -1556,15 +1556,19 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         
         # Best previous hyperparameters as a starting point
         previous_best = {
-            "learning_rate": 0.0013035123791853842,  
-            "dropout_rate": 0.27799726016810133,     
-            "focal_loss_gamma": 2.299264218662403, 
-            "weight_scaling_factor": 0.3522752509513795, 
-            "weight_decay": 1.5930522616241016e-05,            
-            "pct_start": 0.25,
-            "div_factor": 25.0,
-            "final_div_factor": 1000.0
+            # Core parameters from previous best run
+            "learning_rate": 0.0012349118136969503,  
+            "focal_loss_gamma": 1.2823995520334321, 
+            "weight_scaling_factor": 0.33101479502425385, 
+            "weight_decay": 3.564042168831547e-05,            
+            "pct_start": 0.3039854042370648,
+            "div_factor": 28.511116929054193,
+            "final_div_factor": 337.0803040420639,
+            "attention_dropout": 0.25,  
+            "fusion_dropout": 0.35,     
+            "prosodic_weight": 1.0      
         }
+
         study.enqueue_trial(previous_best)
     
     wandb_callback = WandbCallback(metric_name="combined_score")
