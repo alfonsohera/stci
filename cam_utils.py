@@ -446,10 +446,37 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     else:
         spec_for_plot = spectrogram
     
+    # Calculate actual frequency and time values
+    def hz_to_mel(hz):
+        return 2595 * np.log10(1 + hz / 700)
+
+    def mel_to_hz(mel):
+        return 700 * (10 ** (mel / 2595) - 1)
+
+    # Define axis scales
+    f_min, f_max = 50, 8000  # From your spectrogram settings
+    n_mels = spec_for_plot.shape[0]
+    hop_length = 320  # From your settings
+    sr = 16000  # Sample rate
+
+    # Generate frequency ticks (Hz) from mel scale
+    mel_points = np.linspace(hz_to_mel(f_min), hz_to_mel(f_max), n_mels)
+    freq_hz = [int(mel_to_hz(m)) for m in mel_points]
+
+    # Select a few frequency points for a cleaner y-axis
+    freq_ticks = np.linspace(0, n_mels-1, 8, dtype=int)
+    freq_labels = [f"{freq_hz[i]}" for i in freq_ticks]
+
+    # Create time axis in seconds
+    time_frames = spec_for_plot.shape[1]
+    time_sec = np.arange(time_frames) * hop_length / sr
+    time_ticks = np.linspace(0, time_frames-1, min(10, time_frames), dtype=int)
+    time_labels = [f"{time_sec[i]:.1f}" for i in time_ticks]
+
     # Create figure for visualization
     plt.figure(figsize=(12, 5))
     
-    # Plot spectrogram
+    # Plot spectrogram with actual time and frequency units
     plt.subplot(1, 2, 1)
     plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', cmap='viridis')
     title = f"Log-Mel Spectrogram\nPred: {pred_label} ({actual_pred_prob:.2f})"
@@ -457,14 +484,16 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         title += f"\nTrue: {true_label}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
-    plt.xlabel('Time Frames')
-    plt.ylabel('Mel Frequency Bin')
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Frequency (Hz)')
+    plt.xticks(time_ticks, time_labels)
+    plt.yticks(freq_ticks, freq_labels)
     
-    # Plot CAM heatmap
+    # Plot CAM heatmap with actual time and frequency units
     plt.subplot(1, 2, 2)
     plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', alpha=0.6, cmap='viridis')
     plt.imshow(np.resize(cam, (cam.shape[0], spec_for_plot.shape[1])).T, 
-              origin='lower', aspect='auto', alpha=0.4, cmap='jet')
+              origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
     
     title = f"Class Activation Map (Full Audio)\nPred: {pred_label} ({actual_pred_prob:.2f})"
     if target_class is not None:
@@ -478,8 +507,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
                 title += f"\nNote: Chunked pred was {class_names[int(chunked_pred)]}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
-    plt.xlabel('Time Frames')
-    plt.ylabel('Mel Frequency Bin')
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Frequency (Hz)')
+    plt.xticks(time_ticks, time_labels)
+    plt.yticks(freq_ticks, freq_labels)
     
     # Save files if path is provided
     spec_path = None
@@ -518,8 +549,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', cmap='viridis')
         plt.colorbar(format='%+2.0f dB')
         plt.title(f"Log-Mel Spectrogram - {file_id}")
-        plt.xlabel('Time Frames')
-        plt.ylabel('Mel Frequency Bin')
+        plt.xlabel('Time (seconds)')
+        plt.ylabel('Frequency (Hz)')
+        plt.xticks(time_ticks, time_labels)
+        plt.yticks(freq_ticks, freq_labels)
         plt.tight_layout()
         plt.savefig(spec_path, dpi=150)
         
