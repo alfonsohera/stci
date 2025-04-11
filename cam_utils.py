@@ -559,8 +559,27 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
 
     # Map class indices to human-readable labels - DEFINE ONLY ONCE
     class_names = ["Healthy", "MCI", "AD"]
-    pred_label = class_names[actual_pred_class]  # Use actual prediction  
-    true_label = class_names[target_class] if target_class is not None else "Unknown"
+
+    # Extract the prediction and true class indices from the audio_id if available
+    pred_class_idx = actual_pred_class  # Default to actual prediction
+    true_class_idx = target_class if target_class is not None else None  # Default to provided target class
+
+    # If audio_id contains pred and true info (e.g., "11_pred2_true2"), extract them
+    if audio_id is not None and 'pred' in audio_id and 'true' in audio_id:
+        try:
+            # Extract pred and true indices from the audio_id
+            parts = audio_id.split('_')
+            for part in parts:
+                if part.startswith('pred'):
+                    pred_class_idx = int(part[4:])
+                elif part.startswith('true'):
+                    true_class_idx = int(part[4:])
+        except (ValueError, IndexError) as e:
+            print(f"Warning: Could not extract class indices from audio_id: {audio_id}, {e}")
+
+    # Now map to human-readable labels using the extracted indices
+    pred_label = class_names[pred_class_idx]
+    true_label = class_names[true_class_idx] if true_class_idx is not None else "Unknown"
 
     # Create filename
     if audio_id is not None and ('pred' in audio_id or 'true' in audio_id):
