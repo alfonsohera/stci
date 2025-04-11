@@ -57,9 +57,9 @@ def createDataframe_filtered():
 def extract_and_report_features():
     """
     Extract prosodic and acoustic features from audio files and 
-    generate a statistical report of features across classes.
+    generate a statistical report of features across classes,
+    excluding files specified in exclude_list.csv.
     """
-
     myData.DownloadAndExtract()    
     # Check if dataframe.csv exists in the Data directory
     data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
@@ -76,36 +76,100 @@ def extract_and_report_features():
         # Save dataframe
         data_df.to_csv(data_file_path, index=False)
         print(f"Created and saved dataframe to {data_file_path}")
-        print("Extracting prosodic and acoustic features...")                
+        print("Extracting prosodic and acoustic features...")
+    
+    # Load exclude list
+    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    if os.path.exists(exclude_list_path):
+        exclude_df = pd.read_csv(exclude_list_path)
+        exclude_filenames = set(exclude_df['filename'].tolist())
+        print(f"Loaded exclude list with {len(exclude_filenames)} files to exclude")
+    else:
+        print(f"Warning: Exclude list not found at {exclude_list_path}")
+        exclude_filenames = set()
+    
+    # Apply the exclude list by filtering the dataframe
+    initial_count = len(data_df)
+    
+    # Create a function to extract base filename without directory and extension
+    def extract_base_filename(file_path):
+        # Get filename without directory
+        filename = os.path.basename(file_path)
+        # Remove extension
+        base_name = os.path.splitext(filename)[0]
+        return base_name
+    
+    # Apply filter to exclude files
+    data_df['base_filename'] = data_df['file_path'].apply(extract_base_filename)
+    filtered_df = data_df[~data_df['base_filename'].isin(exclude_filenames)]
+    filtered_df = filtered_df.drop('base_filename', axis=1)  # Remove temporary column
+    
+    excluded_count = initial_count - len(filtered_df)
+    print(f"Excluded {excluded_count} files from the dataset for feature statistics")
+                
     # Create a combined list of features for reporting
     all_features = myData.extracted_features
     
-    # Group by class and compute statistics for all features
-    stats = data_df.groupby('class')[all_features].agg(['mean', 'std'])
+    # Group by class and compute statistics for all features using filtered data
+    stats = filtered_df.groupby('class')[all_features].agg(['mean', 'std'])
     
-    print("\n===== Feature Statistics Report =====")
+    print("\n===== Feature Statistics Report (Filtered Dataset) =====")
     print("\nFeature statistics by class (Healthy, MCI, AD):")
     print(stats)
     
     # Print overall statistics
-    print("\nOverall feature statistics:")
-    overall_stats = data_df[all_features].describe()
+    print("\nOverall feature statistics (Filtered Dataset):")
+    overall_stats = filtered_df[all_features].describe()
     print(overall_stats)
     
-    return data_df, stats
+    #Audio duration stats
+    print("\nAudio duration statistics (Filtered Dataset):")
+    myPlots.plotProsodicFeatures(filtered_df)
+    return filtered_df, stats
 
 
 def plot_feature_histograms():
     """
-    Extract prosodic and acoustic features and create histogram plots.
+    Extract prosodic and acoustic features and create histogram plots,
+    excluding files specified in exclude_list.csv.
     """
+    # Extract and report features
     data_df, _ = extract_and_report_features()
     
-    print("Generating histogram plots for prosodic features...")
-    myPlots.histogramProsodicFeatures(data_df)
+    # Load exclude list
+    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    if os.path.exists(exclude_list_path):
+        exclude_df = pd.read_csv(exclude_list_path)
+        exclude_filenames = set(exclude_df['filename'].tolist())
+        print(f"Loaded exclude list with {len(exclude_filenames)} files to exclude")
+    else:
+        print(f"Warning: Exclude list not found at {exclude_list_path}")
+        exclude_filenames = set()
     
-    print("Histogram plots generated successfully.")
-    return data_df
+    # Apply the exclude list by filtering the dataframe
+    initial_count = len(data_df)
+    
+    # Create a function to extract base filename without directory and extension
+    def extract_base_filename(file_path):
+        # Get filename without directory
+        filename = os.path.basename(file_path)
+        # Remove extension
+        base_name = os.path.splitext(filename)[0]
+        return base_name
+    
+    # Apply filter to exclude files
+    data_df['base_filename'] = data_df['file_path'].apply(extract_base_filename)
+    filtered_df = data_df[~data_df['base_filename'].isin(exclude_filenames)]
+    filtered_df = filtered_df.drop('base_filename', axis=1)  # Remove temporary column
+    
+    excluded_count = initial_count - len(filtered_df)
+    print(f"Excluded {excluded_count} files from the dataset for histogram plots")
+    
+    print("Generating histogram plots for prosodic features...")
+    myPlots.histogramProsodicFeatures(filtered_df)
+    
+    print("Histogram plots generated successfully using filtered data.")
+    return filtered_df
 
 
 def main():
