@@ -222,11 +222,13 @@ class CNN14Classifier(nn.Module):
 class PretrainedDualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
                  apply_specaugment=False, use_prosodic_features=True, 
-                 prosodic_feature_dim=4, pretrained_cnn14_path=None):
+                 prosodic_feature_dim=4, pretrained_cnn14_path=None,
+                 attention_dropout=0.3, fusion_dropout=0.4, prosodic_weight=1.0):
         super(PretrainedDualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels
         self.apply_specaugment = apply_specaugment
+        self.prosodic_weight = prosodic_weight
                 
         # SpecAugment for data augmentation during training
         if apply_specaugment:
@@ -267,17 +269,16 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         self.audio_downsample = nn.Conv1d(1, 32, kernel_size=100, stride=120)        
         self.position_embedding = nn.Parameter(torch.randn(1, 128, 32))  # Max seq length 128, feature dim 32
         
-        # Self-attention layers
-        # Attention path - increase dropout
+        # Self-attention layers        
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=0.3)  
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=attention_dropout)  
         ])
         
         # Attention output processing
         self.attention_pooling = nn.Sequential(
             nn.Linear(32, 256),
             nn.ReLU(),
-            nn.Dropout(0.4)
+            nn.Dropout(attention_dropout)  
         )
         
         # Add prosodic feature processing
@@ -302,13 +303,13 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             # Modified fusion to include prosodic features
             # Fusion layers - increase dropout
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256 + 128 + 32, 384),  # CNN + Attention + Prosodic + Chunk
+                nn.Linear(256 + 256 + 128 + 32, 384),
                 nn.LayerNorm(384),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(fusion_dropout),  # Use configurable dropout
                 nn.Linear(384, 128),
                 nn.ReLU(),
-                nn.Dropout(0.4)
+                nn.Dropout(fusion_dropout)   # Use configurable dropout
             )
         else:
             # Fusion layer (CNN features + Attention features)
@@ -421,7 +422,8 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         if self.use_prosodic_features and prosodic_features is not None:
             # Encode prosodic features
             prosodic_encoded = self.prosodic_encoder(prosodic_features)  # [B, 128]
-            
+            # Scale prosodic features by weight
+            prosodic_encoded = prosodic_encoded * self.prosodic_weight
             # Process chunk context if available
             if chunk_context is not None:
                 # chunk_context contains: [relative_position, relative_length]
@@ -473,8 +475,8 @@ class ImprovedSelfAttention(nn.Module):
         
         # Improved feed-forward with GELU and different expansion ratio
         self.ff = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim * 2),  # Smaller for efficiency
-            nn.GELU(),  # GELU often performs better than ReLU
+            nn.Linear(embed_dim, embed_dim * 2),  
+            nn.GELU(),  
             nn.Dropout(dropout),
             nn.Linear(embed_dim * 2, embed_dim)
         )

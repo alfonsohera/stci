@@ -692,19 +692,19 @@ def optimize_cnn_rnn():
         n_mels=hpo_n_mels
     )
      """
-    hpo_dropout = 0.27059238539331787
+    """ hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
     dropout_rate=hpo_dropout,  
     freeze_extractor=True  
-    )
-    """ model = PretrainedDualPathAudioClassifier(
+    ) """
+    model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
-    ) """
+    )
     # Load the best model weights if available
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -765,19 +765,19 @@ def test_cnn_rnn_with_thresholds():
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    hpo_dropout = 0.27059238539331787
+    """ hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
     dropout_rate=hpo_dropout,  
     freeze_extractor=True  
-    )
-    """ model = PretrainedDualPathAudioClassifier(
+    ) """
+    model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
-    ) """
+    )
     # Load the best model weights
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -1204,7 +1204,7 @@ def run_cross_validation(n_folds=5):
 
 def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier,PretrainedDualPathAudioClassifier
     from sklearn.utils.class_weight import compute_class_weight
     from sklearn.model_selection import StratifiedKFold
     import json
@@ -1252,16 +1252,23 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             torch.cuda.empty_cache()
             gc.collect()
                         
-            dropout_rate = trial.suggest_float("dropout_rate", 0.2, 0.7)
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 1.2)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.5, 2.5)
+            # Core hyperparameters from previous optimization
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.2, 0.5)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.8, 2.0)
             weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 2e-4, 2e-3, log=True)
-            hpo_pct_start = trial.suggest_float("pct_start", 0.1, 0.4)  
-            hpo_div_factor = trial.suggest_float("div_factor", 10.0, 30.0)  
-            hpo_div_factor_final = trial.suggest_float("final_div_factor", 100.0, 1000.0, log=True)                                     
-            trial_name = f"trial_{trial.number}"
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 2e-3, log=True)
+            hpo_pct_start = trial.suggest_float("pct_start", 0.2, 0.4)  
+            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 40.0)  
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)
+
+            #hyperparameters specific to the Dual Path model
+            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.5)                        
+            prosodic_weight = trial.suggest_float("prosodic_weight", 0.5, 2.0)
             
+            
+            
+            trial_name = f"trial_{trial.number}"            
             # Log trial parameters to wandb
             if wandb.run:
                 wandb.log({
@@ -1312,12 +1319,20 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                     n_mels=n_mels,
                     apply_specaugment=True,
                 ) """
-                fold_model = CNN14Classifier(
+                """ fold_model = CNN14Classifier(
                     num_classes=3,
                     sample_rate=16000,
                     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
                     dropout_rate=dropout_rate,  # Direct control of dropout in classifier head  
                     freeze_extractor=True  # Always keep extractor frozen  
+                ) """
+                fold_model = PretrainedDualPathAudioClassifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+                    attention_dropout=attention_dropout,
+                    fusion_dropout=fusion_dropout,
+                    prosodic_weight=prosodic_weight
                 )
                 fold_model.to(device)
                 
