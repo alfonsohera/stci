@@ -1444,7 +1444,8 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             norm_val_loss = max(0, 1 - (avg_val_loss / MAX_VAL_LOSS))
             
             # Combined objective: prioritize both high F1 and low validation loss
-            combined_score = avg_f1_macro * (0.8 + 0.2 * norm_val_loss)
+            #combined_score = avg_f1_macro * (0.8 + 0.2 * norm_val_loss)
+            combined_score = avg_f1_macro
             
             print(f"Trial {trial.number} completed: Avg F1 across {n_folds} folds: {avg_f1_macro:.4f}, Combined Score: {combined_score:.4f}")
             print(f"Individual fold F1 scores: {fold_f1_scores}")
