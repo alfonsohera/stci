@@ -488,7 +488,7 @@ if __name__ == "__main__":
         # Import CNN+RNN threshold optimization if it exists
         try:
             from cnn_rnn_train import optimize_cnn_rnn, test_cnn_rnn_with_thresholds
-            from cnn_rnn_train import run_cross_validation, run_bayesian_optimization
+            from cnn_rnn_train import run_bayesian_optimization
             has_threshold_functions = True
         except ImportError:
             has_threshold_functions = False
@@ -525,12 +525,6 @@ if __name__ == "__main__":
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
-        elif args.mode == "cv":
-            if has_threshold_functions:
-                print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
-                run_cross_validation(n_folds=args.folds)
-            else:
-                print("Cross-validation not implemented. Please check your installation.")
         elif args.mode == "hpo":
             if has_threshold_functions:
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")

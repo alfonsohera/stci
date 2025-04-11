@@ -193,8 +193,23 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=Non
     return avg_train_loss
 
 
-def evaluate(model, val_loader, criterion, device):
-    """Evaluate the model on validation data."""
+def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir=None, max_cam_samples=10, epoch=None):
+    """
+    Evaluate the model on validation data.
+    
+    Args:
+        model: Model to evaluate
+        val_loader: DataLoader for evaluation
+        criterion: Loss function
+        device: Device to run evaluation on
+        use_cam: Whether to generate CAM visualizations
+        cam_output_dir: Directory to save CAM visualizations
+        max_cam_samples: Maximum number of samples to visualize per class and prediction outcome
+    """
+    from cam_utils import visualize_cam
+    import random
+    import os
+    
     model.eval()
     val_loss = 0.0
     all_preds = []
@@ -202,6 +217,13 @@ def evaluate(model, val_loader, criterion, device):
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
     audio_labels = {}
+    audio_tensors = {} # Store audio tensors for CAM visualization
+    
+    # Counters for CAM visualization
+    cam_counters = {
+        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
+        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+    }
     
     with torch.inference_mode():
         for batch in tqdm(val_loader, desc="Validation"):
@@ -227,9 +249,14 @@ def evaluate(model, val_loader, criterion, device):
                 val_loss += loss.item()
                 # Get predictions
                 preds = torch.argmax(logits, dim=-1)
+                
                 # Track predictions and labels
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(batch["labels"].cpu().numpy())
+                
+                # Process CAM visualization for selected samples if enabled
+                if use_cam and cam_output_dir:
+                    process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples)
             else:
                 # Process batches with audio_ids for chunking
                 # Forward pass to get logits for each chunk
@@ -245,8 +272,13 @@ def evaluate(model, val_loader, criterion, device):
                 for j, audio_id in enumerate(audio_ids):
                     if audio_id not in audio_chunks:
                         audio_chunks[audio_id] = []
-                        # Store the label for this audio
+                        # Store the label and audio for this audio
                         audio_labels[audio_id] = batch["labels"][j]
+                        
+                        # Store audio tensor for later CAM visualization
+                        if use_cam:
+                            # Get single sample from batch
+                            audio_tensors[audio_id] = batch["audio"][j:j+1].detach().clone()
                     
                     # Store the logits for this chunk
                     audio_chunks[audio_id].append(logits[j])
@@ -268,8 +300,76 @@ def evaluate(model, val_loader, criterion, device):
             pred = torch.argmax(aggregated_output)
             all_preds.append(pred.cpu().numpy())
             all_labels.append(label.cpu().numpy())
+            
+            # Process CAM for chunked audio
+            if use_cam and cam_output_dir and audio_id in audio_tensors:
+                audio = audio_tensors[audio_id]
+                true_class = label.item()
+                pred_class = pred.item()
+                
+                # Check if prediction is correct
+                is_correct = pred_class == true_class
+                status = 'correct' if is_correct else 'incorrect'
+
+                # If we haven't reached the maximum samples for this class and outcome
+                if cam_counters[status][true_class] < max_cam_samples:
+                    # For incorrect predictions, use pred_class to visualize what the model actually saw
+                    target_for_cam = pred_class if not is_correct else true_class
+
+                    visualize_cam(
+                        audio=audio,
+                        model=model,
+                        target_class=target_for_cam,
+                        save_path=cam_output_dir,
+                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        correct=is_correct,
+                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                        epoch=epoch  
+                    )
+                    
+                    # Update counter
+                    cam_counters[status][true_class] += 1
     
     return val_loss, all_labels, all_preds
+
+def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples):
+    """Process batch for CAM visualization"""
+    import os
+    from cam_utils import visualize_cam
+    
+    # Process some samples for CAM visualization
+    for i in range(len(preds)):
+        true_class = batch["labels"][i].item()
+        pred_class = preds[i].item()
+        
+        # Check if prediction is correct
+        is_correct = pred_class == true_class
+        status = 'correct' if is_correct else 'incorrect'
+        
+        # If we haven't reached the maximum samples for this class and outcome
+        if cam_counters[status][true_class] < max_cam_samples:
+            # For incorrect predictions, use pred_class to visualize what the model actually saw
+            target_for_cam = pred_class if not is_correct else true_class
+            # Get audio for this sample
+            audio = batch["audio"][i:i+1]  # Keep batch dimension
+            
+            # Generate CAM
+            audio_id = f"eval_sample_{i}"
+            if "audio_id" in batch and batch["audio_id"] is not None:
+                audio_id = batch["audio_id"][i]
+            
+            visualize_cam(
+                audio=audio,
+                model=model,
+                target_class=target_for_cam,  # Use prediction for incorrect samples
+                save_path=cam_output_dir,
+                audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
+                correct=is_correct,
+                audio_paths_dir=os.path.join(cam_output_dir, "audio_paths")
+            )
+            
+            # Update counter
+            cam_counters[status][true_class] += 1
 
 
 def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
@@ -278,13 +378,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # From HPO:        
-    hpo_max_lr = 0.0012349118136969503  
-    hpo_focal_loss_gamma = 1.2823995520334321
-    hpo_weight_scaling_factor = 0.33101479502425385
-    hpo_weight_decay = 3.564042168831547e-05
-    hpo_pct_start = 0.3039854042370648
-    hpo_div_factor = 28.511116929054193
-    hpo_final_div_factor = 337.0803040420639
+    hpo_max_lr = 0.0010831279442946378
+    hpo_focal_loss_gamma = 1.2214471854780586
+    hpo_weight_scaling_factor = 0.42877749204715
+    hpo_weight_decay = 6.754417251186016e-05
+    hpo_pct_start = 0.24140038998213117
+    hpo_div_factor = 26.312388937073905
+    hpo_final_div_factor = 294.73021118648194
 
     # Initialize wandb
     if not wandb.run:
@@ -322,17 +422,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
     criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
-    
-    # Adjust all dropout rates in the model
-    """ for module in model.modules():
-        if isinstance(module, nn.Dropout):
-            # Get current dropout probability
-            current_p = module.p
-            # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
-            new_p = min(current_p * hpo_dropout_factor, 0.7)
-            # Set new dropout probability
-            module.p = new_p
-    """
+        
     model.to(device)
 
     # Set up the optimizer with proper hyperparameters    
@@ -386,7 +476,11 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             model, 
             dataloaders["validation"], 
             criterion, 
-            device
+            device,
+            use_cam=True,                                      # Enable CAM visualization
+            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+            max_cam_samples=10,                                 # Max samples per class/outcome
+            epoch=epoch
         )
                        
         # Calculate metrics
@@ -497,8 +591,20 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, test_loader):
-    """Test the CNN+RNN model on the test set."""
+def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=10):
+    """
+    Test the CNN+RNN model on the test set with optional CAM visualization.
+    
+    Args:
+        model: The model to test
+        test_loader: DataLoader for test data
+        use_cam: Whether to generate CAM visualizations
+        cam_output_dir: Directory to save CAM visualizations
+        max_cam_samples: Maximum number of samples to visualize per class and prediction outcome
+    """
+    from cam_utils import visualize_cam
+    import os
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -509,6 +615,22 @@ def test_cnn_rnn_model(model, test_loader):
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
     audio_labels = {}
+    audio_tensors = {}  # Store audio tensors for CAM visualization
+    
+    # Counters for CAM visualization
+    cam_counters = {
+        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
+        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+    }
+    
+    # Create output directories if needed
+    if use_cam and cam_output_dir:
+        os.makedirs(cam_output_dir, exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'correct'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'incorrect'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'correct'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'incorrect'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'audio_paths'), exist_ok=True)
     
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Testing"):
@@ -530,6 +652,10 @@ def test_cnn_rnn_model(model, test_loader):
                 preds = torch.argmax(logits, dim=-1)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(batch["labels"].cpu().numpy())
+                
+                # Process CAM visualization for selected samples if enabled
+                if use_cam and cam_output_dir:
+                    process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples)
             else:
                 # Process batches with audio_ids for chunking
                 logits = model(
@@ -546,6 +672,10 @@ def test_cnn_rnn_model(model, test_loader):
                         audio_chunks[audio_id] = []
                         # Store the label for this audio
                         audio_labels[audio_id] = batch["labels"][j]
+                        
+                        # Store audio tensor for later CAM visualization
+                        if use_cam:
+                            audio_tensors[audio_id] = batch["audio"][j:j+1].detach().clone()
                     
                     # Store the logits for this chunk
                     audio_chunks[audio_id].append(logits[j])
@@ -563,6 +693,32 @@ def test_cnn_rnn_model(model, test_loader):
             pred = torch.argmax(aggregated_output)
             all_preds.append(pred.cpu().numpy())
             all_labels.append(label.cpu().numpy())
+            
+            # Process CAM for chunked audio
+            if use_cam and cam_output_dir and audio_id in audio_tensors:
+                audio = audio_tensors[audio_id]
+                true_class = label.item()
+                pred_class = pred.item()
+                
+                # Check if prediction is correct
+                is_correct = pred_class == true_class
+                status = 'correct' if is_correct else 'incorrect'
+                target_for_cam = pred_class if not is_correct else true_class
+                # If we haven't reached max samples for this class/outcome
+                if cam_counters[status][true_class] < max_cam_samples:
+                    # Generate CAM visualization
+                    visualize_cam(
+                        audio=audio,
+                        model=model,
+                        target_class=target_for_cam,  # This should be pred_class for incorrect samples
+                        save_path=cam_output_dir,
+                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Consistent format
+                        correct=is_correct,
+                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths")
+                    )
+                    
+                    # Update counter
+                    cam_counters[status][true_class] += 1
     
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
@@ -573,6 +729,18 @@ def test_cnn_rnn_model(model, test_loader):
     print(f"Test Accuracy: {test_accuracy:.4f}")
     print("Classification Report:")
     print(report)
+    
+    # Print CAM generation summary if enabled
+    if use_cam:
+        print("\nCAM Visualization Summary:")
+        for status in ['correct', 'incorrect']:
+            print(f"  {status.capitalize()} predictions:")
+            for class_id, count in cam_counters[status].items():
+                class_name = ["Healthy", "MCI", "AD"][class_id]
+                print(f"    Class {class_name}: {count} samples")
+        print(f"\nVisualizations saved to {cam_output_dir}")
+    
+    return test_accuracy, all_preds, all_labels
 
 
 def main_cnn_rnn(use_prosodic_features=False):
@@ -622,10 +790,17 @@ def main_cnn_rnn(use_prosodic_features=False):
     freeze_extractor=True  
     ) """
     
+    hpo_attention_dropout: 0.21790974595973722
+    hpo_fusion_dropout: 0.3668445892921854
+    hpo_prosodic_weight: 0.8587093661398519
+    
     model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
     )
 
     print("Model created!")
@@ -635,7 +810,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     train_cnn_rnn_model(
         model, 
         dataloaders, 
-        num_epochs=20
+        num_epochs=10
     )
     print("Training complete!")
 
@@ -669,7 +844,13 @@ def test_cnn_rnn():
         print("No pre-trained model found. Using randomly initialized weights.")
     
     # Run evaluation
-    test_cnn_rnn_model(model, dataloaders["test"])
+    test_cnn_rnn_model(
+        model,
+        dataloaders["test"],
+        use_cam=True,                                  # Enable CAM visualization
+        cam_output_dir="/ProcessedFiles/CAM_Test",     # Output directory
+        max_cam_samples=10                             # Max samples per class/outcome
+    )
 
 
 def optimize_cnn_rnn():
@@ -991,215 +1172,6 @@ def test_cnn_rnn_with_thresholds():
         print("Please run optimize_cnn_rnn() first to generate threshold values.")
 
 
-def run_cross_validation(n_folds=5):
-    from sklearn.utils.class_weight import compute_class_weight
-    """Run k-fold cross-validation for the CNN+RNN model."""
-    from sklearn.model_selection import KFold
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier
-    import numpy as np
-    import json
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # From HPO:    
-    hpo_max_lr = 0.00024692501843698
-    hpo_focal_loss_gamma = 2.132851877562218
-    hpo_weight_scaling_factor = 0.3705412641765997
-    hpo_weight_decay = 3.855106137594842e-06
-    hpo_dropout_factor = 0.8899738095977145
-    hpo_n_mels = 128
-
-    cv_epochs = 15
-    print(f"Running {n_folds}-fold cross-validation...")
-    
-    # Load and prepare dataset
-    dataset = prepare_cnn_rnn_dataset()
-    
-    # Combine train and validation for cross-validation
-    combined_data = []
-    for split in ["train", "validation"]:
-        for i in range(len(dataset[split])):
-            item = dataset[split][i]
-            combined_data.append(item)
-    
-    # Prepare indices for k-fold splits
-    indices = np.arange(len(combined_data))
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-    
-    cv_results = []
-    fold_metrics = []
-    
-    # Run training for each fold
-    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
-        print(f"\n--- Processing Fold {fold_idx+1}/{n_folds} ---")
-        
-        # Create fold-specific datasets
-        fold_train = [combined_data[i] for i in train_idx]
-        fold_val = [combined_data[i] for i in val_idx]
-        fold_test = dataset["test"]  # Use original test set
-        
-        # Create balanced training dataset
-        print("Creating balanced dataset for this fold...")
-        fold_train_balanced = AugmentedDataset(
-            original_dataset=fold_train,            
-            num_classes=3
-        )        
-        
-        # Create temporary dataset with the fold splits
-        fold_dataset = {
-            "train": fold_train_balanced,
-            "validation": fold_val,
-            "test": fold_test
-        }
-        
-        # Get dataloaders for this fold
-        fold_dataloaders = get_cnn_rnn_dataloaders(
-            fold_dataset,
-            batch_size=96
-        )
-        
-        # Create new model for this fold
-        """ fold_model = DualPathAudioClassifier(
-            num_classes=3,
-            sample_rate=16000,
-            n_mels=hpo_n_mels
-        ) """
-        fold_model = CNN14Classifier(
-            num_classes=3,
-            sample_rate=16000,
-            pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-            dropout_rate=0.5,  
-            freeze_extractor=True  
-        )
-        
-        # Calculate class weights with scaling factor
-        classes = np.array([0, 1, 2])  
-        class_counts = myConfig.num_samples_per_class
-        y = np.array([])
-        # Create array with labels based on known counts
-        for class_id, count in class_counts.items():
-            y = np.append(y, [class_id] * count)
-        # Compute balanced weights
-        raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
-        # Apply scaling factor to make weights less extreme
-        scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
-        # Normalize to maintain sum proportionality
-        scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
-        # Convert to tensor
-        weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
-        # Set up the loss function with class weighting
-        criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
-        
-        # Adjust all dropout rates in the model
-        for module in fold_model.modules():
-            if isinstance(module, nn.Dropout):
-                # Get current dropout probability
-                current_p = module.p
-                # Apply dropout factor, but cap at 0.7 to avoid excessive dropout
-                new_p = min(current_p * hpo_dropout_factor, 0.7)
-                # Set new dropout probability
-                module.p = new_p
- 
-        # Train the model on this fold        
-        fold_model.to(device)
-                        
-        optimizer = torch.optim.Adam(
-            fold_model.parameters(),
-            lr=hpo_max_lr,
-            weight_decay=hpo_weight_decay,            
-        )
-        
-        # Train for fewer epochs in cross-validation
-        best_val_f1 = 0.0
-        fold_best_metrics = {}
-        
-        print(f"Training fold {fold_idx+1}...")
-        for epoch in range(cv_epochs):  # 5 epochs per fold
-            # Train
-            train_loss = train_epoch(
-                fold_model, fold_dataloaders["train"], optimizer, 
-                criterion, device
-            )
-            
-            # Validate
-            val_loss, val_labels, val_preds = evaluate(
-                fold_model, fold_dataloaders["validation"], 
-                criterion, device
-            )
-            
-            # Calculate metrics
-            val_accuracy = accuracy_score(val_labels, val_preds)
-            val_f1_macro = f1_score(val_labels, val_preds, average='macro')
-            
-            print(f"Fold {fold_idx+1}, Epoch {epoch+1}: Val Acc={val_accuracy:.4f}, F1={val_f1_macro:.4f}")
-            
-            # Track best model
-            if val_f1_macro > best_val_f1:
-                best_val_f1 = val_f1_macro
-                fold_best_metrics = {
-                    "fold": fold_idx+1,
-                    "val_accuracy": val_accuracy,
-                    "val_f1_macro": val_f1_macro,
-                    "val_loss": val_loss / len(fold_dataloaders["validation"]),
-                    "epoch": epoch + 1
-                }
-        
-        # Test the best model on this fold
-        test_loss, test_labels, test_preds = evaluate(
-            fold_model, fold_dataloaders["test"],
-            criterion, device
-        )
-        
-        # Calculate test metrics
-        test_accuracy = accuracy_score(test_labels, test_preds)
-        test_f1_macro = f1_score(test_labels, test_preds, average='macro')
-        
-        # Add test metrics to fold results
-        fold_best_metrics.update({
-            "test_accuracy": test_accuracy,
-            "test_f1_macro": test_f1_macro,
-            "test_loss": test_loss / len(fold_dataloaders["test"])
-        })
-        
-        fold_metrics.append(fold_best_metrics)
-        print(f"Fold {fold_idx+1} test results: Acc={test_accuracy:.4f}, F1={test_f1_macro:.4f}")
-        
-        # Clean up to free memory
-        del fold_model, optimizer, criterion
-        del fold_dataloaders, fold_dataset, fold_train, fold_val
-        gc.collect()
-        torch.cuda.empty_cache()
-    
-    # Calculate average metrics across folds
-    avg_metrics = {
-        "val_accuracy": np.mean([fold["val_accuracy"] for fold in fold_metrics]),
-        "val_f1_macro": np.mean([fold["val_f1_macro"] for fold in fold_metrics]),
-        "test_accuracy": np.mean([fold["test_accuracy"] for fold in fold_metrics]),
-        "test_f1_macro": np.mean([fold["test_f1_macro"] for fold in fold_metrics]),
-    }
-    
-    # Store full results
-    cv_results = {
-        "fold_metrics": fold_metrics,
-        "avg_metrics": avg_metrics
-    }
-    
-    # Print cross-validation summary
-    print("\n=== Cross-Validation Results ===")
-    print(f"Average validation accuracy: {avg_metrics['val_accuracy']:.4f}")
-    print(f"Average validation F1-macro: {avg_metrics['val_f1_macro']:.4f}")
-    print(f"Average test accuracy: {avg_metrics['test_accuracy']:.4f}")
-    print(f"Average test F1-macro: {avg_metrics['test_f1_macro']:.4f}")
-    
-    # Save results
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "cross_validation")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    with open(os.path.join(output_dir, f"cv_{n_folds}fold_results.json"), "w") as f:
-        json.dump(cv_results, f, indent=2)
-    
-    print(f"Cross-validation results saved to {output_dir}")
-    return cv_results
 
 
 def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
@@ -1391,7 +1363,13 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
 
                         # Evaluate 
                         val_loss, val_labels, val_preds = evaluate(
-                            fold_model, fold_val_loader, criterion, device
+                            fold_model, 
+                            fold_val_loader, 
+                            criterion, 
+                            device,
+                            use_cam=True,
+                            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+                            max_cam_samples=10                                 # Max samples per class/outcome
                         )
 
                         val_f1_macro = f1_score(val_labels, val_preds, average='macro')
@@ -1760,8 +1738,10 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             model, 
             dataloaders["validation"], 
             criterion, 
-            device, 
-            use_prosodic_features
+            device,
+            use_cam=True,                                      # Enable CAM visualization
+            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+            max_cam_samples=10                                 # Max samples per class/outcome
         )
         
         # Calculate metrics
@@ -1803,7 +1783,13 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Test on test set
     print("\nTesting optimized model on test set...")
     test_loss, test_labels, test_preds = evaluate(
-        model, dataloaders["test"], criterion, device, use_prosodic_features
+        model, 
+        dataloaders["test"], 
+        criterion, 
+        device, 
+        use_prosodic_features,
+        cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Test'  ,   # Output directory
+        max_cam_samples=10  # Max samples per class/outcome
     )
     
     # Calculate test metrics
