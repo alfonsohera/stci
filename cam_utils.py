@@ -402,15 +402,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         actual_probs = F.softmax(actual_logits, dim=1)
         actual_pred_prob = actual_probs[0, actual_pred_class].item()
 
-    # CRITICAL FIX: Verify and correct the 'correct' flag based on actual prediction
-    if target_class is not None:
-        is_actual_correct = actual_pred_class == target_class
-        if correct is not None and correct != is_actual_correct:
-            print(f"Warning: 'correct' flag ({correct}) doesn't match actual prediction correctness ({is_actual_correct})")
-            print(f"  Audio ID: {audio_id}, Pred: {actual_pred_class}, True: {target_class}")
-            # Use the actual correctness for directory structure
-            correct = is_actual_correct
-
+    
     # Create subdirectories if needed now that we've verified 'correct'
     if save_path and correct is not None:
         status = "correct" if correct else "incorrect"
@@ -474,10 +466,16 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     plt.imshow(np.resize(cam, (cam.shape[0], spec_for_plot.shape[1])).T, 
               origin='lower', aspect='auto', alpha=0.4, cmap='jet')
     
-    title = f"Class Activation Map\nPred: {pred_label} ({actual_pred_prob:.2f})"
+    title = f"Class Activation Map (Full Audio)\nPred: {pred_label} ({actual_pred_prob:.2f})"
     if target_class is not None:
         result = "✓" if actual_pred_class == target_class else "✗"
         title += f"\nTrue: {true_label} {result}"
+        
+        # Add chunked prediction info if it differs
+        if 'pred' in audio_id:
+            chunked_pred = audio_id.split('_')[1].replace('pred', '')
+            if int(chunked_pred) != actual_pred_class:
+                title += f"\nNote: Chunked pred was {class_names[int(chunked_pred)]}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.xlabel('Time Frames')
@@ -488,14 +486,24 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     cam_path = None
     
     if save_path:
-        # Determine subdirectory based on correct/incorrect
+        # Initialize base subdirectories
         spec_subdir = 'LogMelSpecs'
         cam_subdir = 'CAMs'
         
+        # Add epoch to path if provided
+        if epoch is not None:
+            spec_subdir = os.path.join(f"epoch_{epoch}", spec_subdir)
+            cam_subdir = os.path.join(f"epoch_{epoch}", cam_subdir)
+        
+        # Then add correct/incorrect status
         if correct is not None:
             status = "correct" if correct else "incorrect" 
             spec_subdir = os.path.join(spec_subdir, status)
             cam_subdir = os.path.join(cam_subdir, status)
+        
+        # Create directories if they don't exist
+        os.makedirs(os.path.join(save_path, spec_subdir), exist_ok=True)
+        os.makedirs(os.path.join(save_path, cam_subdir), exist_ok=True)
         
         # Save paths (using file_id that was created above)
         spec_path = os.path.join(save_path, spec_subdir, f"{file_id}_spec.png")
@@ -517,6 +525,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         # Write to log file - ONLY ONCE
         if audio_paths_dir:
+            # Also organize audio paths by epoch if provided
+            if epoch is not None:
+                audio_paths_dir = os.path.join(audio_paths_dir, f"epoch_{epoch}")
+            
             os.makedirs(audio_paths_dir, exist_ok=True)
             paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
             with open(os.path.join(audio_paths_dir, paths_filename), 'a') as f:
