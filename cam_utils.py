@@ -5,6 +5,7 @@ import os
 from torch.nn import functional as F
 import torchaudio
 import torch.nn as nn
+from skimage.transform import resize
 
 
 def print_model_structure(model, indent=0):
@@ -492,8 +493,15 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Plot CAM heatmap with actual time and frequency units
     plt.subplot(1, 2, 2)
     plt.imshow(spec_for_plot.T, origin='lower', aspect='auto', alpha=0.6, cmap='viridis')
-    plt.imshow(np.resize(cam, (cam.shape[0], spec_for_plot.shape[1])).T, 
-              origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
+
+    # Resize CAM to match spectrogram dimensions
+    cam_resized = resize(cam, (spec_for_plot.shape[1],), anti_aliasing=True)
+    cam_2d = np.zeros((spec_for_plot.shape[1], spec_for_plot.shape[0]))
+    for i in range(spec_for_plot.shape[0]):
+        cam_2d[:, i] = cam_resized
+
+    # Plot the resized CAM
+    plt.imshow(cam_2d, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
     
     title = f"Class Activation Map (Full Audio)\nPred: {pred_label} ({actual_pred_prob:.2f})"
     if target_class is not None:
