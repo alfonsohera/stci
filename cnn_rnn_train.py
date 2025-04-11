@@ -790,10 +790,10 @@ def main_cnn_rnn(use_prosodic_features=False):
     freeze_extractor=True  
     ) """
     
-    hpo_attention_dropout: 0.21790974595973722
-    hpo_fusion_dropout: 0.3668445892921854
-    hpo_prosodic_weight: 0.8587093661398519
-    
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
     model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
