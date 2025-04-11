@@ -221,23 +221,13 @@ class CNN14Classifier(nn.Module):
 
 class PretrainedDualPathAudioClassifier(nn.Module):
     def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
-                 apply_specaugment=True, use_prosodic_features=False, 
+                 apply_specaugment=False, use_prosodic_features=True, 
                  prosodic_feature_dim=4, pretrained_cnn14_path=None):
         super(PretrainedDualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels
         self.apply_specaugment = apply_specaugment
-        
-        # Create mel spectrogram converter for the attention branch
-        self.mel_spec = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sample_rate,
-            n_fft=1024,
-            hop_length=128,
-            n_mels=n_mels
-        )
-        
-        self.amplitude_to_db = torchaudio.transforms.AmplitudeToDB()
-        
+                
         # SpecAugment for data augmentation during training
         if apply_specaugment:
             self.spec_augment = SpecAugment()

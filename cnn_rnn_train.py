@@ -584,7 +584,7 @@ def main_cnn_rnn(use_prosodic_features=False):
     # Load and prepare dataset using the dedicated cnn_rnn_data module
     dataset = prepare_cnn_rnn_dataset()
     
-    # Create balanced training dataset with augmentations
+    """ # Create balanced training dataset with augmentations
     print("Creating balanced training dataset with augmentations...")
     augmented_train_dataset = AugmentedDataset(
         original_dataset=dataset["train"],        
@@ -599,11 +599,11 @@ def main_cnn_rnn(use_prosodic_features=False):
         "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
-    } 
+    }  """
     
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
-        augmented_dataset,         
+        dataset,         
         batch_size=96
     )
     
@@ -613,20 +613,20 @@ def main_cnn_rnn(use_prosodic_features=False):
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    hpo_dropout = 0.27059238539331787
+    """ hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
     dropout_rate=hpo_dropout,  
     freeze_extractor=True  
-    )
+    ) """
     
-    """ model = PretrainedDualPathAudioClassifier(
+    model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
-    )  """   
+    )
 
     print("Model created!")
     
