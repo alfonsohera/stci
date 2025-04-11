@@ -276,13 +276,15 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     """Train the CNN+RNN model."""        
     from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
     # From HPO:        
-    hpo_max_lr = 0.001  
-    hpo_focal_loss_gamma = 2.299264218662403
-    hpo_weight_scaling_factor = 0.3522752509513795
-    hpo_weight_decay = 1.5930522616241016e-05
-    hpo_dropout = 0.27799726016810133
+    hpo_max_lr = 0.0012349118136969503  
+    hpo_focal_loss_gamma = 1.2823995520334321
+    hpo_weight_scaling_factor = 0.33101479502425385
+    hpo_weight_decay = 3.564042168831547e-05
+    hpo_pct_start: 0.3039854042370648
+    hpo_div_factor: 28.511116929054193
+    hpo_final_div_factor: 337.0803040420639
 
     # Initialize wandb
     if not wandb.run:
@@ -333,9 +335,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     """
     model.to(device)
 
-    # Set up the optimizer with proper hyperparameters
-    div_factor = 25
-    initial_lr = hpo_max_lr / div_factor
+    # Set up the optimizer with proper hyperparameters    
+    initial_lr = hpo_max_lr / hpo_div_factor
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=initial_lr,
@@ -349,9 +350,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         optimizer,
         max_lr=hpo_max_lr,
         total_steps=total_steps,
-        pct_start=0.25,
-        div_factor=div_factor,
-        final_div_factor=1000,
+        pct_start=hpo_pct_start,
+        div_factor=hpo_div_factor,
+        final_div_factor=hpo_final_div_factor,
         anneal_strategy='cos',
         three_phase=False
     )    
@@ -612,7 +613,7 @@ def main_cnn_rnn(use_prosodic_features=False):
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    hpo_dropout = 0.27799726016810133
+    hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
@@ -691,7 +692,7 @@ def optimize_cnn_rnn():
         n_mels=hpo_n_mels
     )
      """
-    hpo_dropout = 0.27799726016810133
+    hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
@@ -764,7 +765,7 @@ def test_cnn_rnn_with_thresholds():
         sample_rate=16000,
         n_mels=hpo_n_mels
     ) """
-    hpo_dropout = 0.27799726016810133
+    hpo_dropout = 0.27059238539331787
     model = CNN14Classifier(
     num_classes=3,
     sample_rate=16000,
