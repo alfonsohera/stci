@@ -427,7 +427,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     true_label = class_names[target_class] if target_class is not None else "Unknown"
 
     # Debug print to verify values
-    print(f"CAM Debug: audio_id={audio_id}, pred={actual_pred_class}({pred_label}), true={target_class}({true_label}), correct={correct}")
+    # print(f"CAM Debug: audio_id={audio_id}, pred={actual_pred_class}({pred_label}), true={target_class}({true_label}), correct={correct}")
 
     # Create filename
     if audio_id is not None and ('pred' in audio_id or 'true' in audio_id):
