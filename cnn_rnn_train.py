@@ -282,9 +282,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     hpo_focal_loss_gamma = 1.2823995520334321
     hpo_weight_scaling_factor = 0.33101479502425385
     hpo_weight_decay = 3.564042168831547e-05
-    hpo_pct_start: 0.3039854042370648
-    hpo_div_factor: 28.511116929054193
-    hpo_final_div_factor: 337.0803040420639
+    hpo_pct_start = 0.3039854042370648
+    hpo_div_factor = 28.511116929054193
+    hpo_final_div_factor = 337.0803040420639
 
     # Initialize wandb
     if not wandb.run:
