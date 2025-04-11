@@ -342,7 +342,7 @@ def generate_spectrogram(audio, model, sr=16000):
     return log_mel_spec.numpy()
 
 
-def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None):
+def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None):
     """
     Visualize CAM for an audio input
     """
@@ -416,6 +416,14 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         status = "correct" if correct else "incorrect"
         os.makedirs(os.path.join(save_path, 'LogMelSpecs', status), exist_ok=True)
         os.makedirs(os.path.join(save_path, 'CAMs', status), exist_ok=True)
+
+    # Add epoch parameter to function
+    if epoch is not None:
+        spec_subdir = os.path.join(f"epoch_{epoch}", 'LogMelSpecs')
+        cam_subdir = os.path.join(f"epoch_{epoch}", 'CAMs')
+    
+        os.makedirs(os.path.join(save_path, spec_subdir), exist_ok=True)
+        os.makedirs(os.path.join(save_path, cam_subdir), exist_ok=True)
 
     # Now do the CAM visualization with the desired target class  
     grad_cam = GradCAM(model, target_layer, use_cuda=(device.type == 'cuda'))
