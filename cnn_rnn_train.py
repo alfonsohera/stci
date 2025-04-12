@@ -1325,18 +1325,18 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
             gc.collect()
                         
             # Core hyperparameters from previous optimization
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.2, 0.5)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.8, 2.0)
-            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 2e-3, log=True)
-            hpo_pct_start = trial.suggest_float("pct_start", 0.2, 0.4)  
-            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 40.0)  
-            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 0.7)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.5, 1.5)  
+            weight_decay = trial.suggest_float("weight_decay", 5e-6, 5e-5, log=True)                      
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 3e-3, log=True)
+            hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.35)  
+            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 50.0)  
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 600.0)
 
             #hyperparameters specific to the Dual Path model
-            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.5)                        
-            prosodic_weight = trial.suggest_float("prosodic_weight", 0.5, 2.0)
+            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.3)
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.15, 0.4)                        
+            prosodic_weight = trial.suggest_float("prosodic_weight", 0.7, 2.5)
             
             
             
@@ -1631,16 +1631,16 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
         # Best previous hyperparameters as a starting point
         previous_best = {
             # Core parameters from previous best run
-            "learning_rate": 0.0012349118136969503,  
-            "focal_loss_gamma": 1.2823995520334321, 
-            "weight_scaling_factor": 0.33101479502425385, 
-            "weight_decay": 3.564042168831547e-05,            
-            "pct_start": 0.3039854042370648,
-            "div_factor": 28.511116929054193,
-            "final_div_factor": 337.0803040420639,
-            "attention_dropout": 0.25,  
-            "fusion_dropout": 0.35,     
-            "prosodic_weight": 1.0      
+            "learning_rate": 0.0010831279442946378,  
+            "focal_loss_gamma": 1.2214471854780586, 
+            "weight_scaling_factor": 0.42877749204715, 
+            "weight_decay": 6.754417251186016e-05,            
+            "pct_start": 0.24140038998213117,
+            "div_factor": 26.312388937073905,
+            "final_div_factor": 294.73021118648194,
+            "attention_dropout": 0.21790974595973722,  
+            "fusion_dropout": 0.3668445892921854,     
+            "prosodic_weight": 0.8587093661398519
         }
 
         study.enqueue_trial(previous_best)
