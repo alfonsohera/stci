@@ -910,10 +910,17 @@ def optimize_cnn_rnn():
     dropout_rate=hpo_dropout,  
     freeze_extractor=True  
     ) """
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
     model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
     )
     # Load the best model weights if available
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
@@ -983,10 +990,17 @@ def test_cnn_rnn_with_thresholds():
     dropout_rate=hpo_dropout,  
     freeze_extractor=True  
     ) """
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
     model = PretrainedDualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                    
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
     )
     # Load the best model weights
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
