@@ -514,9 +514,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             criterion, 
             device,
             use_cam=False,                                      # Enable CAM visualization
-            #cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
-            #max_cam_samples=10,                                 # Max samples per class/outcome
-            #epoch=epoch
+            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+            max_cam_samples=10,                                 # Max samples per class/outcome
+            epoch=epoch
         )
                        
         # Calculate metrics

@@ -574,8 +574,19 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Concatenate waveforms
     full_waveform = np.concatenate(all_waveforms)
 
-    # Map class indices to human-readable labels - DEFINE ONLY ONCE
-    class_names = ["Healthy", "MCI", "AD"]
+    # Map class indices to human-readable labels based on model's number of classes
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from the model
+        num_classes = 3
+    
+    if num_classes == 2:
+        # Binary classification
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        # 3-class classification
+        class_names = ["Healthy", "MCI", "AD"]
 
     # Extract the prediction and true class indices from the audio_id if available
     pred_class_idx = actual_pred_class  # Default to actual prediction
