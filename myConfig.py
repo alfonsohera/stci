@@ -82,7 +82,9 @@ cnn_rnn_hyperparams = {
     # Model-specific hyperparameters
     "attention_dropout":0.21990537650935826,
     "fusion_dropout": 0.25477743209947934,
-    "prosodic_weight": 1.4696607599726637
+    "prosodic_weight": 1.4696607599726637,
+    "learning_rate_cnn": 0.0001,
+    "weight_decay_cnn": 4.8738e-4
 }
 
 ## Definitions needed for the weighted cross entropy loss function

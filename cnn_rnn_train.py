@@ -569,7 +569,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             "val_loss": avg_val_loss,
             "val_accuracy": val_accuracy,
             "val_f1_macro": val_f1_macro,
-            "learning_rate": scheduler.get_last_lr()[0]
+            "learning_rate": scheduler.get_last_lr()[1]
         }
         
         # Compute class-specific metrics
@@ -1332,16 +1332,18 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                         
             # Core hyperparameters from previous optimization
             weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.38, 0.5)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 1.6)  
-            weight_decay = trial.suggest_float("weight_decay", 3e-5, 7e-5, log=True)                      
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 1.6)
+            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 1e-4, 5e-4, log=True)  
+            hpo_weight_decay = trial.suggest_float("weight_decay", 3e-5, 7e-5, log=True)
+            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 4e-5, 2e-4, log=True)                      
             hpo_max_learning_rate = trial.suggest_float("learning_rate", 8e-4, 1.5e-3, log=True)
             hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.25)  
             hpo_div_factor = trial.suggest_float("div_factor", 20.0, 30.0)  
             hpo_final_div_factor = trial.suggest_float("final_div_factor", 250.0, 350.0)
 
             #hyperparameters specific to the Dual Path model
-            attention_dropout = trial.suggest_float("attention_dropout", 0.2, 0.35)
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.22, 0.4)                        
+            attention_dropout = trial.suggest_float("attention_dropout", 0.15, 0.3)
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.35)                        
             prosodic_weight = trial.suggest_float("prosodic_weight", 1.2, 2.0)
             
             
@@ -1430,26 +1432,39 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                 # Set up the loss function with class weighting
                 criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
                 
-                # Create optimizer with trial hyperparameters
-                
-                optimizer = torch.optim.Adam(
-                    fold_model.parameters(),
-                    lr=hpo_max_learning_rate/hpo_div_factor,
-                    weight_decay=weight_decay,
-                )
+                cnn_params = []
+                other_params = []
+
+                # Group parameters for different learning rates
+                for name, param in fold_model.named_parameters():
+                    if param.requires_grad:
+                        if "cnn_extractor" in name:
+                            cnn_params.append(param)
+                        else:
+                            other_params.append(param)
+
+                # Set up the optimizer with parameter groups
+                initial_lr = hpo_max_learning_rate / hpo_div_factor
+                initial_cnn_lr = hpo_max_learning_rate_cnn / hpo_div_factor
+
+                optimizer = torch.optim.Adam([
+                    {'params': cnn_params, 'lr': initial_cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
+                    {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+                ])
+
                 total_steps = len(fold_dataloaders["train"]) * n_epochs
-    
+                
                 # Create scheduler with optimized hyperparameters
                 scheduler = torch.optim.lr_scheduler.OneCycleLR(
                     optimizer,
-                    max_lr=hpo_max_learning_rate,
+                    max_lr=[hpo_max_learning_rate_cnn, hpo_max_learning_rate], # 10x lower for CNN14 layers
                     total_steps=total_steps,
                     pct_start=hpo_pct_start,
                     div_factor=hpo_div_factor,
                     final_div_factor=hpo_final_div_factor,
                     anneal_strategy='cos',
                     three_phase=False
-                )
+                )  
                 # Train for specified epochs in each fold
                 fold_history = []
                 best_fold_f1 = 0.0
@@ -1637,16 +1652,18 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
         # Best previous hyperparameters as a starting point
         previous_best = {
             # Core parameters from previous best run
-            "learning_rate": 0.0010831279442946378,  
-            "focal_loss_gamma": 1.2214471854780586, 
-            "weight_scaling_factor": 0.42877749204715, 
-            "weight_decay": 6.754417251186016e-05,            
-            "pct_start": 0.24140038998213117,
-            "div_factor": 26.312388937073905,
-            "final_div_factor": 294.73021118648194,
-            "attention_dropout": 0.21790974595973722,  
-            "fusion_dropout": 0.3668445892921854,     
-            "prosodic_weight": 0.8587093661398519
+            "learning_rate": myConfig.cnn_rnn_hyperparams["learning_rate"],  
+            "focal_loss_gamma": myConfig.cnn_rnn_hyperparams["focal_loss_gamma"], 
+            "weight_scaling_factor": myConfig.cnn_rnn_hyperparams["weight_scaling_factor"], 
+            "weight_decay": myConfig.cnn_rnn_hyperparams["weight_decay"],            
+            "pct_start": myConfig.cnn_rnn_hyperparams["pct_start"],
+            "div_factor": myConfig.cnn_rnn_hyperparams["div_factor"],
+            "final_div_factor": myConfig.cnn_rnn_hyperparams["final_div_factor"],
+            "attention_dropout": myConfig.cnn_rnn_hyperparams["attention_dropout"],  
+            "fusion_dropout": myConfig.cnn_rnn_hyperparams["fusion_dropout"],     
+            "prosodic_weight": myConfig.cnn_rnn_hyperparams["prosodic_weight"],
+            "learning_rate_cnn": myConfig.cnn_rnn_hyperparams["learning_rate_cnn"],
+            "weight_decay_cnn": myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
         }
 
         study.enqueue_trial(previous_best)
