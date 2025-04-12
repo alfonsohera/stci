@@ -66,6 +66,24 @@ selected_features = [
 "shimmer_local", "skewness", "centre_of_gravity", "wer"
 ]
 num_extracted_features = len(selected_features)
+
+# CNN-RNN model hyperparameters - centralized configuration
+cnn_rnn_hyperparams = {
+    # Core training hyperparameters
+    "max_lr": 0.0011885281702589529,
+    "focal_loss_gamma": 1.3005369189225944,
+    "weight_scaling_factor": 0.4364698824624799,
+    "weight_decay": 4.7150495089938455e-05,
+    "pct_start": 0.18662795601481053,
+    "div_factor": 23.23664102515406,
+    "final_div_factor": 271.49589180568336,
+    
+    # Model-specific hyperparameters
+    "attention_dropout": 0.25320974179977257,
+    "fusion_dropout": 0.2783466229854074,
+    "prosodic_weight": 1.4943883706790098
+}
+
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {

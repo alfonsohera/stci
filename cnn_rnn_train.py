@@ -406,14 +406,14 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # From HPO:        
-    hpo_max_lr = 0.0011885281702589529
-    hpo_focal_loss_gamma = 1.3005369189225944
-    hpo_weight_scaling_factor = 0.4364698824624799
-    hpo_weight_decay = 4.7150495089938455e-05
-    hpo_pct_start = 0.18662795601481053
-    hpo_div_factor = 23.23664102515406
-    hpo_final_div_factor = 271.49589180568336
+    # From centralized hyperparameters in myConfig
+    hpo_max_lr = myConfig.cnn_rnn_hyperparams["max_lr"]
+    hpo_focal_loss_gamma = myConfig.cnn_rnn_hyperparams["focal_loss_gamma"]
+    hpo_weight_scaling_factor = myConfig.cnn_rnn_hyperparams["weight_scaling_factor"]
+    hpo_weight_decay = myConfig.cnn_rnn_hyperparams["weight_decay"]
+    hpo_pct_start = myConfig.cnn_rnn_hyperparams["pct_start"]
+    hpo_div_factor = myConfig.cnn_rnn_hyperparams["div_factor"]
+    hpo_final_div_factor = myConfig.cnn_rnn_hyperparams["final_div_factor"]
 
     # Initialize wandb
     if not wandb.run:
@@ -844,19 +844,12 @@ def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
         batch_size=96
     )
     
-    # Best hyperparameters from previous optimization
-    hpo_attention_dropout = 0.25320974179977257
-    hpo_fusion_dropout = 0.2783466229854074
-    hpo_prosodic_weight = 1.4943883706790098
 
     # Create model with the appropriate number of classes
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,  # Binary or 3-class based on parameter
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                            
     )
 
     print(f"Model created with {model.classifier.out_features} output classes!")
@@ -894,19 +887,12 @@ def test_cnn_rnn(binary_classification=False):
         batch_size=96
     )
     
-    # Best hyperparameters from previous optimization
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
     
     # Create model with appropriate number of classes
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
     
     # Load the best model weights from the appropriate directory
@@ -959,18 +945,11 @@ def optimize_cnn_rnn(binary_classification=False):
     # Create model with appropriate number of classes
     from cnn_rnn_model import PretrainedDualPathAudioClassifier
     
-    # Best hyperparameters from previous optimization
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
 
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
     
     # Load the best model weights from the appropriate directory
@@ -1043,21 +1022,14 @@ def test_cnn_rnn_with_thresholds(binary_classification=False):
         print("Testing CNN+RNN model with 3-class classification (Healthy vs. MCI vs. AD) using optimized thresholds")
         
     dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
-    
-    # Best hyperparameters from previous optimization
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
+        
 
     # Create model with appropriate number of classes
     from cnn_rnn_model import PretrainedDualPathAudioClassifier
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                        
     )
     
     # Load the best model weights from the appropriate directory
@@ -1347,18 +1319,18 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
             gc.collect()
                         
             # Core hyperparameters from previous optimization
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 0.7)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.5, 1.5)  
-            weight_decay = trial.suggest_float("weight_decay", 5e-6, 5e-5, log=True)                      
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 3e-3, log=True)
-            hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.35)  
-            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 50.0)  
-            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 600.0)
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.38, 0.5)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 1.6)  
+            weight_decay = trial.suggest_float("weight_decay", 3e-5, 7e-5, log=True)                      
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 8e-4, 1.5e-3, log=True)
+            hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.25)  
+            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 30.0)  
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 250.0, 350.0)
 
             #hyperparameters specific to the Dual Path model
-            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.3)
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.15, 0.4)                        
-            prosodic_weight = trial.suggest_float("prosodic_weight", 0.7, 2.5)
+            attention_dropout = trial.suggest_float("attention_dropout", 0.2, 0.35)
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.22, 0.4)                        
+            prosodic_weight = trial.suggest_float("prosodic_weight", 1.2, 2.0)
             
             
             
