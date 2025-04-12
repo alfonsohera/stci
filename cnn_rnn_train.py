@@ -1652,7 +1652,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
         # Best previous hyperparameters as a starting point
         previous_best = {
             # Core parameters from previous best run
-            "learning_rate": myConfig.cnn_rnn_hyperparams["learning_rate"],  
+            "learning_rate": myConfig.cnn_rnn_hyperparams["max_lr"],  
             "focal_loss_gamma": myConfig.cnn_rnn_hyperparams["focal_loss_gamma"], 
             "weight_scaling_factor": myConfig.cnn_rnn_hyperparams["weight_scaling_factor"], 
             "weight_decay": myConfig.cnn_rnn_hyperparams["weight_decay"],            
