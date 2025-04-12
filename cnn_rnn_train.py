@@ -392,13 +392,13 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # From HPO:        
-    hpo_max_lr = 0.0010831279442946378
-    hpo_focal_loss_gamma = 1.2214471854780586
-    hpo_weight_scaling_factor = 0.42877749204715
-    hpo_weight_decay = 6.754417251186016e-05
-    hpo_pct_start = 0.24140038998213117
-    hpo_div_factor = 26.312388937073905
-    hpo_final_div_factor = 294.73021118648194
+    hpo_max_lr = 0.0011885281702589529
+    hpo_focal_loss_gamma = 1.3005369189225944
+    hpo_weight_scaling_factor = 0.4364698824624799
+    hpo_weight_decay = 4.7150495089938455e-05
+    hpo_pct_start = 0.18662795601481053
+    hpo_div_factor = 23.23664102515406
+    hpo_final_div_factor = 271.49589180568336
 
     # Initialize wandb
     if not wandb.run:
@@ -823,9 +823,9 @@ def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
     )
     
     # Best hyperparameters from previous optimization
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
+    hpo_attention_dropout = 0.25320974179977257
+    hpo_fusion_dropout = 0.2783466229854074
+    hpo_prosodic_weight = 1.4943883706790098
 
     # Create model with the appropriate number of classes
     model = PretrainedDualPathAudioClassifier(
