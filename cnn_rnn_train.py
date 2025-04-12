@@ -336,7 +336,8 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
                         epoch=epoch,
                         audio_chunks=audio_tensors[audio_id],  # Pass all collected chunks
-                        chunk_outputs=chunk_outputs
+                        chunk_outputs=chunk_outputs,
+                        show_time_domain=True  # Enable time-domain visualization
                     )
                     
                     # Update counter
@@ -377,7 +378,8 @@ def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max
                 save_path=cam_output_dir,
                 audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
                 correct=is_correct,
-                audio_paths_dir=os.path.join(cam_output_dir, "audio_paths")
+                audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                show_time_domain=True  # Enable time-domain visualization
             )
             
             # Update counter
@@ -740,7 +742,8 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
                         audio_chunks=audio_tensors[audio_id],
-                        chunk_outputs=chunk_outputs
+                        chunk_outputs=chunk_outputs,
+                        show_time_domain=True  # Enable time-domain visualization
                     )
                     
                     # Update counter

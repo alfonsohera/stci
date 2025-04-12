@@ -355,7 +355,7 @@ def generate_spectrogram(audio, model, sr=16000):
 
 
 def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
-                  audio_chunks=None, chunk_outputs=None):
+                  audio_chunks=None, chunk_outputs=None, show_time_domain=False):
     """
     Visualize CAM for an audio input, with support for chunked processing
     
@@ -370,6 +370,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         epoch: Current epoch number
         audio_chunks: Optional list of already chunked audio or audio_id to fetch original audio
         chunk_outputs: Optional list of chunk outputs (logits) from model
+        show_time_domain: Whether to display the time-domain representation (waveform) with CAM overlay
     """
     # Get model's device
     device = next(model.parameters()).device
@@ -496,6 +497,9 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     all_cams = []
     all_specs = []
     
+    # Store the raw audio waveforms for time-domain visualization
+    all_waveforms = []
+    
     # Process each chunk for CAM visualization
     for i, chunk in enumerate(audio_chunks_list):
         # Check if the chunk is too small for STFT processing
@@ -520,6 +524,16 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         chunk_spec = generate_spectrogram(chunk, model)
         all_specs.append(chunk_spec)
         
+        # Store raw waveform for time-domain visualization
+        # Ensure the chunk is in the right format [samples]
+        if len(chunk.shape) == 3:  # [batch, channel, time]
+            waveform = chunk.squeeze(0).squeeze(0).cpu().numpy()
+        elif len(chunk.shape) == 2:  # [batch, time]
+            waveform = chunk.squeeze(0).cpu().numpy()
+        else:  # [time]
+            waveform = chunk.cpu().numpy()
+        all_waveforms.append(waveform)
+        
         # Clean up GradCAM hooks for this chunk
         grad_cam.remove_hooks()
 
@@ -529,6 +543,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         dummy_cam = np.ones((64, 64))  # Create a dummy CAM
         all_cams = [dummy_cam]  # Create a list with the dummy CAM
         all_specs = [np.zeros((64, 64))]  # Create a dummy spectrogram
+        all_waveforms = [np.zeros(16000)]  # Create a dummy waveform of 1 second
     
     # Concatenate CAMs to show the full audio - FIX
     if len(all_cams) > 1:
@@ -556,6 +571,8 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         # Fallback
         spectrogram = generate_spectrogram(audio, model)
     
+    # Concatenate waveforms
+    full_waveform = np.concatenate(all_waveforms)
 
     # Map class indices to human-readable labels - DEFINE ONLY ONCE
     class_names = ["Healthy", "MCI", "AD"]
@@ -638,11 +655,13 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
     print(f"Time labels: {time_labels}")
 
-    # Create figure for visualization
-    plt.figure(figsize=(12, 5))
+    # CHANGE: Create two separate figures instead of one combined figure
     
+    # Figure 1: Spectrogram and CAM visualization
+    plt.figure(figsize=(12, 9))
     
-    plt.subplot(1, 2, 1)
+    # Plot 1: Spectrogram
+    plt.subplot(2, 1, 1)
     plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
     title = f"Log-Mel Spectrogram\nPred: {pred_label}, True: {true_label}"
     if target_class is not None:
@@ -654,8 +673,9 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     plt.xlabel('Time (seconds)')
     plt.yticks(freq_ticks, freq_labels)
     plt.xticks(time_ticks, time_labels)
-        
-    plt.subplot(1, 2, 2)
+    
+    # Plot 2: CAM overlay on spectrogram
+    plt.subplot(2, 1, 2)
     plt.imshow(spec_for_plot, origin='lower', aspect='auto', alpha=0.6, cmap='viridis')
 
     # Handle different CAM shapes properly
@@ -674,6 +694,9 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         # Plot the resized CAM WITHOUT TRANSPOSING
         plt.imshow(cam_2d, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
+        
+        # Save the 1D CAM for waveform visualization
+        cam_for_waveform = cam_resized
     elif len(cam.shape) == 2:
         # For 2D CAM (time x features or similar)
         # Resize to match spectrogram dimensions
@@ -681,10 +704,14 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
                              anti_aliasing=True)
         # Plot the resized 2D CAM WITHOUT TRANSPOSING
         plt.imshow(cam_resized, origin='lower', aspect='auto', alpha=0.4, cmap='inferno')
+        
+        # For waveform visualization, average across frequency dimension
+        cam_for_waveform = np.mean(cam_resized, axis=0)
     else:
         # For any other shape, just use the first channel/dimension
         print(f"Warning: Unexpected CAM shape {cam.shape}, using first dimension only")
         cam_1d = cam.reshape(-1)
+        cam_for_waveform = cam_1d
 
     title = f"Class Activation Map\nPred: {pred_label}, True: {true_label}" 
     if target_class is not None:
@@ -697,67 +724,158 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     plt.xticks(time_ticks, time_labels)
     plt.yticks(freq_ticks, freq_labels)
     
-    # Save files if path is provided
-    spec_path = None
-    cam_path = None
+    # Finalize spectrogram figure
+    plt.tight_layout()
     
+    # Define the paths for saving
+    spec_cam_path = None
+    waveform_cam_path = None
+    
+    # Save spectrogram/CAM visualization if save_path is provided
     if save_path:
         # Initialize base subdirectories
-        spec_subdir = 'LogMelSpecs'
-        cam_subdir = 'CAMs'
+        spec_cam_subdir = 'SpectrogramCAMs'
+        waveform_subdir = 'WaveformCAMs'
         
         # Add epoch to path if provided
         if epoch is not None:
-            spec_subdir = os.path.join(f"epoch_{epoch}", spec_subdir)
-            cam_subdir = os.path.join(f"epoch_{epoch}", cam_subdir)
+            spec_cam_subdir = os.path.join(f"epoch_{epoch}", spec_cam_subdir)
+            waveform_subdir = os.path.join(f"epoch_{epoch}", waveform_subdir)
         
         # Then add correct/incorrect status
         if correct is not None:
             status = "correct" if correct else "incorrect" 
-            spec_subdir = os.path.join(spec_subdir, status)
-            cam_subdir = os.path.join(cam_subdir, status)
+            spec_cam_subdir = os.path.join(spec_cam_subdir, status)
+            waveform_subdir = os.path.join(waveform_subdir, status)
 
-        os.makedirs(os.path.join(save_path, spec_subdir), exist_ok=True)
-        os.makedirs(os.path.join(save_path, cam_subdir), exist_ok=True)
-
-        # Save paths (using file_id that was created above)
-        spec_path = os.path.join(save_path, spec_subdir, f"{file_id}_spec.png")
-        cam_path = os.path.join(save_path, cam_subdir, f"{file_id}_cam.png")
+        # Create directories if they don't exist
+        os.makedirs(os.path.join(save_path, spec_cam_subdir), exist_ok=True)
+        
+        # Create file paths
+        spec_cam_path = os.path.join(save_path, spec_cam_subdir, f"{file_id}_spectro_cam.png")
         
         # Add chunk count to filename if multiple chunks
         if total_chunks > 1:
-            spec_path = os.path.join(save_path, spec_subdir, f"{file_id}_{total_chunks}chunks_spec.png")
-            cam_path = os.path.join(save_path, cam_subdir, f"{file_id}_{total_chunks}chunks_cam.png")
+            spec_cam_path = os.path.join(save_path, spec_cam_subdir, f"{file_id}_{total_chunks}chunks_spectro_cam.png")
         
-        # Save figure
-        plt.tight_layout()
-        plt.savefig(cam_path, dpi=150)
-        
-        # Save spectrogram separately
-        plt.figure(figsize=(6, 4))
-        plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
-        plt.colorbar(format='%+2.0f dB')
-        plt.title(f"Log-Mel Spectrogram - {file_id} ({total_chunks} chunks)")
-        plt.ylabel('Frequency (Hz)')
-        plt.xlabel('Time (seconds)')
-        plt.yticks(freq_ticks, freq_labels)
-        plt.xticks(time_ticks, time_labels)
-        plt.tight_layout()
-        plt.savefig(spec_path, dpi=150)
-        
-        # Write to log file - ONLY ONCE
-        if audio_paths_dir:
-            # Also organize audio paths by epoch if provided
-            if epoch is not None:
-                audio_paths_dir = os.path.join(audio_paths_dir, f"epoch_{epoch}")
-            
-            os.makedirs(audio_paths_dir, exist_ok=True)
-            paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
-            with open(os.path.join(audio_paths_dir, paths_filename), 'a') as f:
-                f.write(f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks\n")
+        # Save spectro/CAM figure
+        plt.savefig(spec_cam_path, dpi=150)
+
+    # Close the spectrogram/CAM figure to free memory
+    plt.close()
     
-    # Close figures to free memory
-    plt.close('all')
+    # Figure 2: Waveform with CAM overlay (if enabled)
+    if show_time_domain:
+        plt.figure(figsize=(12, 6))
+        
+        # Time axis for waveform (in seconds)
+        waveform_duration = len(full_waveform) / sr
+        
+        # PERFORMANCE OPTIMIZATION: Downsample the waveform and CAM for plotting
+        # This prevents hanging with very long audio files
+        target_points = 10000  # Maximum number of points to plot
+        
+        if len(full_waveform) > target_points:
+            # Calculate downsample factor
+            downsample_factor = int(np.ceil(len(full_waveform) / target_points))
+            
+            # Downsample waveform
+            waveform_downsampled = full_waveform[::downsample_factor]
+            
+            # Create time axis for downsampled waveform
+            waveform_time = np.linspace(0, waveform_duration, len(waveform_downsampled))
+            
+            print(f"Downsampling waveform from {len(full_waveform)} to {len(waveform_downsampled)} points")
+        else:
+            # Use original waveform if it's already small enough
+            waveform_downsampled = full_waveform
+            waveform_time = np.linspace(0, waveform_duration, len(full_waveform))
+        
+        # Create the axis explicitly
+        ax = plt.gca()
+        
+        # Plot the waveform
+        plt.plot(waveform_time, waveform_downsampled, color='blue', alpha=0.7, linewidth=1)
+        
+        # Resize CAM to match waveform length (use downsampled length for performance)
+        cam_time_domain = resize(cam_for_waveform, (len(waveform_downsampled),), anti_aliasing=True)
+        
+        # Normalize the CAM for waveform overlay
+        cam_time_domain = (cam_time_domain - cam_time_domain.min()) / (cam_time_domain.max() - cam_time_domain.min() + 1e-8)
+        
+        # Scale the CAM to match waveform amplitude range
+        waveform_amplitude = np.max(np.abs(waveform_downsampled))
+        
+        # Create a colormap for the CAM
+        import matplotlib.colors as mcolors
+        cmap = plt.get_cmap('inferno')
+        
+        # Create segments for coloring - one segment per point in the downsampled waveform
+        for i in range(len(waveform_time) - 1):
+            # Color based on CAM activation
+            color = cmap(cam_time_domain[i])
+            # Alpha based on CAM activation (more important = more opaque)
+            alpha = 0.4 * cam_time_domain[i] + 0.1
+            
+            # Draw a colored vertical span from top to bottom of the plot
+            plt.axvspan(
+                waveform_time[i], 
+                waveform_time[i+1],
+                color=color, 
+                alpha=alpha,
+                zorder=1  # Place behind the waveform
+            )
+        
+        # Redraw the waveform on top for better visibility
+        plt.plot(waveform_time, waveform_downsampled, color='blue', linewidth=1, zorder=2)
+        
+        plt.title(f"Audio Waveform with CAM Overlay\nPred: {pred_label}, True: {true_label}")
+        plt.ylabel('Amplitude')
+        plt.xlabel('Time (seconds)')
+        plt.grid(alpha=0.3)
+        
+        # Set y-limits to show the full waveform with some margin
+        margin = 0.1 * waveform_amplitude
+        plt.ylim(-waveform_amplitude-margin, waveform_amplitude+margin)
+        
+        # Add colorbar for the CAM overlay - FIX: explicitly pass the axis
+        norm = mcolors.Normalize(vmin=0, vmax=1)
+        sm = plt.cm.ScalarMappable(cmap='inferno', norm=norm)
+        sm.set_array([])  # Set empty array
+        
+        # Pass the current axis to the colorbar function
+        cbar = plt.colorbar(sm, ax=ax, format='%.1f')
+        cbar.set_label('CAM Activation')
+        
+        # Tight layout for better display
+        plt.tight_layout()
+        
+        # Save waveform/CAM figure if save_path is provided
+        if save_path:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.join(save_path, waveform_subdir), exist_ok=True)
+            
+            # Create file path
+            waveform_cam_path = os.path.join(save_path, waveform_subdir, f"{file_id}_waveform_cam.png")
+            if total_chunks > 1:
+                waveform_cam_path = os.path.join(save_path, waveform_subdir, f"{file_id}_{total_chunks}chunks_waveform_cam.png")
+            
+            # Save waveform figure
+            plt.savefig(waveform_cam_path, dpi=150)
+        
+        # Close the waveform/CAM figure to free memory
+        plt.close()
+    
+    # Write to log file - ONLY ONCE
+    if save_path and audio_paths_dir:
+        # Also organize audio paths by epoch if provided
+        if epoch is not None:
+            audio_paths_dir = os.path.join(audio_paths_dir, f"epoch_{epoch}")
+        
+        os.makedirs(audio_paths_dir, exist_ok=True)
+        paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
+        with open(os.path.join(audio_paths_dir, paths_filename), 'a') as f:
+            f.write(f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks\n")
     
     # Clean up GradCAM
     grad_cam.remove_hooks()
@@ -767,7 +885,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     if training_state:
         model.train()
     
-    return actual_pred_class, target_class, cam_path, spec_path
+    return actual_pred_class, target_class, spec_cam_path, waveform_cam_path if show_time_domain else None
 
 
 def debug_model_gradients(model, input_tensor, target_class=0):
