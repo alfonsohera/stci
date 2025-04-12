@@ -67,29 +67,30 @@ selected_features = [
 ]
 num_extracted_features = len(selected_features)
 
+
 # CNN-RNN model hyperparameters - centralized configuration
 cnn_rnn_hyperparams = {
     # Core training hyperparameters
-    "max_lr": 0.0011885281702589529,
-    "focal_loss_gamma": 1.3005369189225944,
-    "weight_scaling_factor": 0.4364698824624799,
-    "weight_decay": 4.7150495089938455e-05,
-    "pct_start": 0.18662795601481053,
-    "div_factor": 23.23664102515406,
-    "final_div_factor": 271.49589180568336,
+    "max_lr": 0.0010536492254066062,
+    "focal_loss_gamma": 1.049466688019162,
+    "weight_scaling_factor": 0.41170027130643716,
+    "weight_decay": 4.8738206362704404e-05,
+    "pct_start": 0.15289459538117114,
+    "div_factor": 21.541110287967083,
+    "final_div_factor": 264.94546459665844,
     
     # Model-specific hyperparameters
-    "attention_dropout": 0.25320974179977257,
-    "fusion_dropout": 0.2783466229854074,
-    "prosodic_weight": 1.4943883706790098
+    "attention_dropout":0.21990537650935826,
+    "fusion_dropout": 0.25477743209947934,
+    "prosodic_weight": 1.4696607599726637
 }
 
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {
-    0: 197,  # Healthy (HC)
-    1: 90,   # MCI
-    2: 74    # AD
+    0: 137,  # Healthy (HC)
+    1: 75,   # MCI
+    2: 64    # AD
 }
 
 # Color mapping for visualization
