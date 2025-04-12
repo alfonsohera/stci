@@ -271,6 +271,8 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         
         # Self-attention layers        
         self.attention_layers = nn.ModuleList([
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=attention_dropout),
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=attention_dropout),
             ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=attention_dropout)  
         ])
         
@@ -303,13 +305,15 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             # Modified fusion to include prosodic features
             # Fusion layers - increase dropout
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256 + 128 + 32, 384),
-                nn.LayerNorm(384),
+                nn.Linear(256 + 256 + 128 + 32, 512),  # Wider
+                nn.LayerNorm(512),
                 nn.ReLU(),
-                nn.Dropout(fusion_dropout),  # Use configurable dropout
-                nn.Linear(384, 128),
+                nn.Dropout(fusion_dropout),
+                nn.Linear(512, 256),  # Deeper
+                nn.LayerNorm(256),
                 nn.ReLU(),
-                nn.Dropout(fusion_dropout)   # Use configurable dropout
+                nn.Dropout(fusion_dropout),
+                nn.Linear(256, 128)
             )
         else:
             # Fusion layer (CNN features + Attention features)
@@ -324,7 +328,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             )
 
         # Separate classifier layer
-        self.classifier = nn.Linear(128, num_classes)
+        self.classifier = nn.utils.weight_norm(nn.Linear(128, num_classes))
         
         # Pre-initialize device tracking to avoid device checks at runtime
         self._device = None
