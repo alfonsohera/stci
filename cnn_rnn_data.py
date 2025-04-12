@@ -358,16 +358,33 @@ def load_cached_pytorch_dataset(cache_path):
     return datasets
 
 
-def prepare_cnn_rnn_dataset():
+def prepare_cnn_rnn_dataset(binary_classification=True):
     """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF,
-    excluding files specified in exclude_list.csv."""
+    excluding files specified in exclude_list.csv.
+    
+    Args:
+        binary_classification: If True, convert to binary classification 
+                              (0=Healthy, 1=Non-Healthy (MCI+AD))
+    """
     myData.DownloadAndExtract()
     
     # Check if cached PyTorch dataset exists
     pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
     if os.path.exists(pytorch_dataset_path) and len(os.listdir(pytorch_dataset_path)) > 0:
         print(f"Loading cached PyTorch dataset from {pytorch_dataset_path}")
-        return load_cached_pytorch_dataset(pytorch_dataset_path)
+        dataset = load_cached_pytorch_dataset(pytorch_dataset_path)
+        
+        # Convert to binary classification if requested
+        if binary_classification:
+            print("Converting to binary classification (Healthy vs. Non-Healthy)...")
+            for split in dataset:
+                for i in range(len(dataset[split].samples)):
+                    # Convert MCI (1) and AD (2) to Non-Healthy (1)
+                    if dataset[split].samples[i]["label"] > 0:
+                        dataset[split].samples[i]["label"] = 1
+            print("Conversion to binary classification complete.")
+        
+        return dataset
     
     print("No cached dataset found. Creating new dataset...")
     
@@ -425,6 +442,21 @@ def prepare_cnn_rnn_dataset():
     print("Creating dataset splits...")
     train_df, val_df, test_df = myData.datasetSplit(filtered_df)
     train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+    
+    # Convert to binary classification if requested
+    if binary_classification:
+        print("Converting to binary classification (Healthy vs. Non-Healthy)...")
+        for df in [train_df, val_df, test_df]:
+            # Convert MCI (1) and AD (2) to Non-Healthy (1)
+            df.loc[df['label'] > 0, 'label'] = 1
+        
+        # Print new class distribution
+        for name, df in [('Train', train_df), ('Validation', val_df), ('Test', test_df)]:
+            healthy_count = (df['label'] == 0).sum()
+            non_healthy_count = (df['label'] == 1).sum()
+            total = len(df)
+            print(f"{name} set: Healthy: {healthy_count} ({healthy_count/total*100:.1f}%), "
+                  f"Non-Healthy: {non_healthy_count} ({non_healthy_count/total*100:.1f}%)")
     
     print("Creating PyTorch datasets with preloaded audio...")
     dataset = {

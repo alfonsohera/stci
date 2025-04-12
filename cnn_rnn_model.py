@@ -220,7 +220,7 @@ class CNN14Classifier(nn.Module):
 
 
 class PretrainedDualPathAudioClassifier(nn.Module):
-    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
+    def __init__(self, num_classes=2, sample_rate=16000, n_mels=128, 
                  apply_specaugment=False, use_prosodic_features=True, 
                  prosodic_feature_dim=4, pretrained_cnn14_path=None,
                  attention_dropout=0.3, fusion_dropout=0.4, prosodic_weight=1.0):
