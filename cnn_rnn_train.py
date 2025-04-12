@@ -219,10 +219,17 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
     audio_labels = {}
     audio_tensors = {} # Store audio tensors for CAM visualization
     
-    # Counters for CAM visualization
+    # Dynamically determine number of classes for CAM visualization
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from model
+        num_classes = 3
+    
+    # Counters for CAM visualization - dynamically created based on number of classes
     cam_counters = {
-        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
-        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+        'correct': {i: 0 for i in range(num_classes)},    # Counts by class
+        'incorrect': {i: 0 for i in range(num_classes)}   # Counts by class
     }
     
     with torch.inference_mode():
@@ -664,10 +671,17 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     audio_labels = {}
     audio_tensors = {}  # Store audio tensors for CAM visualization
     
-    # Counters for CAM visualization
+    # Dynamically determine number of classes for CAM visualization
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from model
+        num_classes = 3
+    
+    # Counters for CAM visualization - dynamically created based on number of classes
     cam_counters = {
-        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
-        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+        'correct': {i: 0 for i in range(num_classes)},    # Counts by class
+        'incorrect': {i: 0 for i in range(num_classes)}   # Counts by class
     }
     
     # Create output directories if needed
