@@ -370,6 +370,13 @@ def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max
             audio_id = f"eval_sample_{i}"
             if "audio_id" in batch and batch["audio_id"] is not None:
                 audio_id = batch["audio_id"][i]
+                
+            # Get file path if available
+            file_path = None
+            if "file_path" in batch:
+                file_path = batch["file_path"][i] if isinstance(batch["file_path"], list) else batch["file_path"]
+            elif hasattr(batch, "file_paths"):
+                file_path = batch["file_paths"][i] if i < len(batch["file_paths"]) else None
             
             visualize_cam(
                 audio=audio,
@@ -379,6 +386,7 @@ def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max
                 audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
                 correct=is_correct,
                 audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                file_path=file_path,  # Pass the original file path
                 show_time_domain=True  # Enable time-domain visualization
             )
             
