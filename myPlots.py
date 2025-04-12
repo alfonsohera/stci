@@ -931,17 +931,19 @@ def create_rotating_3d_plot(embeddings_3d, color_field, unique_categories, color
     print(f"Saved rotating 3D animation to {output_filename}")
 
 
-def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95, exclusion_csv=None):
+def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold=0.95, binary_classification=False, exclusion_csv=None, output_prefix="class_similarity"):
     """
-    Analyzes the similarity between samples across dataset splits (train, valid, test)
-    to detect potential data leakage.
+    Analyzes inter-class and intra-class similarities to identify problematic samples
+    that are hard to classify due to high similarity with samples from other classes.
     
     Args:
         dataset_path: Path to the HuggingFace dataset directory 
         audio_root_path: Root path to audio files
-        model_path: Optional path to a saved model, otherwise uses a fresh model
         similarity_threshold: Cosine similarity threshold above which samples are considered too similar
                             (default: 0.95)
+        binary_classification: If True, treats classes as binary (HC vs Non-HC)
+        exclusion_csv: Path to CSV file listing samples to exclude
+        output_prefix: Prefix for output files
     
     Returns:
         Dictionary with similarity statistics and lists of potentially problematic sample pairs
@@ -1000,48 +1002,30 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     for split, count in split_counts.items():
         print(f"  {split}: {count} samples")
     
-    # Verify data format by examining first sample from each split
-    for split in dataset.keys():
-        if len(dataset[split]) > 0:
-            sample = dataset[split][0]
-            print(f"Sample structure in {split} split: {list(sample.keys())}")
-    
-    # Load or create model
-    print("Loading feature extraction model...")    
-    import torchvision.models as models
-    from torchvision import transforms
-    
-    # Load pre-trained DenseNet model
-    """ feature_extractor = models.densenet121(pretrained=True).to(device)
-    # Remove the classifier layer - we just want the features
-    feature_extractor.classifier = torch.nn.Identity()
-    feature_extractor.eval()
-    
-    # Define normalization for DenseNet (ImageNet standard)
-    normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    ) 
-    
-    # Define target size for DenseNet (224x224)
-    target_size = (224, 224)
-    
-    print("Using DenseNet121 (pretrained on ImageNet) as feature extractor") """
+    # Initialize class labels - adjust based on binary classification flag
+    if binary_classification:
+        print("Using binary classification mode: HC vs Non-HC")
+        class_labels = ["Healthy", "Non-Healthy"]
+    else:
+        print("Using 3-way classification mode: HC vs MCI vs AD")
+        class_labels = ["Healthy", "MCI", "AD"]
         
+    print(f"Using class labels: {class_labels}")
+    
+    # Load feature extraction model (CNN14)
     print("Using CNN14 as feature extractor")
 
     def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
-        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64,hop_size=320, window_size=1024,fmin=50, fmax=8000)
+        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64, hop_size=320, window_size=1024, fmin=50, fmax=8000)
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model.load_state_dict(checkpoint['model'])
         model.eval()
-        return model
-    feature_extractor = load_cnn14(myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth') 
+        return model.to(device)
+    
+    feature_extractor = load_cnn14()
     
     # Create feature extraction function
     def extract_features(audio_path, feature_extractor):
-        
-        # CNN14
         def extract_embedding(model, sample_audio):
             with torch.no_grad():
                 output = model(sample_audio)
@@ -1051,33 +1035,10 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         try:
             # Load audio
             sample_audio, sr = librosa.load(audio_path, sr=16000)
-            # Create log mel spectrogram (DenseNet)
-            """ mel_spec = librosa.feature.melspectrogram(y=sample_audio, sr=sr, n_mels=128, fmax=8000)
-            log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time] """
-            # CNN14
-            sample_audio = torch.tensor(sample_audio).unsqueeze(0)  # [1, time]                     
+            # Convert to tensor format for CNN14
+            sample_audio = torch.tensor(sample_audio).unsqueeze(0).to(device)  # [1, time]                     
             
             with torch.inference_mode():
-                # Normalize as in model preprocessing
-                # Code block needed for DenseNet
-                """ log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
-                
-                # Resize to model's expected input size
-                log_mel_tensor = F.interpolate(log_mel_tensor, size=target_size, 
-                                             mode='bilinear', align_corners=False)
-                
-                # Convert 1-channel grayscale to 3-channel RGB (DenseNet expects RGB input)
-                log_mel_tensor = log_mel_tensor.repeat(1, 3, 1, 1)
-                
-                # Apply standard normalization
-                log_mel_tensor = (log_mel_tensor - log_mel_tensor.mean()) / (log_mel_tensor.std() + 1e-5)
-                
-                # Apply ImageNet normalization
-                log_mel_tensor = normalize(log_mel_tensor)
-                
-                # Extract features using DenseNet
-                features = feature_extractor(log_mel_tensor).flatten().cpu().numpy() """
                 # Extract features using CNN14
                 features = extract_embedding(feature_extractor, sample_audio).flatten().cpu().numpy()
                 
@@ -1109,6 +1070,9 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     # Process each file and extract features
     features_dict = {}  # Will store {file_id: features}
     file_info = {}      # Will store {file_id: {path, split, class_label}}
+    
+    # Dictionary to track class distributions
+    class_counts = {split: {cls: 0 for cls in range(len(class_labels))} for split in dataset.keys()}
     
     print("Extracting features from all audio files...")
     skipped_files = 0
@@ -1152,11 +1116,19 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     print(f"Cannot find label in sample keys: {list(sample.keys())}")
                     label = -1  # Unknown label
                 
+                # Apply binary classification mapping if needed
+                if binary_classification and label > 0:  # If MCI or AD, map to Non-Healthy
+                    label = 1  # Non-Healthy
+                
+                # Update class counts
+                class_counts[split][label] += 1
+                
                 # Store file info
                 file_info[file_id] = {
                     'path': file_path,
                     'split': split,
-                    'class': label
+                    'class': label,
+                    'filename': basename
                 }
                 
                 # Resolve full path and extract features
@@ -1181,87 +1153,53 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     print(f"Successfully extracted features for {len(features_dict)} files")
     print(f"Skipped {skipped_files} files from the exclusion list")
     
+    # Print class distribution statistics
+    print("\nClass distribution across splits:")
+    for split in dataset.keys():
+        print(f"  {split}:")
+        for cls, count in class_counts[split].items():
+            if cls >= 0 and cls < len(class_labels):
+                print(f"    {class_labels[cls]}: {count}")
+    
     # Clean up memory
     del feature_extractor
     torch.cuda.empty_cache()
     gc.collect()
     
-    # Create pairs of files to compare across different splits
-    split_comparisons = []
-    for i, split1 in enumerate(dataset.keys()):
-        for split2 in list(dataset.keys())[i+1:]:
-            split_comparisons.append((split1, split2))
+    # Group files by classes
+    class_files = {}
+    for c in range(len(class_labels)):
+        class_files[c] = [fid for fid, info in file_info.items() if info['class'] == c and fid in features_dict]
+        print(f"Class {class_labels[c]}: {len(class_files[c])} files with extracted features")
     
-    print(f"Will compare the following split pairs: {split_comparisons}")
+    # Prepare to store similarity results
+    intra_class_similarities = {c: [] for c in range(len(class_labels))}  # Similarities within same class
+    inter_class_similarities = {}  # Similarities between different classes
+    for c1 in range(len(class_labels)):
+        for c2 in range(c1+1, len(class_labels)):
+            inter_class_similarities[(c1, c2)] = []
     
-    # Store similarity results
-    high_similarity_pairs = []
-    all_cross_similarities = []
+    high_similarity_pairs = []  # Will store problematic pairs
     
-    # For each split comparison
-    for split1, split2 in split_comparisons:
-        print(f"Comparing {split1} vs {split2} split...")
+    # Analyze intra-class similarities (within same class)
+    print("\nAnalyzing intra-class similarities (within the same class)...")
+    for c in range(len(class_labels)):
+        files = class_files[c]
+        print(f"Analyzing {len(files)} files in class {class_labels[c]}...")
         
-        # Get file IDs for each split
-        split1_files = [fid for fid, info in file_info.items() if info['split'] == split1 and fid in features_dict]
-        split2_files = [fid for fid, info in file_info.items() if info['split'] == split2 and fid in features_dict]
-        
-        if not split1_files or not split2_files:
-            print(f"Skipping comparison - missing files in {split1} or {split2}")
-            continue
-        
-        print(f"  Comparing {len(split1_files)} files from {split1} with {len(split2_files)} files from {split2}")
-        
-        # Process in smaller batches to avoid memory issues
-        batch_size = 100
-        
-        for i in tqdm(range(0, len(split1_files), batch_size), desc=f"{split1}-{split2} comparison"):
-            batch_split1 = split1_files[i:i+batch_size]
-            split1_features = np.vstack([features_dict[fid] for fid in batch_split1])
-            
-            for j in range(0, len(split2_files), batch_size):
-                batch_split2 = split2_files[j:j+batch_size]
-                split2_features = np.vstack([features_dict[fid] for fid in batch_split2])
-                
-                # Compute cosine similarity between all pairs in this batch
-                similarity_matrix = cosine_similarity(split1_features, split2_features)
-                
-                # Find high similarity pairs
-                for batch_i, fid1 in enumerate(batch_split1):
-                    for batch_j, fid2 in enumerate(batch_split2):
-                        similarity = similarity_matrix[batch_i, batch_j]
-                        all_cross_similarities.append(similarity)
-                        
-                        if similarity >= similarity_threshold:
-                            high_similarity_pairs.append({
-                                'file1': fid1,
-                                'file2': fid2,
-                                'split1': split1,
-                                'split2': split2,
-                                'class1': file_info[fid1]['class'],
-                                'class2': file_info[fid2]['class'],
-                                'similarity': similarity
-                            })
-    
-    # Analyze within-split similarity for thoroughness
-    within_split_similarities = {}
-    for split in dataset.keys():
-        split_files = [fid for fid, info in file_info.items() if info['split'] == split and fid in features_dict]
-        
-        if len(split_files) <= 1:
+        # Skip if too few samples
+        if len(files) <= 1:
+            print(f"  Skipping class {class_labels[c]} - too few samples")
             continue
             
-        print(f"Analyzing within-split similarity for {split}...")
-        within_split_similarities[split] = []
-        
-        # Process in smaller batches
+        # Process in batches to avoid memory issues
         batch_size = 100
-        for i in tqdm(range(0, len(split_files), batch_size), desc=f"{split} internal comparison"):
-            batch1 = split_files[i:i+batch_size]
+        for i in tqdm(range(0, len(files), batch_size), desc=f"Class {class_labels[c]} internal comparison"):
+            batch1 = files[i:i+batch_size]
             features1 = np.vstack([features_dict[fid] for fid in batch1])
             
-            for j in range(i, len(split_files), batch_size):
-                batch2 = split_files[j:j+batch_size]
+            for j in range(i, len(files), batch_size):
+                batch2 = files[j:j+batch_size]
                 features2 = np.vstack([features_dict[fid] for fid in batch2])
                 
                 # Compute similarity matrix
@@ -1275,88 +1213,157 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                             continue
                             
                         similarity = sim_matrix[batch_i, batch_j]
-                        within_split_similarities[split].append(similarity)
+                        intra_class_similarities[c].append(similarity)
                         
-                        # Record high similarity pairs within split
+                        # Record high similarity pairs within class
                         if similarity >= similarity_threshold:
                             high_similarity_pairs.append({
                                 'file1': fid1,
                                 'file2': fid2,
-                                'split1': split,
-                                'split2': split,
+                                'split1': file_info[fid1]['split'],
+                                'split2': file_info[fid2]['split'],
                                 'class1': file_info[fid1]['class'],
                                 'class2': file_info[fid2]['class'],
-                                'similarity': similarity
+                                'similarity': similarity,
+                                'comparison_type': 'intra-class',
+                                'filename1': file_info[fid1]['filename'],
+                                'filename2': file_info[fid2]['filename'],
+                                'class1_name': class_labels[file_info[fid1]['class']],
+                                'class2_name': class_labels[file_info[fid2]['class']]
                             })
-    
+
+    # Analyze inter-class similarities (between different classes)
+    print("\nAnalyzing inter-class similarities (between different classes)...")
+    for c1 in range(len(class_labels)):
+        for c2 in range(c1+1, len(class_labels)):
+            files1 = class_files[c1]
+            files2 = class_files[c2]
+            
+            print(f"Comparing {len(files1)} files from class {class_labels[c1]} with {len(files2)} files from class {class_labels[c2]}...")
+            
+            # Process in batches to avoid memory issues
+            batch_size = 100
+            for i in tqdm(range(0, len(files1), batch_size), desc=f"{class_labels[c1]} vs {class_labels[c2]}"):
+                batch1 = files1[i:i+batch_size]
+                features1 = np.vstack([features_dict[fid] for fid in batch1])
+                
+                for j in range(0, len(files2), batch_size):
+                    batch2 = files2[j:j+batch_size]
+                    features2 = np.vstack([features_dict[fid] for fid in batch2])
+                    
+                    # Compute similarity matrix
+                    sim_matrix = cosine_similarity(features1, features2)
+                    
+                    # Process similarity values
+                    for batch_i, fid1 in enumerate(batch1):
+                        for batch_j, fid2 in enumerate(batch2):
+                            similarity = sim_matrix[batch_i, batch_j]
+                            inter_class_similarities[(c1, c2)].append(similarity)
+                            
+                            # Record high similarity pairs between different classes - these are problematic
+                            if similarity >= similarity_threshold:
+                                high_similarity_pairs.append({
+                                    'file1': fid1,
+                                    'file2': fid2,
+                                    'split1': file_info[fid1]['split'],
+                                    'split2': file_info[fid2]['split'],
+                                    'class1': file_info[fid1]['class'],
+                                    'class2': file_info[fid2]['class'],
+                                    'similarity': similarity,
+                                    'comparison_type': 'inter-class',
+                                    'filename1': file_info[fid1]['filename'],
+                                    'filename2': file_info[fid2]['filename'],
+                                    'class1_name': class_labels[file_info[fid1]['class']],
+                                    'class2_name': class_labels[file_info[fid2]['class']]
+                                })
+
     # Sort high similarity pairs by similarity (highest first)
     high_similarity_pairs.sort(key=lambda x: x['similarity'], reverse=True)
     
     # Generate summary report
-    print("\n===== Dataset Split Similarity Analysis Report =====")
+    print("\n===== Class Similarity Analysis Report =====")
     print(f"Total files analyzed: {len(features_dict)}")
     print(f"High similarity pairs (>= {similarity_threshold}): {len(high_similarity_pairs)}")
+    print(f"  Intra-class high similarity pairs: {sum(1 for p in high_similarity_pairs if p['comparison_type'] == 'intra-class')}")
+    print(f"  Inter-class high similarity pairs: {sum(1 for p in high_similarity_pairs if p['comparison_type'] == 'inter-class')}")
     
-    # Cross-split similarity statistics
-    if all_cross_similarities:
-        print(f"\nCross-split similarity statistics:")
-        print(f"  Mean: {np.mean(all_cross_similarities):.4f}")
-        print(f"  Std dev: {np.std(all_cross_similarities):.4f}")
-        print(f"  Min: {np.min(all_cross_similarities):.4f}")
-        print(f"  Max: {np.max(all_cross_similarities):.4f}")
-    
-    # Within-split similarity statistics
-    print(f"\nWithin-split similarity statistics:")
-    for split, similarities in within_split_similarities.items():
+    # Generate statistics for intra-class similarities
+    print("\nIntra-class similarity statistics:")
+    for c in range(len(class_labels)):
+        similarities = intra_class_similarities[c]
         if similarities:
-            print(f"  {split}:")
+            print(f"  {class_labels[c]}:")
             print(f"    Mean: {np.mean(similarities):.4f}")
             print(f"    Std dev: {np.std(similarities):.4f}")
             print(f"    Min: {np.min(similarities):.4f}")
             print(f"    Max: {np.max(similarities):.4f}")
+            print(f"    High similarity pairs: {sum(1 for s in similarities if s >= similarity_threshold)}")
+            
+    # Generate statistics for inter-class similarities
+    print("\nInter-class similarity statistics:")
+    for (c1, c2), similarities in inter_class_similarities.items():
+        if similarities:
+            print(f"  {class_labels[c1]} vs {class_labels[c2]}:")
+            print(f"    Mean: {np.mean(similarities):.4f}")
+            print(f"    Std dev: {np.std(similarities):.4f}")
+            print(f"    Min: {np.min(similarities):.4f}")
+            print(f"    Max: {np.max(similarities):.4f}")
+            print(f"    High similarity pairs: {sum(1 for s in similarities if s >= similarity_threshold)}")
     
     # Display top high similarity pairs
-    n_to_show = min(10, len(high_similarity_pairs))
-    if high_similarity_pairs:
-        print(f"\nTop {n_to_show} highest similarity pairs:")
-        for i, pair in enumerate(high_similarity_pairs[:n_to_show]):
-            print(f"  {i+1}. {pair['file1']} ({pair['split1']}, class {pair['class1']}) ↔ "
-                  f"{pair['file2']} ({pair['split2']}, class {pair['class2']}): "
-                  f"{pair['similarity']:.4f}")
+    print("\nTop high similarity problematic pairs (different classes):")
+    inter_class_pairs = [p for p in high_similarity_pairs if p['comparison_type'] == 'inter-class']
+    n_to_show = min(10, len(inter_class_pairs))
+    for i, pair in enumerate(inter_class_pairs[:n_to_show]):
+        print(f"  {i+1}. {pair['filename1']} ({pair['class1_name']}, {pair['split1']}) ↔ "
+              f"{pair['filename2']} ({pair['class2_name']}, {pair['split2']}): "
+              f"{pair['similarity']:.4f}")
+    
+    # Display top high similarity pairs within same class but different splits
+    print("\nTop high similarity pairs (same class but different splits):")
+    cross_split_same_class_pairs = [p for p in high_similarity_pairs 
+                                   if p['comparison_type'] == 'intra-class' and p['split1'] != p['split2']]
+    n_to_show = min(10, len(cross_split_same_class_pairs))
+    for i, pair in enumerate(cross_split_same_class_pairs[:n_to_show]):
+        print(f"  {i+1}. {pair['filename1']} ({pair['split1']}) ↔ "
+              f"{pair['filename2']} ({pair['split2']}): "
+              f"{pair['similarity']:.4f}")
     
     # Create visualizations
     print("\nGenerating visualizations...")
     
-    # 1. Plot histogram of cross-split similarities
+    # 1. Plot histogram of similarities
     plt.figure(figsize=(10, 6))
-    plt.hist(all_cross_similarities, bins=50, alpha=0.7, color='skyblue')
+    
+    # Combine all similarity values by type for plotting
+    all_intra_similarities = []
+    for c, similarities in intra_class_similarities.items():
+        all_intra_similarities.extend(similarities)
+    
+    all_inter_similarities = []
+    for _, similarities in inter_class_similarities.items():
+        all_inter_similarities.extend(similarities)
+    
+    # Plot histograms for both types
+    plt.hist(all_intra_similarities, bins=50, alpha=0.7, label=f'Intra-class (n={len(all_intra_similarities)})', color='skyblue')
+    plt.hist(all_inter_similarities, bins=50, alpha=0.7, label=f'Inter-class (n={len(all_inter_similarities)})', color='salmon')
+    
     plt.axvline(similarity_threshold, color='red', linestyle='--', 
                 label=f'Threshold ({similarity_threshold})')
-    plt.axvline(np.mean(all_cross_similarities), color='green', linestyle='-', 
-                label=f'Mean ({np.mean(all_cross_similarities):.4f})')
-    plt.title('Distribution of Cross-Split Feature Similarities')
+    plt.axvline(np.mean(all_intra_similarities), color='blue', linestyle='-', 
+                label=f'Intra-class Mean ({np.mean(all_intra_similarities):.4f})')
+    plt.axvline(np.mean(all_inter_similarities), color='darkred', linestyle='-', 
+                label=f'Inter-class Mean ({np.mean(all_inter_similarities):.4f})')
+    
+    plt.title('Distribution of Feature Similarities')
     plt.xlabel('Cosine Similarity')
     plt.ylabel('Frequency')
     plt.legend()
     plt.grid(alpha=0.3)
-    plt.savefig('cross_split_similarity_histogram.png')
+    plt.savefig(f'{output_prefix}_similarity_distribution.png', dpi=300)
     plt.close()
     
-    # 2. Plot distribution of within-split similarities for each split
-    plt.figure(figsize=(12, 6))
-    for split, similarities in within_split_similarities.items():
-        if similarities:
-            sns.kdeplot(similarities, label=f'{split} (mean={np.mean(similarities):.4f})')
-    plt.axvline(similarity_threshold, color='red', linestyle='--', 
-                label=f'Threshold ({similarity_threshold})')
-    plt.title('Distribution of Within-Split Feature Similarities')
-    plt.xlabel('Cosine Similarity')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.savefig('within_split_similarity_distribution.png')
-    plt.close()
-    
+        
     # Add 2D clustering visualization with t-SNE
     print("\nCreating 2D clustered representation of embeddings...")
     
@@ -1416,7 +1423,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         colors = plt.cm.tab10(np.linspace(0, 1, len(unique_categories)))
         color_mapping = {cat: colors[i] for i, cat in enumerate(unique_categories)}
         
-        # Plot each category with its own color (2D plot - existing code)
+        # Plot each category with its own color (2D plot)
         for category in unique_categories:
             indices = [i for i, cat in enumerate(color_field) if cat == category]
             if not indices:
@@ -1438,7 +1445,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         plt.tight_layout()
         
         # Save the 2D plot
-        filename = f"embeddings_by_{viz_type}.png"
+        filename = f"{output_prefix}_embeddings_by_{viz_type}.png"
         plt.savefig(filename, dpi=300)
         plt.close()
         print(f"Saved 2D visualization to {filename}")
@@ -1470,14 +1477,14 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         ax.legend(title="Categories", bbox_to_anchor=(1.05, 1), loc='upper left')
         
         # Save the 3D static plot
-        filename_3d = f"embeddings_3d_by_{viz_type}.png"
+        filename_3d = f"{output_prefix}_embeddings_3d_by_{viz_type}.png"
         plt.tight_layout()
         plt.savefig(filename_3d, dpi=300)
         plt.close()
         print(f"Saved static 3D visualization to {filename_3d}")
         
         # Create rotating 3D animation for this visualization type
-        gif_filename = f"embeddings_3d_rotating_{viz_type}.gif"
+        gif_filename = f"{output_prefix}_embeddings_3d_rotating_{viz_type}.gif"
         create_rotating_3d_plot(
             embeddings_3d, 
             color_field, 
@@ -1494,13 +1501,29 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             unique_categories,
             color_mapping,
             f"Interactive 3D t-SNE Visualization of {title}",
-            f"interactive_3d_{viz_type}.html"
+            f"{output_prefix}_interactive_3d_{viz_type}.html"
         )
     
-    # Create interactive 3D visualization for high similarity pairs
+    # Create visualization highlighting high similarity pairs
     if high_similarity_pairs:
-        print("Creating interactive 3D visualization for high similarity pairs...")
+        print("Creating visualization for high similarity pairs...")
+        
+        # Create interactive 3D visualization for high similarity pairs
+        from plotly.offline import plot
+        import plotly.graph_objects as go
+        
         fig = go.Figure()
+        
+        # First determine which classes to use
+        if viz_type == 'split':
+            unique_categories = sorted(set(all_splits))
+            color_field = all_splits
+        else:
+            unique_categories = sorted(set(all_classes))
+            color_field = all_classes
+            
+        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_categories)))
+        color_mapping = {cat: colors[i] for i, cat in enumerate(unique_categories)}
         
         # Add traces for each category - background points with lower opacity
         for category in unique_categories:
@@ -1530,9 +1553,9 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 hoverinfo="skip"  # Hide hover for background points
             ))
         
-        # Add high similarity connections
-        high_sim_traces = []
-        for i, pair in enumerate(high_similarity_pairs[:50]):  # Limit to 50 pairs
+        # Add high similarity connections for problematic pairs (inter-class)
+        problematic_pairs = [p for p in high_similarity_pairs if p['comparison_type'] == 'inter-class']
+        for i, pair in enumerate(problematic_pairs[:50]):  # Limit to 50 pairs
             try:
                 idx1 = all_file_ids.index(pair['file1'])
                 idx2 = all_file_ids.index(pair['file2'])
@@ -1543,15 +1566,15 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     y=[embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
                     z=[embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
                     mode='lines',
-                    line=dict(color='rgba(0,0,0,0.5)', width=2),
+                    line=dict(color='rgba(255,0,0,0.5)', width=2),
                     showlegend=False,
                     hoverinfo="text",
-                    hovertext=f"Similarity: {pair['similarity']:.4f}"
+                    hovertext=f"Similarity: {pair['similarity']:.4f}, {pair['class1_name']} vs {pair['class2_name']}"
                 ))
                 
                 # Add highlighted points
-                for idx, file_id, split_name, class_name in [(idx1, pair['file1'], pair['split1'], pair['class1']), 
-                                         (idx2, pair['file2'], pair['split2'], pair['class2'])]:
+                for idx, file_id, split_name, class_name in [(idx1, pair['file1'], pair['split1'], pair['class1_name']), 
+                                                        (idx2, pair['file2'], pair['split2'], pair['class2_name'])]:
                     cat = all_classes[idx]
                     hex_color = "#{:02x}{:02x}{:02x}".format(
                         int(color_mapping[cat][0] * 255),
@@ -1580,7 +1603,7 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
         
         # Set layout
         fig.update_layout(
-            title=f"High Similarity Pairs (sim ≥ {similarity_threshold})",
+            title=f"High Similarity Pairs (sim ≥ {similarity_threshold}) - Different Classes",
             scene=dict(
                 xaxis_title="t-SNE Dimension 1",
                 yaxis_title="t-SNE Dimension 2",
@@ -1593,45 +1616,226 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 xanchor="left",
                 x=0.01
             ),
-            margin=dict(l=0, r=0, b=0, t=30)
+            margin=dict(l=0, r=0, b=0, t=30),
+            scene_camera=dict(
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=0),
+                eye=dict(x=1.5, y=1.5, z=1.5)
+            )
         )
         
         # Save to HTML file
-        html_filename = "high_similarity_3d_interactive.html"
+        html_filename = f"{output_prefix}_high_similarity_3d_interactive.html"
         plot(fig, filename=html_filename, auto_open=False)
         print(f"Saved interactive 3D visualization to {html_filename}")
+        
+        # Also create visualization for cross-split pairs (data leakage)
+        cross_split_pairs = [p for p in high_similarity_pairs if p['split1'] != p['split2']]
+        if len(cross_split_pairs) > 0:
+            fig = go.Figure()
+            
+            # Create a separate color mapping for splits
+            split_categories = sorted(set(all_splits))
+            split_colors = plt.cm.Paired(np.linspace(0, 1, len(split_categories)))
+            split_color_mapping = {split: split_colors[i] for i, split in enumerate(split_categories)}
+            
+            # Add background points
+            for category in split_categories:
+                indices = [i for i, split in enumerate(all_splits) if split == category]
+                if not indices:
+                    continue
+                    
+                hex_color = "#{:02x}{:02x}{:02x}".format(
+                    int(split_color_mapping[category][0] * 255),
+                    int(split_color_mapping[category][1] * 255),
+                    int(split_color_mapping[category][2] * 255)
+                )
+                
+                fig.add_trace(go.Scatter3d(
+                    x=embeddings_3d[indices, 0],
+                    y=embeddings_3d[indices, 1],
+                    z=embeddings_3d[indices, 2],
+                    mode='markers',
+                    marker=dict(
+                        size=4,
+                        color=hex_color,
+                        opacity=0.3,
+                        line=dict(width=0, color='#FFFFFF')
+                    ),
+                    name=f"{category}",
+                    hoverinfo="skip"
+                ))
+            
+            # Add cross-split connections
+            for i, pair in enumerate(cross_split_pairs[:50]):  # Limit to 50 pairs
+                try:
+                    idx1 = all_file_ids.index(pair['file1'])
+                    idx2 = all_file_ids.index(pair['file2'])
+                    
+                    # Add line trace
+                    fig.add_trace(go.Scatter3d(
+                        x=[embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
+                        y=[embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
+                        z=[embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
+                        mode='lines',
+                        line=dict(color='rgba(255,140,0,0.7)', width=2),
+                        showlegend=False,
+                        hoverinfo="text",
+                        hovertext=f"Similarity: {pair['similarity']:.4f}, {pair['split1']} ↔ {pair['split2']}"
+                    ))
+                    
+                    # Add highlighted points
+                    for idx, file_id, split_name in [(idx1, pair['file1'], pair['split1']), 
+                                                (idx2, pair['file2'], pair['split2'])]:
+                        split_val = all_splits[idx]
+                        hex_color = "#{:02x}{:02x}{:02x}".format(
+                            int(split_color_mapping[split_val][0] * 255),
+                            int(split_color_mapping[split_val][1] * 255),
+                            int(split_color_mapping[split_val][2] * 255)
+                        )
+                        
+                        class_name = class_labels[all_classes[idx]] if all_classes[idx] < len(class_labels) else f"Category {all_classes[idx]}"
+                        
+                        fig.add_trace(go.Scatter3d(
+                            x=[embeddings_3d[idx, 0]],
+                            y=[embeddings_3d[idx, 1]],
+                            z=[embeddings_3d[idx, 2]],
+                            mode='markers',
+                            marker=dict(
+                                size=7,
+                                color=hex_color,
+                                opacity=1,
+                                line=dict(width=1, color='#000000')
+                            ),
+                            showlegend=False,
+                            hoverinfo="text",
+                            hovertext=f"File: {os.path.basename(file_id)}<br>Split: {split_name}<br>Class: {class_name}"
+                        ))
+                    
+                except ValueError:
+                    continue
+            
+            # Set layout
+            fig.update_layout(
+                title=f"Cross-Split High Similarity Pairs (sim ≥ {similarity_threshold}) - Potential Data Leakage",
+                scene=dict(
+                    xaxis_title="t-SNE Dimension 1",
+                    yaxis_title="t-SNE Dimension 2",
+                    zaxis_title="t-SNE Dimension 3"
+                ),
+                legend=dict(
+                    title="Splits",
+                    yanchor="top",
+                    y=0.99,
+                    xanchor="left",
+                    x=0.01
+                ),
+                margin=dict(l=0, r=0, b=0, t=30),
+                scene_camera=dict(
+                    up=dict(x=0, y=0, z=1),
+                    center=dict(x=0, y=0, z=0),
+                    eye=dict(x=1.5, y=1.5, z=1.5)
+                )
+            )
+            
+            # Save to HTML file
+            html_filename = f"{output_prefix}_cross_split_3d_interactive.html"
+            plot(fig, filename=html_filename, auto_open=False)
+            print(f"Saved cross-split interactive 3D visualization to {html_filename}")
     
     # Save high similarity pairs to CSV for further analysis
     if high_similarity_pairs:
+        # Full results
         df = pd.DataFrame(high_similarity_pairs)
-        df.to_csv('high_similarity_pairs.csv', index=False)
-        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
+        df.to_csv(f'{output_prefix}_high_similarity_pairs.csv', index=False)
+        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to {output_prefix}_high_similarity_pairs.csv")
+        
+        # Just problematic inter-class pairs
+        df_problematic = pd.DataFrame([p for p in high_similarity_pairs if p['comparison_type'] == 'inter-class'])
+        df_problematic.to_csv(f'{output_prefix}_problematic_pairs.csv', index=False)
+        print(f"Saved {len(df_problematic)} problematic inter-class pairs to {output_prefix}_problematic_pairs.csv")
+        
+        # Cross-split pairs (for data leakage prevention)
+        df_cross_split = pd.DataFrame([p for p in high_similarity_pairs if p['split1'] != p['split2']])
+        df_cross_split.to_csv(f'{output_prefix}_cross_split_pairs.csv', index=False)
+        print(f"Saved {len(df_cross_split)} cross-split pairs to {output_prefix}_cross_split_pairs.csv")
     
+    # Return compiled results
     results = {
         'high_similarity_pairs': high_similarity_pairs,
-        'cross_split_statistics': {
-            'mean': np.mean(all_cross_similarities) if all_cross_similarities else None,
-            'std': np.std(all_cross_similarities) if all_cross_similarities else None,
-            'min': np.min(all_cross_similarities) if all_cross_similarities else None,
-            'max': np.max(all_cross_similarities) if all_cross_similarities else None,
+        'intra_class_statistics': {
+            c: {
+                'mean': np.mean(intra_class_similarities[c]) if intra_class_similarities[c] else None,
+                'std': np.std(intra_class_similarities[c]) if intra_class_similarities[c] else None,
+                'min': np.min(intra_class_similarities[c]) if intra_class_similarities[c] else None,
+                'max': np.max(intra_class_similarities[c]) if intra_class_similarities[c] else None,
+                'threshold_count': sum(1 for s in intra_class_similarities[c] if s >= similarity_threshold) if intra_class_similarities[c] else 0,
+                'total_count': len(intra_class_similarities[c])
+            } for c in range(len(class_labels))
         },
-        'within_split_statistics': {
-            split: {
-                'mean': np.mean(similarities) if similarities else None,
-                'std': np.std(similarities) if similarities else None,
-                'min': np.min(similarities) if similarities else None,
-                'max': np.max(similarities) if similarities else None,
-            } for split, similarities in within_split_similarities.items()
+        'inter_class_statistics': {
+            f"{c1}_{c2}": {
+                'class1': class_labels[c1],
+                'class2': class_labels[c2],
+                'mean': np.mean(inter_class_similarities[(c1, c2)]) if inter_class_similarities[(c1, c2)] else None,
+                'std': np.std(inter_class_similarities[(c1, c2)]) if inter_class_similarities[(c1, c2)] else None,
+                'min': np.min(inter_class_similarities[(c1, c2)]) if inter_class_similarities[(c1, c2)] else None,
+                'max': np.max(inter_class_similarities[(c1, c2)]) if inter_class_similarities[(c1, c2)] else None,
+                'threshold_count': sum(1 for s in inter_class_similarities[(c1, c2)] if s >= similarity_threshold) if inter_class_similarities[(c1, c2)] else 0,
+                'total_count': len(inter_class_similarities[(c1, c2)])
+            } for c1, c2 in inter_class_similarities.keys()
         },
-        'excluded_files_count': skipped_files,
         'problematic_files': sorted(list(set(
-            [pair['file1'] for pair in high_similarity_pairs] + 
-            [pair['file2'] for pair in high_similarity_pairs]
+            [pair['file1'] for pair in high_similarity_pairs if pair['comparison_type'] == 'inter-class'] + 
+            [pair['file2'] for pair in high_similarity_pairs if pair['comparison_type'] == 'inter-class']
+        ))),
+        'cross_split_files': sorted(list(set(
+            [pair['file1'] for pair in high_similarity_pairs if pair['split1'] != pair['split2']] + 
+            [pair['file2'] for pair in high_similarity_pairs if pair['split1'] != pair['split2']]
         )))
     }
-
+    
+    print("\nAnalysis complete! Review the generated CSV files and visualizations for detailed results.")
+    
+    # Provide recommendations
+    print("\n===== RECOMMENDATIONS =====")
+    
+    # Calculate some metrics for recommendations
+    total_inter_class_pairs = sum(len(similarities) for similarities in inter_class_similarities.values())
+    high_inter_class_pairs = sum(1 for p in high_similarity_pairs if p['comparison_type'] == 'inter-class')
+    high_inter_class_ratio = high_inter_class_pairs / total_inter_class_pairs if total_inter_class_pairs > 0 else 0
+    
+    # Recommendation based on prevalence of high similarity inter-class pairs
+    print(f"1. Inter-class similarity issues: {high_inter_class_pairs} high similarity pairs found between different classes")
+    if high_inter_class_ratio > 0.02:
+        print("   ⚠️ WARNING: High proportion of inter-class similar samples")
+        print("   This suggests significant overlap between classes which may affect model performance")
+        print("   Consider reviewing these samples manually and potentially excluding them")
+    else:
+        print("   ✓ The proportion of inter-class similar samples is relatively low")
+    
+    # Recommendation for different splits
+    cross_split_pairs = [p for p in high_similarity_pairs if p['split1'] != p['split2']]
+    if len(cross_split_pairs) > 0:
+        print(f"\n2. Data leakage risk: {len(cross_split_pairs)} high similarity pairs found across different splits")
+        print("   ⚠️ WARNING: Potential data leakage between train/validation/test splits")
+        print("   Consider reorganizing your dataset splits to avoid similar samples in different splits")
+        print(f"   Review {output_prefix}_cross_split_pairs.csv for details")
+    else:
+        print("\n2. Data leakage risk: No high similarity pairs found across different splits")
+        print("   ✓ Good split integrity - no data leakage detected")
+    
+    # Class-specific recommendations
+    print("\n3. Class-specific recommendations:")
+    for (c1, c2), similarities in inter_class_similarities.items():
+        high_sim_count = sum(1 for s in similarities if s >= similarity_threshold)
+        if high_sim_count > 0:
+            ratio = high_sim_count / len(similarities) if similarities else 0
+            if ratio > 0.01:
+                print(f"   ⚠️ {class_labels[c1]} vs {class_labels[c2]}: {high_sim_count} high similarity pairs ({ratio:.2%})")
+                print(f"      This pair of classes shows higher confusion, which may affect classification performance")
+    
     return results
-
 
 if __name__ == "__main__": 
 
@@ -1648,17 +1852,43 @@ if __name__ == "__main__":
     # Analyze how different your augmentations are in feature space
     #analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
    
-    results = analyze_dataset_split_similarity(
+    """ results = analyze_dataset_split_similarity(
         dataset_path=dataset_path,  # Path to your HF dataset
         audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
         model_path=None,  # Set to your model path if a trained model is available
         similarity_threshold=0.95,
         exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
+    ) """
+
+    results_binary = analyze_class_similarity(
+    dataset_path=myConfig.OUTPUT_PATH,
+    audio_root_path=myConfig.DATA_DIR,
+    similarity_threshold=0.95,
+    binary_classification=True, 
+    output_prefix="binary_analysis",
+    exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
+)    
+
+    # Example usage of the new function:
+    """
+    # For 3-way classification (HC/MCI/AD)
+    results_3way = analyze_class_similarity(
+        dataset_path=myConfig.OUTPUT_PATH,
+        audio_root_path=myConfig.DATA_DIR,
+        similarity_threshold=0.95,
+        binary_classification=False,
+        output_prefix="3way_analysis"
     )
-
-    # Access results
-    print(f"Found {len(results['problematic_files'])} potentially problematic files")
-
+    
+    # For binary classification (HC vs Non-HC)
+    results_binary = analyze_class_similarity(
+        dataset_path=myConfig.OUTPUT_PATH,
+        audio_root_path=myConfig.DATA_DIR,
+        similarity_threshold=0.95,
+        binary_classification=True, 
+        output_prefix="binary_analysis"
+    )
+    """
 
     # Example usage
     """ original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
