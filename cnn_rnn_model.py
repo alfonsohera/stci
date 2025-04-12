@@ -257,9 +257,13 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         self.cnn_extractor.load_state_dict(checkpoint['model'])
         
         
-        # Freeze CNN14 weights for transfer learning
-        for param in self.cnn_extractor.parameters():
-            param.requires_grad = False
+        print("Selectively unfreezing CNN14 layers...")
+        for name, param in self.cnn_extractor.named_parameters():
+            if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                param.requires_grad = True
+                print(f"Unfreezing {name}")
+            else:
+                param.requires_grad = False
             
         # CNN feature dimension adapter (CNN14 outputs 2048-dim embeddings)
         self.cnn_adapter = nn.Sequential(

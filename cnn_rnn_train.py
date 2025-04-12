@@ -473,20 +473,32 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         
     model.to(device)
 
-    # Set up the optimizer with proper hyperparameters    
+    cnn_params = []
+    other_params = []
+
+    # Group parameters for different learning rates
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if "cnn_extractor" in name:
+                cnn_params.append(param)
+            else:
+                other_params.append(param)
+
+    # Set up the optimizer with parameter groups
     initial_lr = hpo_max_lr / hpo_div_factor
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=initial_lr,
-        weight_decay=hpo_weight_decay,  # L2 regularization
-    )
+    cnn_lr = initial_lr * 0.1  # 10x lower learning rate for CNN14 layers
+
+    optimizer = torch.optim.Adam([
+        {'params': cnn_params, 'lr': cnn_lr, 'weight_decay': hpo_weight_decay * 2},  
+        {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+    ])
 
     total_steps = len(dataloaders["train"]) * num_epochs
     
     # Create scheduler with optimized hyperparameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=hpo_max_lr,
+        max_lr=[hpo_max_lr * 0.1, hpo_max_lr], # 10x lower for CNN14 layers
         total_steps=total_steps,
         pct_start=hpo_pct_start,
         div_factor=hpo_div_factor,
