@@ -500,7 +500,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
 
     # Set up the optimizer with parameter groups
     initial_lr = hpo_max_lr / hpo_div_factor
-    cnn_lr = hpo_learning_rate_cnn 
+    cnn_lr = hpo_learning_rate_cnn / hpo_div_factor 
 
     optimizer = torch.optim.AdamW([
         {'params': cnn_params, 'lr': cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
@@ -1582,21 +1582,21 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
             torch.cuda.empty_cache()
             gc.collect()
                         
-            # Core learning parameters - broader ranges for exploration with clean data
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 0.7)  # Wider range since class imbalance effect may differ
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0)  # Higher upper limit to potentially focus more on hard examples
-            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 5e-5, 1e-3, log=True)  # Increased regularization range
-            hpo_weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-4, log=True)  # Broader range to find optimal regularization
-            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 5e-6, 5e-3, log=True)  # Wider range for CNN layers
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 3e-3, log=True)  # Slightly higher upper limit
-            hpo_pct_start = trial.suggest_float("pct_start", 0.1, 0.3)  # Start with a wider range for warmup period
-            hpo_div_factor = trial.suggest_float("div_factor", 10.0, 40.0)  # Wider range for initial LR division
-            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)  # Wider range for final LR division
+            # Core learning parameters - refined ranges based on previous HPO run
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.45, 0.65)  # Centered around 0.541
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.4, 1.9)  # Centered around 1.64
+            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 4e-4, 9e-4, log=True)  # Centered around 6.59e-4
+            hpo_weight_decay = trial.suggest_float("weight_decay", 4e-5, 9e-5, log=True)  # Centered around 6.4e-5
+            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 6e-4, 1.1e-3, log=True)  # Centered around 8.47e-4, high importance
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 4e-4, 8e-4, log=True)  # Centered around 6.37e-4
+            hpo_pct_start = trial.suggest_float("pct_start", 0.09, 0.18)  # Centered around 0.117
+            hpo_div_factor = trial.suggest_float("div_factor", 18.0, 30.0)  # Centered around 24.3
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 325.0)  # Centered around 262.8
 
-            # Model architecture parameters - also broadened for exploration
-            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)  # Increased upper bound for potentially stronger regularization
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.15, 0.5)  # Wider range to find optimal dropout                
-            prosodic_weight = trial.suggest_float("prosodic_weight", 0.8, 2.5)  # Expanded range to rebalance importance between modalities
+            # Model architecture parameters - refined for optimal performance
+            attention_dropout = trial.suggest_float("attention_dropout", 0.25, 0.38)  # Centered around 0.32
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.12, 0.24)  # Centered around 0.178, highest importance
+            prosodic_weight = trial.suggest_float("prosodic_weight", 1.7, 2.3)  # Centered around 2.0, high importance
             
             
             
