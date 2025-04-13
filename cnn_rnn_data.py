@@ -496,10 +496,19 @@ def get_original_audio_by_id(audio_id):
         
     pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
     
+    # Define the order to search splits - prioritize test split since CAM is typically used during testing
+    splits_to_search = ["test", "validation", "train"]
+    
+    # Track whether we found a match in any split
+    found_audio = None
+    found_path = None
+    found_split = None
+    
     # Try to load the dataset info to find the correct file for the given ID
     try:
         print(f"Searching for audio ID: {audio_id} in pytorch dataset...")
-        for split in ["train", "validation", "test"]:
+        
+        for split in splits_to_search:
             split_path = os.path.join(pytorch_dataset_path, f"{split}.pt")
             if os.path.exists(split_path):
                 samples = torch.load(split_path)
@@ -511,8 +520,16 @@ def get_original_audio_by_id(audio_id):
                     print(f"Found matching processed audio in {split} dataset at index {i}")
                     audio_tensor = samples[i]["audio"]
                     file_path = samples[i].get("file_path", f"dataset_{split}_{i}")
-                    return audio_tensor, file_path
-                
+                    
+                    if split == "test":
+                        print(f"Match found in test split, which is the correct split for CAM visualization.")
+                        return audio_tensor, file_path
+                    else:
+                        # Save the match but keep looking for a test split match first
+                        found_audio = audio_tensor
+                        found_path = file_path
+                        found_split = split
+                        
                 # If not a direct index match, search through all samples
                 for i, sample in enumerate(samples):
                     if str(i) == str(audio_id) or (
@@ -521,7 +538,22 @@ def get_original_audio_by_id(audio_id):
                         # Use the audio data directly from the saved dataset (already processed)
                         audio_tensor = sample["audio"]
                         file_path = sample.get("file_path", f"dataset_{split}_{i}")
-                        return audio_tensor, file_path
+                        
+                        if split == "test":
+                            print(f"Match found in test split, which is the correct split for CAM visualization.")
+                            return audio_tensor, file_path
+                        else:
+                            # Save the match but keep looking for a test split match first
+                            found_audio = audio_tensor
+                            found_path = file_path
+                            found_split = split
+        
+        # If we found a match but not in the test split, warn the user and return that match
+        if found_audio is not None:
+            print(f"WARNING: Audio ID {audio_id} was found in the {found_split} split, not the test split!")
+            print(f"This may lead to incorrect CAM visualization since you're analyzing a {found_split} sample.")
+            return found_audio, found_path
+                    
     except Exception as e:
         print(f"Error searching in pytorch dataset: {str(e)}")
         
@@ -538,6 +570,8 @@ def get_original_audio_by_id(audio_id):
                 # Convert to mono if needed
                 if waveform.shape[0] > 1:
                     waveform = waveform.mean(dim=0, keepdim=True)
+                print("WARNING: This file was found in the raw data directory, not in a specific dataset split.")
+                print("Make sure this is a test sample if you're using it for CAM visualization.")
                 return waveform, filepath
         
         # Check class-specific subdirectories inside Data if they exist
@@ -552,6 +586,8 @@ def get_original_audio_by_id(audio_id):
                         # Convert to mono if needed
                         if waveform.shape[0] > 1:
                             waveform = waveform.mean(dim=0, keepdim=True)
+                        print("WARNING: This file was found in the raw data directory, not in a specific dataset split.")
+                        print("Make sure this is a test sample if you're using it for CAM visualization.")
                         return waveform, filepath
     except Exception as e:
         print(f"Error searching in Data directory: {str(e)}")
