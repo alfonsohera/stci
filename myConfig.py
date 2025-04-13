@@ -68,23 +68,24 @@ selected_features = [
 num_extracted_features = len(selected_features)
 
 
+
 # CNN-RNN model hyperparameters  - enabled when training from scratch
 cnn_rnn_hyperparams = {
     # Core training hyperparameters
-    "max_lr": 0.0008824227362416752,
-    "focal_loss_gamma": 1.521142890255866,
-    "weight_scaling_factor": 0.4249448142616835,
-    "weight_decay": 0.0000498211421162107,
-    "pct_start": 0.15580836121681993,
-    "div_factor": 28.66176145774935,
-    "final_div_factor": 310.1115011743209,
+    "max_lr": 0.0006369170190399959,
+    "focal_loss_gamma": 1.6403510582650866,
+    "weight_scaling_factor": 0.541293977029641,
+    "weight_decay": 6.39791878091069e-05,
+    "pct_start": 0.11702520222846807,
+    "div_factor": 24.324339283987428,
+    "final_div_factor": 262.7944408124969,
     
     # Model-specific hyperparameters
-    "attention_dropout":0.25621088666940683,
-    "fusion_dropout": 0.20308767414437037,
-    "prosodic_weight": 1.9759278817295955,
-    "learning_rate_cnn": 0.00005141766390109778,
-    "weight_decay_cnn": 0.0003248192869770287
+    "attention_dropout":0.31977615961552563,
+    "fusion_dropout": 0.1777616037217203,
+    "prosodic_weight": 2.003137221568494,
+    "learning_rate_cnn": 0.0008474223376376886,
+    "weight_decay_cnn": 0.000659373514149176
 }
 
 # fine tuning hyperparameters
