@@ -2,9 +2,11 @@ import os
 import torch
 import numpy as np
 import wandb
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, matthews_corrcoef, precision_score, recall_score, roc_curve, auc
 from tqdm import tqdm
 import gc
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Local imports
 import myConfig
@@ -680,6 +682,7 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     
     all_preds = []
     all_labels = []
+    all_probs = []  # Store probabilities for ROC curves
     
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
@@ -720,6 +723,10 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                     prosodic_features=batch.get("prosodic_features", None),
                     chunk_context=batch.get("chunk_context", None)
                 )
+                
+                # Get class probabilities for ROC curve
+                probs = torch.softmax(logits, dim=-1)
+                all_probs.append(probs.cpu().numpy())
                 
                 preds = torch.argmax(logits, dim=-1)
                 all_preds.extend(preds.cpu().numpy())
@@ -771,6 +778,10 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
             all_preds.append(pred.cpu().numpy())
             all_labels.append(label.cpu().numpy())
             
+            # Get probabilities for ROC curve
+            probs = torch.softmax(aggregated_output, dim=-1)
+            all_probs.append(probs.cpu().numpy().reshape(1, -1))
+            
             # Process CAM for chunked audio
             if use_cam and cam_output_dir and audio_id in audio_tensors:
                 true_class = label.item()
@@ -810,9 +821,9 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
     if num_classes == 2:
-        class_names=["Healthy", "Not Healthy"]
+        class_names = ["Healthy", "Not Healthy"]
     else:
-         class_names=["Healthy", "MCI", "AD"]                
+        class_names = ["Healthy", "MCI", "AD"]                
     report = classification_report(
             all_labels, all_preds, target_names=class_names)
     print(f"Test Accuracy: {test_accuracy:.4f}")
@@ -828,6 +839,121 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                 class_name = class_names[class_id]
                 print(f"    Class {class_name}: {count} samples")
         print(f"\nVisualizations saved to {cam_output_dir}")
+    
+    # Generate ROC curves if we have probability data
+    if all_probs:
+        # Convert all_probs to numpy array
+        all_probs = np.vstack(all_probs)
+        
+        # Create output directory for visualizations
+        viz_output_dir = cam_output_dir if cam_output_dir else os.path.join(myConfig.OUTPUT_PATH, "test_visualizations")
+        os.makedirs(viz_output_dir, exist_ok=True)
+        
+        # Generate confusion matrix visualization
+        plt.figure(figsize=(10, 8))
+        cm = confusion_matrix(all_labels, all_preds)
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
+                  xticklabels=class_names, yticklabels=class_names)
+        plt.xlabel("Predicted labels")
+        plt.ylabel("True labels")
+        plt.title("Confusion Matrix (Test Set)")
+        plt.savefig(os.path.join(viz_output_dir, "test_confusion_matrix.png"))
+        plt.close()
+        
+        # Plot ROC curves for each class
+        plt.figure(figsize=(10, 8))
+        
+        # Colors for different classes
+        colors = ['blue', 'red', 'green', 'orange', 'purple']
+        
+        # For each class, compute ROC curve and AUC
+        for i, class_name in enumerate(class_names):
+            # Binarize the labels for current class (one-vs-rest)
+            bin_labels = (np.array(all_labels) == i).astype(int)
+            
+            # Get probability scores for current class
+            class_probs = all_probs[:, i]
+            
+            # Compute ROC curve and AUC
+            fpr, tpr, _ = roc_curve(bin_labels, class_probs)
+            roc_auc = auc(fpr, tpr)
+            
+            # Plot ROC curve
+            plt.plot(fpr, tpr, lw=2, color=colors[i % len(colors)],
+                     label=f'{class_name} (AUC = {roc_auc:.2f})')
+        
+        # Plot diagonal line (random classifier)
+        plt.plot([0, 1], [0, 1], 'k--', lw=2)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC) Curves')
+        plt.legend(loc="lower right")
+        plt.grid(True)
+        
+        # Save the plot
+        roc_curve_path = os.path.join(viz_output_dir, "roc_curves.png")
+        plt.savefig(roc_curve_path)
+        plt.close()
+        
+        print(f"\nROC curves saved to: {roc_curve_path}")
+        
+        # If multiclass (more than 2 classes), also create micro-average and macro-average ROC curves
+        if len(class_names) > 2:
+            plt.figure(figsize=(10, 8))
+            
+            # Compute micro-average ROC curve and AUC
+            # Flatten predictions and labels
+            all_labels_bin = []
+            all_probs_bin = []
+            
+            for i in range(len(class_names)):
+                bin_labels = (np.array(all_labels) == i).astype(int)
+                all_labels_bin.extend(bin_labels)
+                all_probs_bin.extend(all_probs[:, i])
+            
+            # Compute micro-average ROC curve and AUC
+            fpr_micro, tpr_micro, _ = roc_curve(all_labels_bin, all_probs_bin)
+            roc_auc_micro = auc(fpr_micro, tpr_micro)
+            plt.plot(fpr_micro, tpr_micro, 'b-', lw=2,
+                    label=f'Micro-average (AUC = {roc_auc_micro:.2f})')
+            
+            # Compute macro-average ROC curve and AUC
+            # First aggregate all false positive rates
+            all_fpr = np.unique(np.concatenate([fpr for i, (fpr, _, _) in 
+                                              enumerate([roc_curve((np.array(all_labels) == i).astype(int), 
+                                                                 all_probs[:, i]) for i in range(len(class_names))])]))
+            
+            # Then interpolate all ROC curves at these points
+            mean_tpr = np.zeros_like(all_fpr)
+            for i in range(len(class_names)):
+                bin_labels = (np.array(all_labels) == i).astype(int)
+                fpr, tpr, _ = roc_curve(bin_labels, all_probs[:, i])
+                mean_tpr += np.interp(all_fpr, fpr, tpr)
+            
+            # Average and compute AUC
+            mean_tpr /= len(class_names)
+            roc_auc_macro = auc(all_fpr, mean_tpr)
+            plt.plot(all_fpr, mean_tpr, 'r-', lw=2,
+                    label=f'Macro-average (AUC = {roc_auc_macro:.2f})')
+            
+            # Plot diagonal line
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Micro and Macro Average ROC Curves')
+            plt.legend(loc="lower right")
+            plt.grid(True)
+            
+            # Save the plot
+            avg_roc_curve_path = os.path.join(viz_output_dir, "average_roc_curves.png")
+            plt.savefig(avg_roc_curve_path)
+            plt.close()
+            
+            print(f"Average ROC curves saved to: {avg_roc_curve_path}")
     
     return test_accuracy, all_preds, all_labels
 
@@ -977,25 +1103,82 @@ def test_cnn_rnn(binary_classification=False, use_cam=False, max_cam_samples=20)
     if test_labels is not None and test_preds is not None:
         target_names = ["Healthy", "Non-Healthy"] if binary_classification else ["Healthy", "MCI", "AD"]
         test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+        test_f1_weighted = f1_score(test_labels, test_preds, average='weighted')
+        test_f1_per_class = f1_score(test_labels, test_preds, average=None)
+        test_precision_macro = precision_score(test_labels, test_preds, average='macro')
+        test_precision_weighted = precision_score(test_labels, test_preds, average='weighted')
+        test_precision_per_class = precision_score(test_labels, test_preds, average=None)
+        test_recall_macro = recall_score(test_labels, test_preds, average='macro')
+        test_recall_weighted = recall_score(test_labels, test_preds, average='weighted')
+        test_recall_per_class = recall_score(test_labels, test_preds, average=None)
         test_report = classification_report(test_labels, test_preds, target_names=target_names)
         
-        print(f"Test F1-Macro: {test_f1_macro:.4f}")
-        print("Detailed Classification Report:")
-        print(test_report)
+        # Calculate confusion matrix
+        cm = confusion_matrix(test_labels, test_preds)
         
-        # Generate and save confusion matrix
-        if cam_output_dir:
-            import matplotlib.pyplot as plt
-            import seaborn as sns
-            cm = confusion_matrix(test_labels, test_preds)
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
-                      xticklabels=target_names, yticklabels=target_names)
-            plt.xlabel("Predicted labels")
-            plt.ylabel("True labels")
-            plt.title("Confusion Matrix (Test Set)")
-            plt.savefig(os.path.join(cam_output_dir, "test_confusion_matrix.png"))
-            plt.close()
+        # Calculate specificity and NPV for each class
+        n_classes = len(target_names)
+        specificity_per_class = np.zeros(n_classes)
+        npv_per_class = np.zeros(n_classes)
+        
+        for i in range(n_classes):
+            # For each class, calculate TN, FP, FN
+            true_negative = np.sum(np.delete(np.delete(cm, i, axis=0), i, axis=1))
+            false_positive = np.sum(cm[:, i]) - cm[i, i]
+            false_negative = np.sum(cm[i, :]) - cm[i, i]
+            
+            # Calculate specificity (true negative rate): TN / (TN + FP)
+            specificity_per_class[i] = true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+            
+            # Calculate negative predictive value: TN / (TN + FN)
+            npv_per_class[i] = true_negative / (true_negative + false_negative) if (true_negative + false_negative) > 0 else 0
+        
+        # Print detailed metrics
+        print("\n" + "="*50)
+        print("DETAILED TEST RESULTS")
+        print("="*50)
+        print(f"Test Accuracy: {test_accuracy:.4f}")
+        
+        print("\nMACRO METRICS:")
+        print(f"F1-Score (Macro): {test_f1_macro:.4f}")
+        print(f"Precision (Macro): {test_precision_macro:.4f}")
+        print(f"Recall (Macro): {test_recall_macro:.4f}")
+        
+        print("\nWEIGHTED METRICS:")
+        print(f"F1-Score (Weighted): {test_f1_weighted:.4f}")
+        print(f"Precision (Weighted): {test_precision_weighted:.4f}")
+        print(f"Recall (Weighted): {test_recall_weighted:.4f}")
+        
+        print("\nPER-CLASS METRICS:")
+        for i, class_name in enumerate(target_names):
+            print(f"\n{class_name} Class:")
+            print(f"  Precision: {test_precision_per_class[i]:.4f}")
+            print(f"  Recall/Sensitivity: {test_recall_per_class[i]:.4f}")
+            print(f"  Specificity: {specificity_per_class[i]:.4f}")
+            print(f"  NPV: {npv_per_class[i]:.4f}")
+            print(f"  F1-Score: {test_f1_per_class[i]:.4f}")
+            
+            # Calculate and print additional class metrics from confusion matrix
+            tp = cm[i, i]  # True positives for this class
+            fp = np.sum(cm[:, i]) - tp  # False positives
+            fn = np.sum(cm[i, :]) - tp  # False negatives
+            tn = np.sumcm(cm) - tp - fp - fn  # True negatives
+            
+            accuracy_class = (tp + tn) / np.sum(cm) if np.sum(cm) > 0 else 0
+            balanced_accuracy = (test_recall_per_class[i] + specificity_per_class[i]) / 2
+            
+            print(f"  Balanced Accuracy: {balanced_accuracy:.4f}")
+            print(f"  Matthews Correlation Coefficient: {matthews_corrcoef(test_labels == i, test_preds == i):.4f}")
+            
+        # Calculate and print aggregate balanced accuracy
+        balanced_accuracy_score_all = balanced_accuracy_score(test_labels, test_preds)
+        print(f"\nBalanced Accuracy (All Classes): {balanced_accuracy_score_all:.4f}")
+        
+        print("\nConfusion Matrix:")
+        print(cm)
+        print("\nClassification Report:")
+        print(test_report)
+        print("="*50)
     
     return test_accuracy, test_preds, test_labels
 
