@@ -1335,7 +1335,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
             focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 1.6)
             hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 1e-4, 5e-4, log=True)  
             hpo_weight_decay = trial.suggest_float("weight_decay", 3e-5, 7e-5, log=True)
-            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 4e-5, 2e-4, log=True)                      
+            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 1e-6, 1e-3, log=True)                      
             hpo_max_learning_rate = trial.suggest_float("learning_rate", 8e-4, 1.5e-3, log=True)
             hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.25)  
             hpo_div_factor = trial.suggest_float("div_factor", 20.0, 30.0)  
