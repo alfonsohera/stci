@@ -425,7 +425,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     hpo_pct_start = myConfig.cnn_rnn_hyperparams["pct_start"]
     hpo_div_factor = myConfig.cnn_rnn_hyperparams["div_factor"]
     hpo_final_div_factor = myConfig.cnn_rnn_hyperparams["final_div_factor"]
-
+    hpo_weight_decay_cnn = myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
+    hpo_learning_rate_cnn = myConfig.cnn_rnn_hyperparams["learning_rate_cnn"]
     # Initialize wandb
     if not wandb.run:
         # Determine if we're doing binary or multi-class classification
@@ -497,10 +498,10 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
 
     # Set up the optimizer with parameter groups
     initial_lr = hpo_max_lr / hpo_div_factor
-    cnn_lr = initial_lr * 0.1  # 10x lower learning rate for CNN14 layers
+    cnn_lr = hpo_learning_rate_cnn 
 
-    optimizer = torch.optim.Adam([
-        {'params': cnn_params, 'lr': cnn_lr, 'weight_decay': hpo_weight_decay * 2},  
+    optimizer = torch.optim.AdamW([
+        {'params': cnn_params, 'lr': cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
         {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
     ])
 
@@ -509,7 +510,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Create scheduler with optimized hyperparameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=[hpo_max_lr * 0.1, hpo_max_lr], # 10x lower for CNN14 layers
+        max_lr=[cnn_lr, hpo_max_lr], # 10x lower for CNN14 layers
         total_steps=total_steps,
         pct_start=hpo_pct_start,
         div_factor=hpo_div_factor,
