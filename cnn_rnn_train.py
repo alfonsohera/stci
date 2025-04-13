@@ -51,7 +51,7 @@ class FocalLoss(nn.Module):
         
     def forward(self, input, target):
         # Compute cross entropy with class weights if provided
-        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight, label_smoothing=0.08)
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
         # Get prediction probabilities
         pt = torch.exp(-ce_loss)
         # Apply focal weighting
@@ -483,7 +483,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Convert to tensor
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
-    criterion = FocalLoss(gamma=0, weight=None)
+    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
         
     model.to(device)
 
@@ -1162,13 +1162,16 @@ def test_cnn_rnn(binary_classification=False, use_cam=False, max_cam_samples=20)
             tp = cm[i, i]  # True positives for this class
             fp = np.sum(cm[:, i]) - tp  # False positives
             fn = np.sum(cm[i, :]) - tp  # False negatives
-            tn = np.sumcm(cm) - tp - fp - fn  # True negatives
+            tn = np.sum(cm) - tp - fp - fn  # True negatives
             
             accuracy_class = (tp + tn) / np.sum(cm) if np.sum(cm) > 0 else 0
             balanced_accuracy = (test_recall_per_class[i] + specificity_per_class[i]) / 2
-            
+            y_true_binary = np.array(test_labels) == i
+            y_pred_binary = np.array(test_preds) == i
+            mcc = matthews_corrcoef(y_true_binary, y_pred_binary)
+
             print(f"  Balanced Accuracy: {balanced_accuracy:.4f}")
-            print(f"  Matthews Correlation Coefficient: {matthews_corrcoef(test_labels == i, test_preds == i):.4f}")
+            print(f"  Matthews Correlation Coefficient: {mcc:.4f}")
             
         # Calculate and print aggregate balanced accuracy
         balanced_accuracy_score_all = balanced_accuracy_score(test_labels, test_preds)
@@ -1579,21 +1582,21 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
             torch.cuda.empty_cache()
             gc.collect()
                         
-            # Core hyperparameters from previous optimization
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.38, 0.5)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 1.6)
-            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 1e-4, 5e-4, log=True)  
-            hpo_weight_decay = trial.suggest_float("weight_decay", 3e-5, 7e-5, log=True)
-            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 1e-6, 1e-3, log=True)                      
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 8e-4, 1.5e-3, log=True)
-            hpo_pct_start = trial.suggest_float("pct_start", 0.15, 0.25)  
-            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 30.0)  
-            hpo_final_div_factor = trial.suggest_float("final_div_factor", 250.0, 350.0)
+            # Core learning parameters - broader ranges for exploration with clean data
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.3, 0.7)  # Wider range since class imbalance effect may differ
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.0, 2.0)  # Higher upper limit to potentially focus more on hard examples
+            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 5e-5, 1e-3, log=True)  # Increased regularization range
+            hpo_weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-4, log=True)  # Broader range to find optimal regularization
+            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 5e-6, 5e-3, log=True)  # Wider range for CNN layers
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 3e-3, log=True)  # Slightly higher upper limit
+            hpo_pct_start = trial.suggest_float("pct_start", 0.1, 0.3)  # Start with a wider range for warmup period
+            hpo_div_factor = trial.suggest_float("div_factor", 10.0, 40.0)  # Wider range for initial LR division
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)  # Wider range for final LR division
 
-            #hyperparameters specific to the Dual Path model
-            attention_dropout = trial.suggest_float("attention_dropout", 0.15, 0.3)
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.35)                        
-            prosodic_weight = trial.suggest_float("prosodic_weight", 1.2, 2.0)
+            # Model architecture parameters - also broadened for exploration
+            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)  # Increased upper bound for potentially stronger regularization
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.15, 0.5)  # Wider range to find optimal dropout                
+            prosodic_weight = trial.suggest_float("prosodic_weight", 0.8, 2.5)  # Expanded range to rebalance importance between modalities
             
             
             

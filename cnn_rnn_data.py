@@ -13,7 +13,7 @@ import myFunctions
 import myAudio
 
 
-def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000):
+def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000, min_segment_length=5):
     """
     Split audio into fixed-size chunks of specified duration
     
@@ -21,39 +21,141 @@ def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000):
         audio: Audio tensor of shape [C, L]
         chunk_size_seconds: Size of each chunk in seconds
         sample_rate: Sample rate of the audio
+        min_segment_length: Minimum length in seconds to keep a segment (otherwise discard)
         
     Returns:
         List of audio chunks, each of shape [C, chunk_size*sample_rate]
     """
     chunk_size = int(chunk_size_seconds * sample_rate)
+    min_segment_size = int(min_segment_length * sample_rate)
     chunks = []
     
     # Get audio length (sequence dimension)
     audio_length = audio.shape[1]
     
-    # If audio is smaller than chunk size, pad it
-    if audio_length < chunk_size:
+    # If audio is smaller than minimum segment size, pad it
+    if audio_length < min_segment_size:
         padding = torch.zeros((audio.shape[0], chunk_size - audio_length), dtype=audio.dtype)
         padded_audio = torch.cat([audio, padding], dim=1)
         return [padded_audio]
     
-    # Split audio into chunks
+    # Calculate how many whole chunks we can get from this audio
     num_chunks = audio_length // chunk_size
     
+    # Split audio into full chunks
     for i in range(num_chunks):
         start = i * chunk_size
         end = start + chunk_size
         chunks.append(audio[:, start:end])
     
-    # Handle the remaining part if it exists and is significant
+    # Handle the remaining part if it exists
     remaining = audio_length % chunk_size
-    if remaining > 0.5 * chunk_size:  # If remaining part is more than half the chunk size
+    if remaining > 0:
+        # Get the remaining audio
         start = num_chunks * chunk_size
-        padding = torch.zeros((audio.shape[0], chunk_size - remaining), dtype=audio.dtype)
-        last_chunk = torch.cat([audio[:, start:], padding], dim=1)
-        chunks.append(last_chunk)
+        remaining_audio = audio[:, start:]
+        
+        # Only keep and pad segments that are at least min_segment_seconds long
+        if remaining >= min_segment_size:
+            padding = torch.zeros((audio.shape[0], chunk_size - remaining), dtype=audio.dtype)
+            last_chunk = torch.cat([remaining_audio, padding], dim=1)
+            chunks.append(last_chunk)
+        # Otherwise, the remaining segment is discarded (less than min_segment_length seconds)
     
     return chunks
+
+
+def debug_chunk_audio(audio_id="3", sample_rate=16000):
+    """
+    Debug function to trace the chunking process for a specific audio ID
+    """
+    import os
+    import torch
+    import librosa
+    import numpy as np
+    
+    # Try to load the original audio file directly
+    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+    
+    # Search in test split first
+    split_path = os.path.join(pytorch_dataset_path, "test.pt")
+    found_audio = None
+    file_path = None
+    
+    try:
+        if os.path.exists(split_path):
+            samples = torch.load(split_path)
+            if int(audio_id) < len(samples):
+                i = int(audio_id)
+                print(f"Found audio ID {audio_id} in test dataset at index {i}")
+                found_audio = samples[i]["audio"]
+                file_path = samples[i].get("file_path", f"test_{i}")
+    except Exception as e:
+        print(f"Error finding audio ID {audio_id}: {e}")
+    
+    if found_audio is not None:
+        print(f"\nDEBUG CHUNKING FOR AUDIO ID {audio_id}")
+        print(f"File path: {file_path}")
+        print(f"Audio tensor shape: {found_audio.shape}")
+        
+        # Calculate original duration
+        audio_length_samples = found_audio.shape[1]
+        original_duration = audio_length_samples / sample_rate
+        print(f"Original audio duration: {original_duration:.2f} seconds")
+        
+        # Trace the chunking process
+        chunks = chunk_audio(found_audio, chunk_size_seconds=10, sample_rate=sample_rate, min_segment_length=5)
+        print(f"Number of chunks created: {len(chunks)}")
+        
+        # Print details of each chunk
+        for i, chunk in enumerate(chunks):
+            chunk_duration = chunk.shape[1] / sample_rate
+            # Check for zeros at the end (padding)
+            non_zero = torch.where(torch.abs(chunk[0]) > 1e-6)[0]
+            if len(non_zero) > 0:
+                last_non_zero = non_zero[-1].item()
+                padding_samples = chunk.shape[1] - last_non_zero - 1
+                padding_seconds = padding_samples / sample_rate
+                print(f"Chunk {i+1}: {chunk_duration:.2f}s duration with {padding_seconds:.2f}s padding at the end")
+            else:
+                print(f"Chunk {i+1}: {chunk_duration:.2f}s duration (empty chunk)")
+        
+        # Calculate total duration of all chunks
+        total_chunk_duration = sum(chunk.shape[1] for chunk in chunks) / sample_rate
+        print(f"Total duration of all chunks: {total_chunk_duration:.2f} seconds")
+        
+        # Check if any of the data versions have zeros in them
+        print("\nChecking for zeros in the audio data:")
+        # Check the original loaded audio
+        zero_count = torch.sum(torch.abs(found_audio) < 1e-6).item()
+        zero_percent = (zero_count / found_audio.numel()) * 100
+        print(f"Original audio has {zero_count} zeros ({zero_percent:.2f}% of samples)")
+        
+        # Check if there might be a different version in the raw data directory
+        try:
+            import torchaudio
+            data_dir = os.path.join(myConfig.ROOT_DIR, "Data")
+            for subdir in ["Healthy", "MCI", "AD"]:
+                for ext in ['.wav', '.flac']:
+                    file_check_path = os.path.join(data_dir, subdir, f"{os.path.basename(file_path)}")
+                    if os.path.exists(file_check_path):
+                        print(f"Found original file at {file_check_path}")
+                        waveform, sr = torchaudio.load(file_check_path)
+                        raw_duration = waveform.shape[1] / sr
+                        print(f"Raw audio duration: {raw_duration:.2f} seconds")
+                        
+                        # Check for zeros
+                        raw_zero_count = torch.sum(torch.abs(waveform) < 1e-6).item()
+                        raw_zero_percent = (raw_zero_count / waveform.numel()) * 100
+                        print(f"Raw audio has {raw_zero_count} zeros ({raw_zero_percent:.2f}% of samples)")
+                        break
+        except Exception as e:
+            print(f"Error checking raw audio: {e}")
+        
+        return chunks
+    else:
+        print(f"Could not find audio ID {audio_id}")
+        return None
 
 
 class CNNRNNDataset(Dataset):
@@ -306,8 +408,17 @@ class PreloadedAudioDataset(Dataset):
             duration=self.max_duration  # Limit duration to max_duration seconds
         )[0]
         
+        # Trim leading and trailing silence
+        # This addresses the issue where some processed audio files have excessive silence
+        audio_trimmed, _ = librosa.effects.trim(audio, top_db=30)
+        
+        # Safety check to ensure we don't return empty audio after trimming
+        if len(audio_trimmed) < self.sample_rate:  # Less than 1 second after trimming
+            print(f"Warning: Audio {file_path} was trimmed too aggressively, using original")
+            audio_trimmed = audio
+        
         # Convert to the expected format
-        return np.array(audio, dtype=np.float32), self.sample_rate
+        return np.array(audio_trimmed, dtype=np.float32), self.sample_rate
     
     def __len__(self):
         return len(self.samples)
@@ -596,3 +707,207 @@ def get_original_audio_by_id(audio_id):
     print(f"Could not find audio file for ID: {audio_id}")
     print(f"Only searched in pytorch_dataset and /Data/ directory as specified.")
     return None, None
+
+
+def analyze_dataset_chunking(dataset_dict, sample_rate=16000, trim_silence=True):
+    """
+    Analyze how audio files in the dataset are chunked with and without silence trimming.
+    
+    Args:
+        dataset_dict: Dictionary of datasets with train/validation/test splits
+        sample_rate: Sample rate of audio
+        trim_silence: Whether to analyze with silence trimming or not
+    
+    Returns:
+        Dictionary with analysis results
+    """
+    import os
+    import torch
+    import librosa
+    import numpy as np
+    import matplotlib.pyplot as plt
+    
+    results = {
+        "all": {"original_durations": [], "processed_durations": [], "zero_percentages": [], 
+                "num_chunks_before": [], "num_chunks_after": []},
+        "by_split": {}
+    }
+    
+    for split_name in ["train", "validation", "test"]:
+        if split_name not in dataset_dict:
+            continue
+            
+        results["by_split"][split_name] = {
+            "original_durations": [], 
+            "processed_durations": [], 
+            "zero_percentages": [],
+            "num_chunks_before": [], 
+            "num_chunks_after": []
+        }
+        
+        split_data = dataset_dict[split_name]
+        print(f"\nAnalyzing {split_name} split with {len(split_data)} samples...")
+        
+        for i, item in enumerate(tqdm(split_data, desc=f"Processing {split_name}")):
+            if i >= 200:  # Limit to first 200 files per split for speed
+                break
+                
+            audio = item["audio"]
+            file_path = item.get("file_path", f"{split_name}_{i}")
+            
+            # Calculate original duration
+            orig_duration = audio.shape[1] / sample_rate
+            
+            # Check for zeros in original audio
+            zero_count = torch.sum(torch.abs(audio) < 1e-6).item()
+            zero_percent = (zero_count / audio.numel()) * 100
+            
+            # Count chunks before trimming silence
+            chunks_before = chunk_audio(audio, chunk_size_seconds=10, sample_rate=sample_rate, min_segment_length=5)
+            num_chunks_before = len(chunks_before)
+            
+            # Process with silence trimming if requested
+            if trim_silence:
+                # Try to load original audio file to avoid double-trimming
+                try:
+                    data_dir = os.path.join(myConfig.DATA_DIR, "Data")
+                    audio_path = None
+                    
+                    # Try to resolve path relative to the data directory
+                    potential_paths = [
+                        os.path.join(myConfig.ROOT_DIR, file_path),
+                        os.path.join(myConfig.ROOT_DIR, "Data", file_path),
+                        os.path.join(myConfig.ROOT_DIR, "Data", os.path.basename(file_path))
+                    ]
+                    
+                    for path in potential_paths:
+                        if os.path.exists(path):
+                            audio_path = path
+                            break
+                    
+                    if audio_path is None:
+                        # Try to find in Healthy/MCI/AD subdirectories
+                        for subdir in ["Healthy", "MCI", "AD"]:
+                            path = os.path.join(myConfig.ROOT_DIR, "Data", subdir, os.path.basename(file_path))
+                            if os.path.exists(path):
+                                audio_path = path
+                                break
+                    
+                    if audio_path:
+                        # Load and trim original audio
+                        y, sr = librosa.load(audio_path, sr=sample_rate)
+                        y_trimmed, _ = librosa.effects.trim(y, top_db=30)
+                        
+                        # Safety check to avoid over-trimming
+                        if len(y_trimmed) < sample_rate:  # Less than 1 second after trimming
+                            y_trimmed = y
+                        
+                        # Convert to tensor format
+                        processed_audio = torch.tensor(y_trimmed, dtype=torch.float32).unsqueeze(0)
+                    else:
+                        # If original file not found, trim the tensor directly
+                        np_audio = audio.numpy().squeeze()
+                        trimmed, _ = librosa.effects.trim(np_audio, top_db=30)
+                        processed_audio = torch.tensor(trimmed, dtype=torch.float32).unsqueeze(0)
+                except Exception as e:
+                    print(f"  Error trimming {file_path}: {e}")
+                    processed_audio = audio  # Fallback to original
+                    
+                # Calculate processed duration
+                proc_duration = processed_audio.shape[1] / sample_rate
+                
+                # Count chunks after trimming silence
+                chunks_after = chunk_audio(processed_audio, chunk_size_seconds=10, sample_rate=sample_rate, min_segment_length=5)
+                num_chunks_after = len(chunks_after)
+            else:
+                proc_duration = orig_duration
+                num_chunks_after = num_chunks_before
+            
+            # Store results
+            results["all"]["original_durations"].append(orig_duration)
+            results["all"]["processed_durations"].append(proc_duration)
+            results["all"]["zero_percentages"].append(zero_percent)
+            results["all"]["num_chunks_before"].append(num_chunks_before)
+            results["all"]["num_chunks_after"].append(num_chunks_after)
+            
+            results["by_split"][split_name]["original_durations"].append(orig_duration)
+            results["by_split"][split_name]["processed_durations"].append(proc_duration)
+            results["by_split"][split_name]["zero_percentages"].append(zero_percent)
+            results["by_split"][split_name]["num_chunks_before"].append(num_chunks_before)
+            results["by_split"][split_name]["num_chunks_after"].append(num_chunks_after)
+    
+    # Summarize results
+    print("\n===== CHUNKING ANALYSIS SUMMARY =====")
+    all_orig_durations = np.array(results["all"]["original_durations"])
+    all_proc_durations = np.array(results["all"]["processed_durations"])
+    all_zero_pcts = np.array(results["all"]["zero_percentages"])
+    all_chunks_before = np.array(results["all"]["num_chunks_before"])
+    all_chunks_after = np.array(results["all"]["num_chunks_after"])
+    
+    print(f"All splits combined:")
+    print(f"  Original duration: {np.mean(all_orig_durations):.2f}s ± {np.std(all_orig_durations):.2f}s")
+    print(f"  Processed duration: {np.mean(all_proc_durations):.2f}s ± {np.std(all_proc_durations):.2f}s")
+    print(f"  Average reduction: {np.mean(all_orig_durations - all_proc_durations):.2f}s ({np.mean((all_orig_durations - all_proc_durations) / all_orig_durations) * 100:.1f}%)")
+    print(f"  Zero percentage: {np.mean(all_zero_pcts):.2f}% ± {np.std(all_zero_pcts):.2f}%")
+    print(f"  Average chunks before: {np.mean(all_chunks_before):.2f} ± {np.std(all_chunks_before):.2f}")
+    print(f"  Average chunks after: {np.mean(all_chunks_after):.2f} ± {np.std(all_chunks_after):.2f}")
+    print(f"  Samples with reduced chunks: {np.sum(all_chunks_after < all_chunks_before)} ({np.sum(all_chunks_after < all_chunks_before) / len(all_chunks_before) * 100:.1f}%)")
+    
+    for split_name in results["by_split"]:
+        split_orig_durations = np.array(results["by_split"][split_name]["original_durations"]) 
+        split_proc_durations = np.array(results["by_split"][split_name]["processed_durations"])
+        split_zero_pcts = np.array(results["by_split"][split_name]["zero_percentages"])
+        split_chunks_before = np.array(results["by_split"][split_name]["num_chunks_before"])
+        split_chunks_after = np.array(results["by_split"][split_name]["num_chunks_after"])
+        
+        print(f"\n{split_name.capitalize()} split:")
+        print(f"  Original duration: {np.mean(split_orig_durations):.2f}s ± {np.std(split_orig_durations):.2f}s")
+        print(f"  Processed duration: {np.mean(split_proc_durations):.2f}s ± {np.std(split_proc_durations):.2f}s")
+        print(f"  Average reduction: {np.mean(split_orig_durations - split_proc_durations):.2f}s ({np.mean((split_orig_durations - split_proc_durations) / split_orig_durations) * 100:.1f}%)")
+        print(f"  Zero percentage: {np.mean(split_zero_pcts):.2f}% ± {np.std(split_zero_pcts):.2f}%")
+        print(f"  Average chunks before: {np.mean(split_chunks_before):.2f} ± {np.std(split_chunks_before):.2f}")
+        print(f"  Average chunks after: {np.mean(split_chunks_after):.2f} ± {np.std(split_chunks_after):.2f}")
+        print(f"  Samples with reduced chunks: {np.sum(split_chunks_after < split_chunks_before)} ({np.sum(split_chunks_after < split_chunks_before) / len(split_chunks_before) * 100:.1f}%)")
+    
+    # Create visualization
+    plt.figure(figsize=(12, 8))
+    
+    plt.subplot(2, 2, 1)
+    plt.scatter(all_orig_durations, all_proc_durations, alpha=0.5)
+    plt.plot([0, max(all_orig_durations)], [0, max(all_orig_durations)], 'r--')
+    plt.xlabel('Original Duration (s)')
+    plt.ylabel('Processed Duration (s)')
+    plt.title('Duration Before vs After Silence Trimming')
+    
+    plt.subplot(2, 2, 2)
+    plt.scatter(all_orig_durations, all_zero_pcts, alpha=0.5)
+    plt.xlabel('Original Duration (s)')
+    plt.ylabel('Zero Samples (%)')
+    plt.title('Silence vs Duration')
+    
+    plt.subplot(2, 2, 3)
+    plt.scatter(all_chunks_before, all_chunks_after, alpha=0.5)
+    plt.plot([0, max(all_chunks_before)], [0, max(all_chunks_before)], 'r--')
+    plt.xlabel('Chunks Before Trimming')
+    plt.ylabel('Chunks After Trimming')
+    plt.title('Number of Chunks Before vs After')
+    
+    plt.subplot(2, 2, 4)
+    duration_diff = all_orig_durations - all_proc_durations
+    plt.hist(duration_diff, bins=20)
+    plt.xlabel('Duration Reduction (s)')
+    plt.ylabel('Count')
+    plt.title('Histogram of Duration Reduction')
+    
+    plt.tight_layout()
+    
+    # Create output directory
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "chunking_analysis")
+    os.makedirs(output_dir, exist_ok=True)
+    plot_path = os.path.join(output_dir, "chunking_analysis.png")
+    plt.savefig(plot_path)
+    plt.close()
+    
+    print(f"\nAnalysis plot saved to {plot_path}")
+    
+    return results
