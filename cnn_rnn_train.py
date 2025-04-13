@@ -1729,7 +1729,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                 initial_lr = hpo_max_learning_rate / hpo_div_factor
                 initial_cnn_lr = hpo_max_learning_rate_cnn / hpo_div_factor
 
-                optimizer = torch.optim.Adam([
+                optimizer = torch.optim.AdamW([
                     {'params': cnn_params, 'lr': initial_cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
                     {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
                 ])
