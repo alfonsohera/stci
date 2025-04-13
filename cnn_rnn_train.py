@@ -49,7 +49,7 @@ class FocalLoss(nn.Module):
         
     def forward(self, input, target):
         # Compute cross entropy with class weights if provided
-        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight, label_smoothing=0.08)
         # Get prediction probabilities
         pt = torch.exp(-ce_loss)
         # Apply focal weighting
@@ -481,7 +481,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Convert to tensor
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
-    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+    criterion = FocalLoss(gamma=0, weight=None)
         
     model.to(device)
 
@@ -2014,3 +2014,446 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     print(f"Optimized {model_type_str} model and results saved to {optimized_output_dir}")
     
     return model
+
+
+def cross_validate(n_folds=5, binary_classification=False, use_prosodic_features=False, num_epochs=10):
+    """Run cross-validation for CNN+RNN model using stratified k-fold.
+    
+    Args:
+        n_folds: Number of folds for cross-validation (default: 5)
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+        use_prosodic_features: Whether to use prosodic features
+        num_epochs: Number of epochs to train each fold
+    
+    Returns:
+        Dictionary with cross-validation results
+    """
+    import os
+    import torch
+    import gc
+    import json
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
+    from sklearn.utils.class_weight import compute_class_weight
+    from tqdm import tqdm
+    
+    # Try to import wandb if available
+    try:
+        import wandb
+        has_wandb = True
+    except ImportError:
+        has_wandb = False
+    
+    # Import required model and dataset classes
+    from cnn_rnn_model import PretrainedDualPathAudioClassifier
+    from cnn_rnn_data import prepare_cnn_rnn_dataset, get_cnn_rnn_dataloaders
+    
+    print(f"\n=== Running {n_folds}-fold Cross-Validation ===")
+    print(f"Model: CNN+RNN")
+    print(f"Classification: {'Binary (Healthy vs Non-Healthy)' if binary_classification else '3-class (Healthy, MCI, AD)'}")
+    print(f"Use prosodic features: {use_prosodic_features}")
+    print(f"Number of epochs: {num_epochs}")
+    
+    # Initialize wandb if not offline and not already running
+    if not myConfig.running_offline and has_wandb and not wandb.run:
+        model_type = "CNN-RNN-Binary" if binary_classification else "CNN-RNN-Multiclass"
+        wandb.init(
+            project=myConfig.wandb_project,
+            entity=myConfig.wandb_entity,
+            name=f"cv_{model_type}_{n_folds}fold",
+            config={
+                "model_type": model_type,
+                "n_folds": n_folds,
+                "binary_classification": binary_classification,
+                "use_prosodic_features": use_prosodic_features,
+                "num_epochs": num_epochs
+            },
+            tags=["cross-validation", "stratified-kfold", model_type.lower()]
+        )
+    
+    # Create output directory for cross-validation results
+    model_type = "binary" if binary_classification else "multiclass"
+    cv_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cross_validation", f"cnn_rnn_{model_type}")
+    os.makedirs(cv_output_dir, exist_ok=True)
+    
+    # Load and prepare dataset
+    print("Loading dataset...")
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
+    
+    # Combine train and validation for cross-validation
+    combined_data = []
+    combined_labels = []
+    
+    print("Combining train and validation sets for cross-validation...")
+    for split in ["train", "validation"]:
+        for i in range(len(dataset[split])):
+            combined_data.append(dataset[split][i])
+            combined_labels.append(dataset[split][i]["label"])
+    
+    # Prepare indices for stratified k-fold splits to handle class imbalance
+    indices = np.arange(len(combined_data))
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    
+    # Set device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    
+    # Create a list to store results from each fold
+    fold_results = []
+    
+    # Prepare variables for average metrics
+    all_fold_val_metrics = {
+        "accuracy": [],
+        "f1_macro": [],
+        "f1_per_class": []
+    }
+    
+    # Class names based on classification mode
+    if binary_classification:
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        class_names = ["Healthy", "MCI", "AD"]
+    
+    # For confusion matrix aggregation
+    overall_confusion_matrix = None
+    
+    # Run cross-validation
+    print(f"\nStarting {n_folds}-fold cross-validation...")
+    
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, combined_labels)):
+        print(f"\n--- Fold {fold_idx+1}/{n_folds} ---")
+        
+        # Create fold-specific datasets
+        fold_train = [combined_data[i] for i in train_idx]
+        fold_val = [combined_data[i] for i in val_idx]
+        
+        print(f"Fold {fold_idx+1} train set size: {len(fold_train)}, validation set size: {len(fold_val)}")
+        
+        # Create balanced training dataset for this fold
+        from cnn_rnn_model import AugmentedDataset
+        fold_train_balanced = AugmentedDataset(
+            original_dataset=fold_train,
+            num_classes=2 if binary_classification else 3
+        )
+        
+        # Create fold dataset dictionary
+        fold_dataset = {
+            "train": fold_train_balanced,
+            "validation": fold_val,
+            "test": dataset["test"]  # Keep original test set untouched
+        }
+        
+        # Get dataloaders for this fold
+        fold_dataloaders = get_cnn_rnn_dataloaders(
+            fold_dataset,
+            batch_size=96
+        )
+        
+        # Create model with appropriate number of classes
+        fold_model = PretrainedDualPathAudioClassifier(
+            num_classes=2 if binary_classification else 3,
+            sample_rate=16000,
+            pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        )
+        fold_model.to(device)
+        
+        # Calculate class weights
+        if binary_classification:
+            classes = np.array([0, 1])
+            # Adapt class counts for binary classification
+            class_counts = {
+                0: myConfig.num_samples_per_class.get(0, 0),  # Healthy
+                1: myConfig.num_samples_per_class.get(1, 0) + myConfig.num_samples_per_class.get(2, 0)  # MCI + AD
+            }
+        else:
+            classes = np.array([0, 1, 2])
+            class_counts = myConfig.num_samples_per_class
+        
+        y = np.array([])
+        # Create array with labels based on known counts
+        for class_id, count in class_counts.items():
+            y = np.append(y, [class_id] * count)
+        
+        # From centralized hyperparameters in myConfig
+        hpo_weight_scaling_factor = myConfig.cnn_rnn_hyperparams["weight_scaling_factor"]
+        hpo_focal_loss_gamma = myConfig.cnn_rnn_hyperparams["focal_loss_gamma"]
+        hpo_max_lr = myConfig.cnn_rnn_hyperparams["max_lr"]
+        hpo_weight_decay = myConfig.cnn_rnn_hyperparams["weight_decay"]
+        hpo_weight_decay_cnn = myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
+        hpo_learning_rate_cnn = myConfig.cnn_rnn_hyperparams["learning_rate_cnn"]
+        hpo_pct_start = myConfig.cnn_rnn_hyperparams["pct_start"]
+        hpo_div_factor = myConfig.cnn_rnn_hyperparams["div_factor"]
+        hpo_final_div_factor = myConfig.cnn_rnn_hyperparams["final_div_factor"]
+        
+        # Compute balanced weights
+        raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+        # Apply scaling factor to make weights less extreme
+        scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
+        # Normalize to maintain sum proportionality
+        scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+        # Convert to tensor
+        weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+        
+        # Set up the loss function with class weighting
+        criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+        
+        # Group parameters for different learning rates
+        cnn_params = []
+        other_params = []
+        for name, param in fold_model.named_parameters():
+            if param.requires_grad:
+                if "cnn_extractor" in name:
+                    cnn_params.append(param)
+                else:
+                    other_params.append(param)
+        
+        # Set up the optimizer with parameter groups
+        initial_lr = hpo_max_lr / hpo_div_factor
+        initial_cnn_lr = hpo_learning_rate_cnn / hpo_div_factor
+        
+        optimizer = torch.optim.AdamW([
+            {'params': cnn_params, 'lr': initial_cnn_lr, 'weight_decay': hpo_weight_decay_cnn},
+            {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+        ])
+        
+        total_steps = len(fold_dataloaders["train"]) * num_epochs
+        
+        # Create scheduler
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=[hpo_learning_rate_cnn, hpo_max_lr],
+            total_steps=total_steps,
+            pct_start=hpo_pct_start,
+            div_factor=hpo_div_factor,
+            final_div_factor=hpo_final_div_factor,
+            anneal_strategy='cos',
+            three_phase=False
+        )
+        
+        # Track best metrics for this fold
+        best_val_f1 = 0.0
+        best_epoch = 0
+        fold_history = []
+        
+        # Training loop for this fold
+        for epoch in range(num_epochs):
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            
+            # Clean up memory
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            # Training phase
+            train_loss = train_epoch(
+                fold_model,
+                fold_dataloaders["train"],
+                optimizer,
+                criterion,
+                device,
+                scheduler=scheduler
+            )
+            
+            # Validation phase
+            val_loss, all_labels, all_preds = evaluate(
+                fold_model,
+                fold_dataloaders["validation"],
+                criterion,
+                device,
+                use_cam=False
+            )
+            
+            # Calculate metrics
+            val_accuracy = accuracy_score(all_labels, all_preds)
+            val_f1_macro = f1_score(all_labels, all_preds, average='macro')
+            val_f1_per_class = f1_score(all_labels, all_preds, average=None)
+            
+            # Generate confusion matrix
+            cm = confusion_matrix(all_labels, all_preds)
+            
+            # Calculate average validation loss
+            avg_val_loss = val_loss / len(all_labels) if len(all_labels) > 0 else float('inf')
+            
+            # Add metrics to history
+            epoch_metrics = {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": avg_val_loss,
+                "val_accuracy": val_accuracy,
+                "val_f1_macro": val_f1_macro,
+                "val_f1_per_class": val_f1_per_class.tolist(),
+                "learning_rate": scheduler.get_last_lr()[1]
+            }
+            fold_history.append(epoch_metrics)
+            
+            # Log to wandb if available
+            if not myConfig.running_offline and has_wandb and wandb.run:
+                log_dict = {
+                    f"fold_{fold_idx+1}/epoch": epoch + 1,
+                    f"fold_{fold_idx+1}/train_loss": train_loss,
+                    f"fold_{fold_idx+1}/val_loss": avg_val_loss,
+                    f"fold_{fold_idx+1}/val_accuracy": val_accuracy,
+                    f"fold_{fold_idx+1}/val_f1_macro": val_f1_macro
+                }
+                
+                # Add per-class metrics
+                for i, class_name in enumerate(class_names):
+                    log_dict[f"fold_{fold_idx+1}/val_f1_{class_name}"] = val_f1_per_class[i]
+                
+                wandb.log(log_dict)
+            
+            # Print metrics
+            print(f"  Train Loss: {train_loss:.4f}")
+            print(f"  Val Loss: {avg_val_loss:.4f}")
+            print(f"  Val Accuracy: {val_accuracy:.4f}")
+            print(f"  Val F1-Macro: {val_f1_macro:.4f}")
+            print(f"  Val F1 per class: {val_f1_per_class}")
+            
+            # Update best model for this fold
+            if val_f1_macro > best_val_f1:
+                best_val_f1 = val_f1_macro
+                best_epoch = epoch + 1
+                
+                # Save best model for this fold
+                fold_model_path = os.path.join(cv_output_dir, f"fold_{fold_idx+1}_best.pt")
+                torch.save(fold_model.state_dict(), fold_model_path)
+                print(f"  Saved new best model for fold {fold_idx+1} with F1-macro: {best_val_f1:.4f}")
+        
+        # After training all epochs, evaluate the best model on validation set
+        print(f"\nLoading best model from epoch {best_epoch} for final evaluation")
+        fold_model_path = os.path.join(cv_output_dir, f"fold_{fold_idx+1}_best.pt")
+        fold_model.load_state_dict(torch.load(fold_model_path))
+        
+        # Final evaluation of the best model for this fold
+        _, final_val_labels, final_val_preds = evaluate(
+            fold_model,
+            fold_dataloaders["validation"],
+            criterion,
+            device,
+            use_cam=False
+        )
+        
+        # Calculate final metrics
+        final_val_accuracy = accuracy_score(final_val_labels, final_val_preds)
+        final_val_f1_macro = f1_score(final_val_labels, final_val_preds, average='macro')
+        final_val_f1_per_class = f1_score(final_val_labels, final_val_preds, average=None)
+        final_val_cm = confusion_matrix(final_val_labels, final_val_preds)
+        
+        # Store the fold results
+        fold_result = {
+            "fold": fold_idx + 1,
+            "best_epoch": best_epoch,
+            "val_accuracy": final_val_accuracy,
+            "val_f1_macro": final_val_f1_macro,
+            "val_f1_per_class": final_val_f1_per_class.tolist(),
+            "confusion_matrix": final_val_cm.tolist(),
+            "history": fold_history
+        }
+        fold_results.append(fold_result)
+        
+        # Update aggregate metrics
+        all_fold_val_metrics["accuracy"].append(final_val_accuracy)
+        all_fold_val_metrics["f1_macro"].append(final_val_f1_macro)
+        all_fold_val_metrics["f1_per_class"].append(final_val_f1_per_class)
+        
+        # Update overall confusion matrix
+        if overall_confusion_matrix is None:
+            overall_confusion_matrix = final_val_cm
+        else:
+            overall_confusion_matrix += final_val_cm
+            
+        # Plot and save confusion matrix for this fold
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(final_val_cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names, yticklabels=class_names)
+        plt.xlabel('Predicted labels')
+        plt.ylabel('True labels')
+        plt.title(f'Fold {fold_idx+1} Confusion Matrix')
+        plt.tight_layout()
+        plt.savefig(os.path.join(cv_output_dir, f"fold_{fold_idx+1}_confusion_matrix.png"))
+        plt.close()
+        
+        # Clean up for next fold
+        del fold_model, optimizer, criterion
+        del fold_dataloaders
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    # Calculate average metrics across all folds
+    avg_accuracy = np.mean(all_fold_val_metrics["accuracy"])
+    avg_f1_macro = np.mean(all_fold_val_metrics["f1_macro"])
+    avg_f1_per_class = np.mean(all_fold_val_metrics["f1_per_class"], axis=0)
+    
+    # Calculate standard deviation for reporting
+    std_accuracy = np.std(all_fold_val_metrics["accuracy"])
+    std_f1_macro = np.std(all_fold_val_metrics["f1_macro"])
+    std_f1_per_class = np.std(all_fold_val_metrics["f1_per_class"], axis=0)
+    
+    # Print final results
+    print("\n=== Cross-Validation Results ===")
+    print(f"Average Accuracy: {avg_accuracy:.4f} ± {std_accuracy:.4f}")
+    print(f"Average F1-Macro: {avg_f1_macro:.4f} ± {std_f1_macro:.4f}")
+    print("Average F1 per class:")
+    for i, class_name in enumerate(class_names):
+        print(f"  {class_name}: {avg_f1_per_class[i]:.4f} ± {std_f1_per_class[i]:.4f}")
+    
+    # Plot overall confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(overall_confusion_matrix, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.xlabel('Predicted labels')
+    plt.ylabel('True labels')
+    plt.title('Overall Confusion Matrix Across All Folds')
+    plt.tight_layout()
+    plt.savefig(os.path.join(cv_output_dir, "overall_confusion_matrix.png"))
+    plt.close()
+    
+    # Create summary results
+    cv_summary = {
+        "model_type": "CNN+RNN",
+        "binary_classification": binary_classification,
+        "n_folds": n_folds,
+        "num_epochs": num_epochs,
+        "avg_accuracy": float(avg_accuracy),
+        "std_accuracy": float(std_accuracy),
+        "avg_f1_macro": float(avg_f1_macro),
+        "std_f1_macro": float(std_f1_macro),
+        "avg_f1_per_class": [float(f) for f in avg_f1_per_class],
+        "std_f1_per_class": [float(f) for f in std_f1_per_class],
+        "class_names": class_names,
+        "overall_confusion_matrix": overall_confusion_matrix.tolist(),
+        "fold_results": fold_results
+    }
+    
+    # Save final results
+    with open(os.path.join(cv_output_dir, "cv_summary.json"), "w") as f:
+        json.dump(cv_summary, f, indent=2)
+    
+    # Log final results to wandb if available
+    if not myConfig.running_offline and has_wandb and wandb.run:
+        wandb.run.summary.update({
+            "avg_accuracy": avg_accuracy,
+            "std_accuracy": std_accuracy,
+            "avg_f1_macro": avg_f1_macro,
+            "std_f1_macro": std_f1_macro,
+            "avg_f1_per_class": avg_f1_per_class.tolist(),
+            "std_f1_per_class": std_f1_per_class.tolist()
+        })
+        
+        # Log confusion matrix as a figure
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(overall_confusion_matrix, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names, yticklabels=class_names, ax=ax)
+        ax.set_xlabel('Predicted labels')
+        ax.set_ylabel('True labels')
+        ax.set_title('Overall Confusion Matrix Across All Folds')
+        wandb.log({"overall_confusion_matrix": wandb.Image(fig)})
+        plt.close(fig)
+        
+        # Finish wandb run
+        wandb.finish()
+    
+    print(f"\nCross-validation complete! Results saved to {cv_output_dir}")
+    return cv_summary

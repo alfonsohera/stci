@@ -525,6 +525,22 @@ if __name__ == "__main__":
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
+        elif args.mode == "cv":
+            myConfig.training_from_scratch = False
+            print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
+            if has_threshold_functions:
+                # Import cross-validation function
+                from cnn_rnn_train import cross_validate
+                # Run cross-validation with specified number of folds
+                cross_validate(
+                    n_folds=args.folds,
+                    binary_classification=True,
+                    use_prosodic_features=use_manual,
+                    num_epochs=10
+                )
+            else:
+                print("Cross-validation not implemented or available for CNN+RNN pipeline.")
+                print("Please check your installation and make sure the cross_validate function exists.")
         elif args.mode == "hpo":
             if has_threshold_functions:
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")

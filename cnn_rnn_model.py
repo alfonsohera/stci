@@ -327,10 +327,14 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         else:
             # Fusion layer (CNN features + Attention features)
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
+                nn.Linear(256 + 256, 512),  # CNN (256) + Attention (256)
+                nn.LayerNorm(512),
+                nn.ReLU(),
+                nn.Dropout(self.fusion_dropout),
+                nn.Linear(512, 256),  # Deeper
                 nn.LayerNorm(256),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(self.fusion_dropout),
                 nn.Linear(256, 128),
                 nn.ReLU(),
                 nn.Dropout(0.4)
