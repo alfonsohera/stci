@@ -353,7 +353,7 @@ def generate_spectrogram(audio, model, sr=16000):
     return log_mel_spec.numpy()
 
 
-def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
+def visualize_cam(audio, model, target_class=None, true_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
                   audio_chunks=None, chunk_outputs=None, show_time_domain=False, file_path=None):
     """
     Visualize CAM for an audio input, with support for chunked processing
@@ -361,7 +361,8 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     Args:
         audio: Audio tensor or a single chunk of audio 
         model: Model to analyze
-        target_class: Target class for CAM
+        target_class: Target class for CAM generation (typically the predicted class)
+        true_class: True class label for the audio (ground truth)
         save_path: Directory to save visualizations
         audio_id: ID of the audio sample
         correct: Whether prediction is correct
@@ -390,52 +391,37 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Get target layer for CAM
     target_layer = get_model_target_layers(model)
     
-    # Check if audio_chunks is just an ID - if so, we need to fetch the complete original audio
-    if isinstance(audio_chunks, str) or isinstance(audio_chunks, int):
+    # Extract a clean display name from file_path or audio_id - do this early so we can use it everywhere
+    display_filename = "Unknown"
+    if file_path:
+        # Extract just the filename without the path
+        display_filename = os.path.basename(file_path)
+    elif audio_id and isinstance(audio_id, str):
+        display_filename = audio_id
+    
+    # Always try to fetch original file path from audio_id if provided
+    # This ensures we get the file path even when audio_chunks is a list
+    if audio_id is not None:
         try:
             # Import the necessary function to fetch original audio
-            from cnn_rnn_data import get_original_audio_by_id, chunk_audio
+            from cnn_rnn_data import get_original_audio_by_id
             
-            print(f"Fetching original audio for ID: {audio_chunks}")
-            full_audio = get_original_audio_by_id(audio_chunks)
+            # Use the audio_id to fetch original file path
+            original_audio_id = str(audio_id)
+            print(f"Fetching original file path for ID: {original_audio_id}")
+            _, original_file_path = get_original_audio_by_id(original_audio_id)
             
-            if full_audio is not None:
-                # Convert to tensor if needed
-                if not isinstance(full_audio, torch.Tensor):
-                    full_audio = torch.tensor(full_audio).float()
-                
-                # Ensure it has batch dimension [1, T] or [1, 1, T]
-                if len(full_audio.shape) == 1:
-                    full_audio = full_audio.unsqueeze(0)
-                    
-                # Move to device
-                full_audio = full_audio.to(device)
-                
-                # Chunk the full audio into 10-second segments
-                chunk_size_seconds = 10
-                sample_rate = 16000
-                
-                # Ensure audio is on CPU before chunking (to avoid device mismatch)
-                full_audio_cpu = full_audio.cpu()
-                
-                # Create chunks from full audio
-                audio_chunks_list = chunk_audio(full_audio_cpu, chunk_size_seconds=chunk_size_seconds, sample_rate=sample_rate)
-                print(f"Created {len(audio_chunks_list)} chunks from original full audio")
-                
-                # Move chunks back to device
-                audio_chunks_list = [chunk.to(device) for chunk in audio_chunks_list]
-            else:
-                # Fallback to the provided audio if we couldn't get the original
-                print(f"Could not fetch original audio for ID: {audio_chunks}, using provided audio chunk")
-                audio_chunks_list = [audio_clone]
-        except ImportError:
-            print("Could not import get_original_audio_by_id, using provided audio chunk")
-            audio_chunks_list = [audio_clone]
-        except Exception as e:
-            print(f"Error fetching original audio: {str(e)}, using provided audio chunk")
-            audio_chunks_list = [audio_clone]
-    # If audio_chunks is already a dictionary with a list for the audio_id key
-    elif isinstance(audio_chunks, dict) and audio_id in audio_chunks and isinstance(audio_chunks[audio_id], list):
+            # If we found an original file path, use it
+            if original_file_path is not None:
+                # Update display_filename and file_path
+                file_path = original_file_path
+                display_filename = os.path.basename(original_file_path)
+                print(f"Found original file: {file_path}")
+        except (ImportError, Exception) as e:
+            print(f"Couldn't fetch original file path for ID {audio_id}: {str(e)}")
+    
+    # Process audio chunks based on their type
+    if isinstance(audio_chunks, dict) and audio_id in audio_chunks and isinstance(audio_chunks[audio_id], list):
         audio_chunks_list = audio_chunks[audio_id]
     # If audio_chunks is already a list of audio chunks
     elif isinstance(audio_chunks, list):
@@ -590,7 +576,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
 
     # Extract the prediction and true class indices from the audio_id if available
     pred_class_idx = actual_pred_class  # Default to actual prediction
-    true_class_idx = target_class if target_class is not None else None  # Default to provided target class
+    true_class_idx = true_class if true_class is not None else None  # Default to provided true class
 
     # If audio_id contains pred and true info (e.g., "11_pred2_true2"), extract them
     if audio_id is not None and 'pred' in audio_id and 'true' in audio_id:
@@ -614,8 +600,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         file_id = audio_id  
     else:
         file_id = audio_id if audio_id is not None else f"sample_{actual_pred_class}"
-        if target_class is not None:
-            file_id += f"_pred{actual_pred_class}_true{target_class}"
+        # Use true_class parameter if available, otherwise fall back to target_class
+        actual_true_class = true_class if true_class is not None else target_class
+        if actual_pred_class is not None and actual_true_class is not None:
+            file_id += f"_pred{actual_pred_class}_true{actual_true_class}"
 
     # Handle single-channel vs multi-channel spectrogram
     if len(spectrogram.shape) == 3:
@@ -663,19 +651,28 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     time_labels = [f"{time_sec[i]:.1f}" for i in time_ticks]
     
     # For debugging
-    print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
-    print(f"Time labels: {time_labels}")
+    #print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
+    #print(f"Time labels: {time_labels}")
     
+    # Extract filename from file_path for display in titles
+    display_filename = "Unknown"
+    if file_path:
+        # Extract just the filename without the path
+        display_filename = os.path.basename(file_path)
+    else:
+        # Try to extract filename from audio_id if possible
+        if audio_id and isinstance(audio_id, str):
+            # Remove any prediction/true label info that might be in audio_id
+            base_id = audio_id.split('_')[0] if '_' in audio_id else audio_id
+            display_filename = f"ID: {base_id}"
+
     # Figure 1: Spectrogram and CAM visualization
     plt.figure(figsize=(12, 9))
     
     # Plot 1: Spectrogram
     plt.subplot(2, 1, 1)
     plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
-    title = f"Log-Mel Spectrogram\nPred: {pred_label}, True: {true_label}"
-    if target_class is not None:
-        result = "✓" if actual_pred_class == target_class else "✗"
-        title += f" {result}"
+    title = f"Log-Mel Spectrogram - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.ylabel('Frequency (Hz)')
@@ -722,10 +719,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         cam_1d = cam.reshape(-1)
         cam_for_waveform = cam_1d
 
-    title = f"Class Activation Map\nPred: {pred_label}, True: {true_label}" 
-    if target_class is not None:
-        result = "✓" if actual_pred_class == target_class else "✗"
-        title += f" {result}"
+    title = f"Class Activation Map - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.xlabel('Time (seconds)')
@@ -739,23 +733,27 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Define the paths for saving
     spec_cam_path = None
     waveform_cam_path = None
+    html_cam_path = None
     
     # Save spectrogram/CAM visualization if save_path is provided
     if save_path:
         # Initialize base subdirectories
         spec_cam_subdir = 'SpectrogramCAMs'
         waveform_subdir = 'WaveformCAMs'
+        html_subdir = 'InteractiveCAMs'  # New directory for HTML visualizations
         
         # Add epoch to path if provided
         if epoch is not None:
             spec_cam_subdir = os.path.join(f"epoch_{epoch}", spec_cam_subdir)
             waveform_subdir = os.path.join(f"epoch_{epoch}", waveform_subdir)
+            html_subdir = os.path.join(f"epoch_{epoch}", html_subdir)
         
         # Then add correct/incorrect status
         if correct is not None:
             status = "correct" if correct else "incorrect" 
             spec_cam_subdir = os.path.join(spec_cam_subdir, status)
             waveform_subdir = os.path.join(waveform_subdir, status)
+            html_subdir = os.path.join(html_subdir, status)
 
         # Create directories if they don't exist
         os.makedirs(os.path.join(save_path, spec_cam_subdir), exist_ok=True)
@@ -838,7 +836,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         # Redraw the waveform on top for better visibility
         plt.plot(waveform_time, waveform_downsampled, color='blue', linewidth=1, zorder=2)
         
-        plt.title(f"Audio Waveform with CAM Overlay\nPred: {pred_label}, True: {true_label}")
+        plt.title(f"Audio Waveform with CAM Overlay - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}")
         plt.ylabel('Amplitude')
         plt.xlabel('Time (seconds)')
         plt.grid(alpha=0.3)
@@ -874,6 +872,28 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         # Close the waveform/CAM figure to free memory
         plt.close()
+
+        # Create interactive HTML visualization
+        if save_path:
+            # Create directory for HTML files if it doesn't exist
+            os.makedirs(os.path.join(save_path, html_subdir), exist_ok=True)
+            
+            # Create HTML file path
+            html_cam_path = os.path.join(save_path, html_subdir, f"{file_id}_interactive.html")
+            
+            # Create interactive HTML visualization
+            create_interactive_cam_html(
+                file_id=file_id,
+                waveform=full_waveform,
+                cam=cam_for_waveform,
+                sample_rate=sr,
+                output_path=html_cam_path,
+                pred_label=pred_label,
+                true_label=true_label,
+                pred_prob=actual_pred_prob
+            )
+            
+            print(f"Interactive HTML visualization saved to {html_cam_path}")
     
     # Write to log file - ONLY ONCE
     if save_path and audio_paths_dir:
@@ -885,7 +905,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
         
         # Add the actual file path to the log if available
-        path_entry = f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks"
+        # Use display_filename instead of file_id for more readable logs
+        path_entry = f"{display_filename}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks"
+        # Still include the file_id for reference
+        path_entry += f"\t{file_id}"
         if file_path:
             path_entry += f"\t{file_path}"
             
@@ -954,8 +977,8 @@ def debug_model_gradients(model, input_tensor, target_class=0):
             # Create dummy prosodic features if needed
             if hasattr(model, "prosodic_encoder"):
                 # Determine prosodic feature dimension from model
-                if hasattr(model, "prosodic_encoder") and isinstance(self.model.prosodic_encoder, torch.nn.Sequential):
-                    first_layer = next(iter(self.model.prosodic_encoder.children()))
+                if hasattr(model, "prosodic_encoder") and isinstance(model.prosodic_encoder, torch.nn.Sequential):
+                    first_layer = next(iter(model.prosodic_encoder.children()))
                     prosodic_dim = first_layer.in_features if hasattr(first_layer, "in_features") else 4
                 else:
                     prosodic_dim = 4
@@ -1019,6 +1042,17 @@ def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, outpu
     import io
     import scipy.io.wavfile
     import numpy as np
+    import os
+    
+    # Clean up the file_id to get a more readable display name
+    display_name = file_id
+    if isinstance(file_id, str):
+        # Check if file_id is a path and extract just the filename
+        if "/" in file_id or "\\" in file_id:
+            display_name = os.path.basename(file_id)
+        # Remove prediction info from the ID if present
+        elif "_pred" in file_id:
+            display_name = file_id.split("_pred")[0]
     
     # Normalize waveform to avoid clipping in audio playback
     waveform_norm = waveform.copy()
@@ -1068,7 +1102,7 @@ def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, outpu
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Interactive WaveformCAM - {file_id}</title>
+        <title>Interactive WaveformCAM - {display_name}</title>
         <meta charset="UTF-8">
         <script src="https://d3js.org/d3.v6.min.js"></script>
         <style>
@@ -1185,7 +1219,7 @@ def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, outpu
     <body>
         <div class="container">
             <h1>Interactive WaveformCAM Visualization</h1>
-            <h2>Sample ID: {file_id}</h2>
+            <h2>Sample: {display_name}</h2>
             
             <div class="info-panel">
                 <div class="info-item">
@@ -1362,7 +1396,23 @@ def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, outpu
                     .attr("width", width)
                     .attr("height", height);
                 
+                // Define the line function that was missing
+                const line = d3.line()
+                    .x(d => xScale(d.time))
+                    .y(d => yScale(d.amplitude))
+                    .curve(d3.curveLinear);
+                
                 // Draw waveform with CAM coloring
+                // First draw a subtle background waveform
+                svg.append('path')
+                    .datum(waveformData)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#cccccc')
+                    .attr('stroke-width', 1.5)
+                    .attr('d', line)
+                    .attr('clip-path', 'url(#clip)');
+                
+                // Then draw the CAM overlay segments with higher opacity
                 for (let i = 0; i < areaData.length - 1; i++) {{
                     const d1 = areaData[i];
                     const d2 = areaData[i + 1];
@@ -1370,32 +1420,53 @@ def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, outpu
                     // Use CAM value to determine color
                     const fillColor = colorScale(d1.cam);
                     
-                    // Create a polygon for this segment
+                    // Calculate y-positions considering amplitude
+                    const y1 = yScale(d1.min);
+                    const y2 = yScale(d1.max);
+                    const y3 = yScale(d2.max);
+                    const y4 = yScale(d2.min);
+                    
+                    // Create a polygon for this segment - now with higher opacity
                     svg.append('polygon')
                         .attr('points', `
-                            ${{xScale(d1.time)}},${{yScale(d1.min)}}
-                            ${{xScale(d1.time)}},${{yScale(d1.max)}}
-                            ${{xScale(d2.time)}},${{yScale(d2.max)}}
-                            ${{xScale(d2.time)}},${{yScale(d2.min)}}
+                            ${{xScale(d1.time)}},${{y1}}
+                            ${{xScale(d1.time)}},${{y2}}
+                            ${{xScale(d2.time)}},${{y3}}
+                            ${{xScale(d2.time)}},${{y4}}
                         `)
                         .attr('fill', fillColor)
-                        .attr('opacity', 0.2 + d1.cam * 0.5) // Opacity based on CAM value
-                        .attr('stroke', 'none');
+                        .attr('opacity', 0.5 + d1.cam * 0.5) // Higher opacity based on CAM value
+                        .attr('stroke', fillColor)
+                        .attr('stroke-opacity', 0.7)
+                        .attr('stroke-width', 0.5);
                 }}
                 
-                // Now draw the waveform line over the colored areas
-                const line = d3.line()
+                // Draw amplitude envelope (optional for better visualization)
+                const upperEnvelope = d3.line()
                     .x(d => xScale(d.time))
-                    .y(d => yScale(d.amplitude))
+                    .y(d => yScale(d.max))
+                    .curve(d3.curveLinear);
+                
+                const lowerEnvelope = d3.line()
+                    .x(d => xScale(d.time))
+                    .y(d => yScale(d.min))
                     .curve(d3.curveLinear);
                 
                 svg.append('path')
-                    .datum(waveformData)
+                    .datum(areaData)
                     .attr('fill', 'none')
                     .attr('stroke', '#0066cc')
-                    .attr('stroke-width', 1)
-                    .attr('d', line)
-                    .attr('clip-path', 'url(#clip)');
+                    .attr('stroke-width', 0.7)
+                    .attr('stroke-opacity', 0.6)
+                    .attr('d', upperEnvelope);
+                
+                svg.append('path')
+                    .datum(areaData)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#0066cc')
+                    .attr('stroke-width', 0.7)
+                    .attr('stroke-opacity', 0.6)
+                    .attr('d', lowerEnvelope);
                 
                 // Create a playback position indicator line
                 const playbackLine = svg.append('line')

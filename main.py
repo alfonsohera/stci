@@ -508,7 +508,7 @@ if __name__ == "__main__":
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn()
+            test_cnn_rnn(binary_classification=True, use_cam=True, max_cam_samples=20)
         elif args.mode == "optimize":
             myConfig.training_from_scratch = False
             if has_threshold_functions:

@@ -320,29 +320,27 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
                 # Check if prediction is correct
                 is_correct = pred_class == true_class
                 status = 'correct' if is_correct else 'incorrect'
-
-                # If we haven't reached the maximum samples for this class and outcome
+                
+                # If we haven't reached max samples for this class/outcome
                 if cam_counters[status][true_class] < max_cam_samples:
-                    # For incorrect predictions, use pred_class to visualize what the model actually saw
-                    target_for_cam = pred_class if not is_correct else true_class
-
-                    # Now we're passing all collected audio chunks for this ID
+                    # Now we're passing all collected audio chunks
                     print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
                     print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
                     
                     # Get first chunk as reference, but pass all chunks
                     first_chunk = audio_tensors[audio_id][0]
                     
+                    # Generate CAM visualization - pass both pred_class and true_class
                     visualize_cam(
-                        audio=first_chunk,  # Pass the first chunk for reference
+                        audio=first_chunk,
                         model=model,
-                        target_class=target_for_cam,
+                        target_class=pred_class,  # Pass the predicted class for CAM generation
+                        true_class=true_class,    # Pass the true class separately
                         save_path=cam_output_dir,
-                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        audio_id=audio_id,  # Pass the original audio_id directly without formatting
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
-                        epoch=epoch,
-                        audio_chunks=audio_tensors[audio_id],  # Pass all collected chunks
+                        audio_chunks=audio_tensors[audio_id],
                         chunk_outputs=chunk_outputs,
                         show_time_domain=True  # Enable time-domain visualization
                     )
@@ -374,23 +372,36 @@ def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max
             audio = batch["audio"][i:i+1]  # Keep batch dimension
             
             # Generate CAM
-            audio_id = f"eval_sample_{i}"
-            if "audio_id" in batch and batch["audio_id"] is not None:
-                audio_id = batch["audio_id"][i]
+            audio_id = batch["audio_id"][i] if "audio_id" in batch and batch["audio_id"] is not None else f"eval_sample_{i}"
                 
-            # Get file path if available
+            # Get file path if available - improved file path extraction
             file_path = None
+            
+            # Try all possible locations where file path might be stored
             if "file_path" in batch:
-                file_path = batch["file_path"][i] if isinstance(batch["file_path"], list) else batch["file_path"]
-            elif hasattr(batch, "file_paths"):
-                file_path = batch["file_paths"][i] if i < len(batch["file_paths"]) else None
+                # Check if it's a list or a single value
+                if isinstance(batch["file_path"], list):
+                    if i < len(batch["file_path"]):
+                        file_path = batch["file_path"][i]
+                else:
+                    file_path = batch["file_path"]
+            
+            # Try plural version 'file_paths'
+            elif "file_paths" in batch:
+                if isinstance(batch["file_paths"], list):
+                    if i < len(batch["file_paths"]):
+                        file_path = batch["file_paths"][i]
+                else:
+                    file_path = batch["file_paths"]
+                    
+            print(f"Found file path for sample {i}: {file_path}")
             
             visualize_cam(
                 audio=audio,
                 model=model,
                 target_class=target_for_cam,  # Use prediction for incorrect samples
                 save_path=cam_output_dir,
-                audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
+                audio_id=audio_id,  # Pass the original audio_id directly
                 correct=is_correct,
                 audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
                 file_path=file_path,  # Pass the original file path
@@ -540,9 +551,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             dataloaders["validation"], 
             criterion, 
             device,
-            use_cam=False,                                      # Enable CAM visualization
-            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
-            max_cam_samples=10,                                 # Max samples per class/outcome
+            use_cam=False,  # Always disable CAM during training
+            cam_output_dir=None,  # Don't even pass output directory
+            max_cam_samples=0,  # No samples
             epoch=epoch
         )
                        
@@ -657,7 +668,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=10):
+def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=20):
     """
     Test the CNN+RNN model on the test set with optional CAM visualization.
     
@@ -699,10 +710,6 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     # Create output directories if needed
     if use_cam and cam_output_dir:
         os.makedirs(cam_output_dir, exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'correct'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'incorrect'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'correct'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'incorrect'), exist_ok=True)
         os.makedirs(os.path.join(cam_output_dir, 'audio_paths'), exist_ok=True)
     
     with torch.inference_mode():
@@ -780,7 +787,6 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                 # Check if prediction is correct
                 is_correct = pred_class == true_class
                 status = 'correct' if is_correct else 'incorrect'
-                target_for_cam = pred_class if not is_correct else true_class
                 
                 # If we haven't reached max samples for this class/outcome
                 if cam_counters[status][true_class] < max_cam_samples:
@@ -791,13 +797,14 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                     # Get first chunk as reference, but pass all chunks
                     first_chunk = audio_tensors[audio_id][0]
                     
-                    # Generate CAM visualization
+                    # Generate CAM visualization - pass both pred_class and true_class
                     visualize_cam(
                         audio=first_chunk,
                         model=model,
-                        target_class=target_for_cam,
+                        target_class=pred_class,  # Pass the predicted class for CAM generation
+                        true_class=true_class,    # Pass the true class separately
                         save_path=cam_output_dir,
-                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        audio_id=audio_id,  # Pass the original audio_id directly without formatting
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
                         audio_chunks=audio_tensors[audio_id],
@@ -810,10 +817,12 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
+    if num_classes == 2:
+        class_names=["Healthy", "Not Healthy"]
+    else:
+         class_names=["Healthy", "MCI", "AD"]                
     report = classification_report(
-        all_labels, all_preds, target_names=["Healthy", "MCI", "AD"]
-    )
-    
+            all_labels, all_preds, target_names=class_names)
     print(f"Test Accuracy: {test_accuracy:.4f}")
     print("Classification Report:")
     print(report)
@@ -824,7 +833,7 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
         for status in ['correct', 'incorrect']:
             print(f"  {status.capitalize()} predictions:")
             for class_id, count in cam_counters[status].items():
-                class_name = ["Healthy", "MCI", "AD"][class_id]
+                class_name = class_names[class_id]
                 print(f"    Class {class_name}: {count} samples")
         print(f"\nVisualizations saved to {cam_output_dir}")
     
@@ -876,7 +885,7 @@ def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
     print("Training complete!")
 
 
-def test_cnn_rnn(binary_classification=False):
+def test_cnn_rnn(binary_classification=False, use_cam=False, max_cam_samples=20):
     """Test function for the CNN+RNN pipeline.
     
     Args:
@@ -898,7 +907,6 @@ def test_cnn_rnn(binary_classification=False):
         dataset, 
         batch_size=96
     )
-    
     
     # Create model with appropriate number of classes
     model = PretrainedDualPathAudioClassifier(
@@ -923,15 +931,49 @@ def test_cnn_rnn(binary_classification=False):
     else:
         print(f"No pre-trained model found at {model_path}. Using randomly initialized weights.")
     
-    # Run evaluation with appropriate CAM output directory
-    cam_dir_suffix = "Binary" if binary_classification else "ThreeClass" 
-    test_cnn_rnn_model(
+    # Set up CAM output directory with timestamp for uniqueness
+    cam_output_dir = None
+    if use_cam:        
+        class_type = "Binary" if binary_classification else "ThreeClass"
+        cam_output_dir = os.path.join(myConfig.OUTPUT_PATH, f"CAM_Test_{class_type}")
+        os.makedirs(cam_output_dir, exist_ok=True)
+        print(f"CAM visualizations will be saved to: {cam_output_dir}")
+    
+    # Run evaluation on test set with optional CAM visualizations
+    print("Testing model on test set...")
+    test_accuracy, test_preds, test_labels = test_cnn_rnn_model(
         model,
         dataloaders["test"],
-        use_cam=True,
-        cam_output_dir=f"/ProcessedFiles/CAM_Test_{cam_dir_suffix}",
-        max_cam_samples=10
+        use_cam=use_cam,
+        cam_output_dir=cam_output_dir,
+        max_cam_samples=max_cam_samples
     )
+    
+    # Display more detailed metrics if available
+    if test_labels is not None and test_preds is not None:
+        target_names = ["Healthy", "Non-Healthy"] if binary_classification else ["Healthy", "MCI", "AD"]
+        test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+        test_report = classification_report(test_labels, test_preds, target_names=target_names)
+        
+        print(f"Test F1-Macro: {test_f1_macro:.4f}")
+        print("Detailed Classification Report:")
+        print(test_report)
+        
+        # Generate and save confusion matrix
+        if cam_output_dir:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            cm = confusion_matrix(test_labels, test_preds)
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
+                      xticklabels=target_names, yticklabels=target_names)
+            plt.xlabel("Predicted labels")
+            plt.ylabel("True labels")
+            plt.title("Confusion Matrix (Test Set)")
+            plt.savefig(os.path.join(cam_output_dir, "test_confusion_matrix.png"))
+            plt.close()
+    
+    return test_accuracy, test_preds, test_labels
 
 
 def optimize_cnn_rnn(binary_classification=False):

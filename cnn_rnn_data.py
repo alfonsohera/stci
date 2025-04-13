@@ -122,6 +122,10 @@ class CNNRNNDataset(Dataset):
         # Add audio_id for chunk handling
         audio_id = f"{dataset_idx}" 
         result["audio_id"] = audio_id
+        
+        # Preserve file path if available
+        if "file_path" in item:
+            result["file_path"] = item["file_path"]
                 
         return result
 
@@ -156,6 +160,10 @@ def collate_fn_cnn_rnn(batch):
     # Include audio_id for chunk aggregation
     if "audio_id" in batch[0]:
         result["audio_id"] = [item["audio_id"] for item in batch]
+
+    # Include file paths if available - use consistent key name file_path (singular)
+    if "file_path" in batch[0]:
+        result["file_path"] = [item["file_path"] for item in batch]
         
     return result
 
@@ -474,52 +482,81 @@ def prepare_cnn_rnn_dataset(binary_classification=True):
 
 def get_original_audio_by_id(audio_id):
     """
-    Retrieve the original full-length audio file for a given audio ID.
+    Retrieve the original full-length processed audio file for a given audio ID.    
     
     Args:
         audio_id (str): The ID of the audio file to retrieve
         
     Returns:
-        torch.Tensor: The full audio tensor, or None if not found
+        tuple: (torch.Tensor, str) - The full audio tensor and the file path, or (None, None) if not found
     """
     import os
     import torch
     import torchaudio
-    import glob
+        
+    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
     
-    # Path to the audio files
-    PROCESSED_FILES_PATH = "/home/bosh/Documents/ML/zz_PP/00_SCTI/ProcessedFiles"
-    
-    # Try to find the audio file based on the ID
-    # Check common formats and paths
-    possible_paths = [
-        os.path.join(PROCESSED_FILES_PATH, f"**/{audio_id}.wav"),
-        os.path.join(PROCESSED_FILES_PATH, f"**/{audio_id}.flac"),
-        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/{audio_id}.wav"),
-        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/{audio_id}.flac"),
-        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/*{audio_id}*.wav"),
-        os.path.join("/home/bosh/Documents/ML/zz_PP/00_SCTI/02_ProcessedFiles", f"**/*{audio_id}*.flac"),
-    ]
-    
-    # Try each path
-    for path_pattern in possible_paths:
-        matching_files = glob.glob(path_pattern, recursive=True)
-        if matching_files:
-            try:
-                # Load the first matching audio file
-                waveform, sample_rate = torchaudio.load(matching_files[0])
+    # Try to load the dataset info to find the correct file for the given ID
+    try:
+        print(f"Searching for audio ID: {audio_id} in pytorch dataset...")
+        for split in ["train", "validation", "test"]:
+            split_path = os.path.join(pytorch_dataset_path, f"{split}.pt")
+            if os.path.exists(split_path):
+                samples = torch.load(split_path)
                 
+                # Try to find a sample with matching ID (exact match)
+                if audio_id.isdigit() and int(audio_id) < len(samples):
+                    # Direct index access if ID is a valid index
+                    i = int(audio_id)
+                    print(f"Found matching processed audio in {split} dataset at index {i}")
+                    audio_tensor = samples[i]["audio"]
+                    file_path = samples[i].get("file_path", f"dataset_{split}_{i}")
+                    return audio_tensor, file_path
+                
+                # If not a direct index match, search through all samples
+                for i, sample in enumerate(samples):
+                    if str(i) == str(audio_id) or (
+                        "file_path" in sample and audio_id in str(sample["file_path"])):
+                        print(f"Found matching processed audio in {split} dataset at index {i}")
+                        # Use the audio data directly from the saved dataset (already processed)
+                        audio_tensor = sample["audio"]
+                        file_path = sample.get("file_path", f"dataset_{split}_{i}")
+                        return audio_tensor, file_path
+    except Exception as e:
+        print(f"Error searching in pytorch dataset: {str(e)}")
+        
+    data_dir = os.path.join(myConfig.ROOT_DIR, "Data")
+    print(f"Searching for audio ID: {audio_id} in Data directory: {data_dir}")
+    
+    try:
+        # Try to find the file directly in the Data directory
+        for ext in ['.wav', '.flac']:
+            filepath = os.path.join(data_dir, f"{audio_id}{ext}")
+            if os.path.exists(filepath):
+                print(f"Found audio file in Data directory: {filepath}")
+                waveform, sample_rate = torchaudio.load(filepath)
                 # Convert to mono if needed
                 if waveform.shape[0] > 1:
                     waveform = waveform.mean(dim=0, keepdim=True)
-                
-                print(f"Found and loaded audio file: {matching_files[0]}")
-                print(f"Audio shape: {waveform.shape}, Sample rate: {sample_rate}")
-                
-                return waveform
-                
-            except Exception as e:
-                print(f"Error loading audio file {matching_files[0]}: {str(e)}")
+                return waveform, filepath
+        
+        # Check class-specific subdirectories inside Data if they exist
+        for subdir in ["Healthy", "MCI", "AD"]:
+            subdir_path = os.path.join(data_dir, subdir)
+            if os.path.exists(subdir_path):
+                for ext in ['.wav', '.flac']:
+                    filepath = os.path.join(subdir_path, f"{audio_id}{ext}")
+                    if os.path.exists(filepath):
+                        print(f"Found audio file in Data/{subdir} directory: {filepath}")
+                        waveform, sample_rate = torchaudio.load(filepath)
+                        # Convert to mono if needed
+                        if waveform.shape[0] > 1:
+                            waveform = waveform.mean(dim=0, keepdim=True)
+                        return waveform, filepath
+    except Exception as e:
+        print(f"Error searching in Data directory: {str(e)}")
     
+    # If we get here, we couldn't find the file in allowed locations
     print(f"Could not find audio file for ID: {audio_id}")
-    return None
+    print(f"Only searched in pytorch_dataset and /Data/ directory as specified.")
+    return None, None
