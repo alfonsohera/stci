@@ -1633,7 +1633,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
 
                 # Create fold dataset dictionary
                 fold_dataset = {
-                    "train": fold_train_balanced,
+                    "train": fold_train,
                     "validation": fold_val,
                     "test": dataset["test"]
                 }
@@ -1655,6 +1655,36 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                     fusion_dropout=fusion_dropout,
                     prosodic_weight=prosodic_weight
                 )
+
+                if not myConfig.training_from_scratch:       
+                    model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+                    model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+                    
+                    print(f"Fine-tuning: Loading pre-trained model from {model_path}")
+                    try:
+                        fold_model.load_state_dict(torch.load(model_path))
+                        print("Successfully loaded model for fine-tuning")
+                        print("Selectively unfreezing CNN14 layers for fine-tuning...")
+                        for name, param in fold_model.cnn_extractor.named_parameters():
+                            if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                                param.requires_grad = True
+                                print(f"Unfreezing {name}")
+                            else:
+                                param.requires_grad = False             
+                    except Exception as e:
+                        print(f"Error loading model weights: {e}")
+                        print("This could be because the saved model has a different architecture.")
+                        print("Proceeding with newly initialized model instead.")
+                else:
+                    # Apply selective unfreezing directly
+                    print("Training a new model from scratch as per configuration.")
+                    print("Selectively unfreezing CNN14 layers...")
+                    for name, param in fold_model.cnn_extractor.named_parameters():
+                        if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                            param.requires_grad = True
+                            print(f"Unfreezing {name}")
+                        else:
+                            param.requires_grad = False
                 fold_model.to(device)
                 
                 # Calculate class weights with scaling factor

@@ -508,7 +508,7 @@ if __name__ == "__main__":
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn(binary_classification=True, use_cam=True, max_cam_samples=20)
+            test_cnn_rnn(binary_classification=True, use_cam=True, max_cam_samples=50)
         elif args.mode == "optimize":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
@@ -543,6 +543,7 @@ if __name__ == "__main__":
                 print("Please check your installation and make sure the cross_validate function exists.")
         elif args.mode == "hpo":
             if has_threshold_functions:
+                myConfig.training_from_scratch = True
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
                 run_bayesian_optimization(                     
                     n_trials=args.trials,
