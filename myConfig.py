@@ -68,7 +68,7 @@ selected_features = [
 num_extracted_features = len(selected_features)
 
 
-# CNN-RNN model hyperparameters - centralized configuration
+# CNN-RNN model hyperparameters  - enabled when training from scratch
 cnn_rnn_hyperparams = {
     # Core training hyperparameters
     "max_lr": 0.0008824227362416752,
@@ -86,6 +86,25 @@ cnn_rnn_hyperparams = {
     "learning_rate_cnn": 0.00005141766390109778,
     "weight_decay_cnn": 0.0003248192869770287
 }
+
+# fine tuning hyperparameters
+""" cnn_rnn_hyperparams = {
+    # Core training hyperparameters
+    "max_lr": 0.0008824227362416752 /5,
+    "focal_loss_gamma": 1.521142890255866,
+    "weight_scaling_factor": 0.4249448142616835,
+    "weight_decay": 0.0000498211421162107 *2,
+    "pct_start": 0.25,
+    "div_factor": 10,
+    "final_div_factor": 100,
+    
+    # Model-specific hyperparameters
+    "attention_dropout":min(0.25621088666940683 +0.05, 0.5),
+    "fusion_dropout": min(0.20308767414437037 +0.5, 0.5),
+    "prosodic_weight": 1.9759278817295955,
+    "learning_rate_cnn": 0.00005141766390109778 /5,
+    "weight_decay_cnn": 0.0003248192869770287 *1.5
+} """
 
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset

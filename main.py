@@ -504,7 +504,7 @@ if __name__ == "__main__":
         elif args.mode == "finetune":
             myConfig.training_from_scratch = False
             print(f"Starting fine-tuning (CNN+RNN pipeline {feature_text} manual features)...")
-            main_cnn_rnn(use_prosodic_features=use_manual)
+            main_cnn_rnn(use_prosodic_features=use_manual, binary_classification=True)
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")

@@ -636,15 +636,6 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             model_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.pt")
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
-            
-            """ # Also save in safetensors format if available
-            try:
-                from safetensors.torch import save_file
-                safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
-                save_file(model.state_dict(), safetensors_path)
-                print(f"  Also saved model in safetensors format to {safetensors_path}")
-            except ImportError:
-                print("  safetensors not available, skipping safetensors format") """
     
     # End of training, log best model if enabled    
     if wandb.run:
@@ -661,7 +652,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                     type="model",
                     description=f"Best CNN+RNN model with F1-macro={best_f1_macro:.4f}"
                 )
-                artifact.add_file(model_path, name="model.pt")
+                #artifact.add_file(model_path, name="model.pt")
                 
                 if os.path.exists(safetensors_path):
                     artifact.add_file(safetensors_path, name="model.safetensors")
@@ -873,6 +864,38 @@ def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
         sample_rate=16000,
         pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                            
     )
+
+    
+    if not myConfig.training_from_scratch:       
+        model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+        model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+        
+        print(f"Fine-tuning: Loading pre-trained model from {model_path}")
+        try:
+            model.load_state_dict(torch.load(model_path))
+            print("Successfully loaded model for fine-tuning")
+            print("Selectively unfreezing CNN14 layers for fine-tuning...")
+            for name, param in model.cnn_extractor.named_parameters():
+                if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                    param.requires_grad = True
+                    print(f"Unfreezing {name}")
+                else:
+                    param.requires_grad = False             
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("This could be because the saved model has a different architecture.")
+            print("Proceeding with newly initialized model instead.")
+    else:
+        # Apply selective unfreezing directly
+        print("Training a new model from scratch as per configuration.")
+        print("Selectively unfreezing CNN14 layers...")
+        for name, param in model.cnn_extractor.named_parameters():
+            if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                param.requires_grad = True
+                print(f"Unfreezing {name}")
+            else:
+                param.requires_grad = False
+
 
     print(f"Model created with {model.classifier.out_features} output classes!")
     
