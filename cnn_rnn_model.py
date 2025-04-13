@@ -313,7 +313,9 @@ class PretrainedDualPathAudioClassifier(nn.Module):
                 nn.LayerNorm(256),
                 nn.ReLU(),
                 nn.Dropout(self.fusion_dropout),
-                nn.Linear(256, 128)
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5)
             )
         else:
             # Fusion layer (CNN features + Attention features)
@@ -328,7 +330,7 @@ class PretrainedDualPathAudioClassifier(nn.Module):
                 nn.Dropout(self.fusion_dropout),
                 nn.Linear(256, 128),
                 nn.ReLU(),
-                nn.Dropout(0.4)
+                nn.Dropout(0.5)
             )
 
         # Separate classifier layer
