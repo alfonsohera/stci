@@ -44,14 +44,15 @@ class WandbCallback:
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, weight=None):
+    def __init__(self, gamma=2.0, weight=None, label_smoothing=0.0):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.weight = weight
+        self.label_smoothing = label_smoothing
         
     def forward(self, input, target):
         # Compute cross entropy with class weights if provided
-        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight, label_smoothing=self.label_smoothing)
         # Get prediction probabilities
         pt = torch.exp(-ce_loss)
         # Apply focal weighting
@@ -483,7 +484,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Convert to tensor
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
-    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+    criterion = FocalLoss(gamma=0, weight=None, label_smoothing=0.12)
         
     model.to(device)
 
@@ -1584,7 +1585,8 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                         
             # Core learning parameters - refined ranges based on previous HPO run
             weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.45, 0.65)  # Centered around 0.541
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.4, 1.9)  # Centered around 1.64
+            #focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.4, 1.9)  # Centered around 1.64
+            hpo_label_smoothing = trial.suggest_float("label_smoothing", 0.05, 0.15)  # Centered around 0.1
             hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 4e-4, 9e-4, log=True)  # Centered around 6.59e-4
             hpo_weight_decay = trial.suggest_float("weight_decay", 4e-5, 9e-5, log=True)  # Centered around 6.4e-5
             hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 6e-4, 1.1e-3, log=True)  # Centered around 8.47e-4, high importance
@@ -1711,8 +1713,8 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
                 # Convert to tensor
                 weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
 
-                # Set up the loss function with class weighting
-                criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+                # Set up the loss function to work as CE with label smoothing
+                criterion = FocalLoss(gamma=0, weight=None, label_smoothing= hpo_label_smoothing)
                 
                 cnn_params = []
                 other_params = []
@@ -1935,7 +1937,8 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binar
         previous_best = {
             # Core parameters from previous best run
             "learning_rate": myConfig.cnn_rnn_hyperparams["max_lr"],  
-            "focal_loss_gamma": myConfig.cnn_rnn_hyperparams["focal_loss_gamma"], 
+            #"focal_loss_gamma": myConfig.cnn_rnn_hyperparams["focal_loss_gamma"], 
+            "label_smoothing: 0.12"
             "weight_scaling_factor": myConfig.cnn_rnn_hyperparams["weight_scaling_factor"], 
             "weight_decay": myConfig.cnn_rnn_hyperparams["weight_decay"],            
             "pct_start": myConfig.cnn_rnn_hyperparams["pct_start"],
