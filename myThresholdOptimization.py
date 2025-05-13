@@ -24,7 +24,7 @@ from safetensors.torch import load_file
 def get_predictions(
     model: torch.nn.Module,
     dataloader: DataLoader,
-    use_prosodic_features: bool = False,
+    use_prosodic_features: bool = True,
     is_cnn_rnn: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -46,42 +46,103 @@ Get model predictions and true labels from a dataloader.
     all_probs = []
     all_labels = []
     
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Getting predictions"):
             # Move all tensor values to the correct device
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
                     for k, v in batch.items()}
             
-            # Handle different model architectures
-            if is_cnn_rnn:
-                if use_prosodic_features and "prosodic_features" in batch:
-                    logits = model(
-                        batch["audio"],
-                        audio_lengths=batch["audio_lengths"],
-                        prosodic_features=batch["prosodic_features"]
-                    )
-                else:
-                    logits = model(
-                        batch["audio"],
-                        audio_lengths=batch["audio_lengths"]
-                    )
-            else:
-                # Wav2Vec2 type models
-                logits = model(
-                    input_values=batch["input_values"],
-                    prosodic_features=batch["prosodic_features"]
-                ).logits
+            # Extract audio_ids if available
+            audio_ids = batch.get("audio_id", None)
             
-            # Get labels from batch
-            labels = batch["labels"]
+            # If no audio_ids, process normally (no chunking)
+            if audio_ids is None:
+                # Handle different model architectures
+                if is_cnn_rnn:
+                    if use_prosodic_features and "prosodic_features" in batch:
+                        logits = model(
+                            batch["audio"], 
+                            audio_lengths=batch["audio_lengths"],
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
+                        )
+                    else:
+                        logits = model(
+                            batch["audio"],
+                            audio_lengths=batch["audio_lengths"]
+                        )
+                else:
+                    # Wav2Vec2 type models
+                    logits = model(
+                        input_values=batch["input_values"],
+                        prosodic_features=batch["prosodic_features"]
+                    ).logits
+                
+                # Get labels from batch
+                labels = batch["labels"]
+                
+                # Convert logits to probabilities
+                probs = torch.softmax(logits, dim=-1)
+                
+                all_probs.append(probs.cpu().numpy())
+                all_labels.append(labels.cpu().numpy())
+            else:
+                # Process batches with audio_ids for chunking
+                # Handle different model architectures
+                if is_cnn_rnn:
+                    if use_prosodic_features and "prosodic_features" in batch:
+                        logits = model(
+                            batch["audio"],
+                            audio_lengths=batch["audio_lengths"],
+                            prosodic_features=batch["prosodic_features"]
+                        )
+                    else:
+                        logits = model(
+                            batch["audio"],
+                            audio_lengths=batch["audio_lengths"]
+                        )
+                else:
+                    # Wav2Vec2 type models
+                    logits = model(
+                        input_values=batch["input_values"],
+                        prosodic_features=batch["prosodic_features"]
+                    ).logits
+                
+                # Store chunks by audio_id
+                for j, audio_id in enumerate(audio_ids):
+                    if audio_id not in audio_chunks:
+                        audio_chunks[audio_id] = []
+                        # Store the label for this audio
+                        audio_labels[audio_id] = batch["labels"][j]
+                    
+                    # Store the logits for this chunk
+                    audio_chunks[audio_id].append(logits[j])
+    
+    # Process all remaining audios after going through the entire dataset
+    if audio_chunks and is_cnn_rnn:  # Only process chunks for CNN-RNN models
+        for audio_id, chunk_outputs in audio_chunks.items():
+            # Aggregate predictions from all chunks
+            aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+            
+            # Get label for this audio
+            label = audio_labels[audio_id]
             
             # Convert logits to probabilities
-            probs = torch.softmax(logits, dim=-1)
+            prob = torch.softmax(aggregated_output, dim=0)
             
-            all_probs.append(probs.cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
+            all_probs.append(prob.cpu().numpy().reshape(1, -1))
+            all_labels.append(label.cpu().numpy().reshape(1))
     
-    return np.vstack(all_probs), np.concatenate(all_labels)
+    # Convert to numpy arrays with proper handling of empty lists
+    if all_probs:
+        return np.vstack(all_probs), np.concatenate(all_labels)
+    else:
+        return np.array([]), np.array([])
 
 
 def calculate_metrics_at_threshold(
@@ -346,7 +407,7 @@ def optimize_thresholds_for_model(
     dataloader: DataLoader,
     class_names: List[str],
     output_dir: str,
-    use_prosodic_features: bool = False,
+    use_prosodic_features: bool = True,
     is_cnn_rnn: bool = False,
     log_to_wandb: bool = False
 ) -> Dict[str, float]:
@@ -610,7 +671,7 @@ def main():
             dataloader=dataloader,
             class_names=class_names,
             output_dir=args.output_dir,
-            use_prosodic_features=args.use_manual,
+            use_prosodic_features=False,
             is_cnn_rnn=True,
             log_to_wandb=args.log_wandb
         )

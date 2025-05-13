@@ -57,45 +57,123 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, use_prosodic_features=True):
+def train_epoch(model, train_loader, optimizer, criterion, device, scheduler=None):
     """Train the model for one epoch."""
     import gc
     model.train()
     train_loss = 0.0
+    total_samples = 0  # Track total number of samples or recordings
+    
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
     
     for i, batch in enumerate(tqdm(train_loader, desc="Training")):
         # Move batch to GPU if available
         batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
-        # Zero gradients more efficiently
-        optimizer.zero_grad()
+        # Extract audio_ids if available
+        audio_ids = batch.get("audio_id", None)
         
-        # Forward pass
-        if use_prosodic_features and "prosodic_features" in batch:
+        # If no audio_ids, process normally (no chunking)
+        if audio_ids is None:
+            # Zero gradients more efficiently
+            optimizer.zero_grad()
+            
+            # Forward pass
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                prosodic_features=batch["prosodic_features"], 
-                augmentation_id=batch.get("augmentation_id")
+                audio_lengths=batch["audio_lengths"],
+                augmentation_id=batch.get("augmentation_id", None),
+                prosodic_features=batch.get("prosodic_features", None),
+                chunk_context=batch.get("chunk_context", None)
             )
+                
+            # Calculate loss                
+            loss = criterion(logits, batch["labels"].to(device))
+            
+            # Backpropagation
+            loss.backward() 
+            # Gradient clipping
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)                       
+            # Update weights
+            optimizer.step()        
+            # Update LR
+            scheduler.step()
+            
+            # Track loss (count each sample)
+            batch_size = batch["audio"].size(0)
+            train_loss += loss.item() * batch_size
+            total_samples += batch_size
         else:
+            # Process batches with audio_ids for chunking
+            # Group logits by audio_id for later aggregation
+            
+            # Forward pass to get logits for each chunk
             logits = model(
                 batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                augmentation_id=batch.get("augmentation_id")
+                audio_lengths=batch["audio_lengths"],
+                augmentation_id=batch.get("augmentation_id", None),
+                prosodic_features=batch.get("prosodic_features", None),
+                chunk_context=batch.get("chunk_context", None)
             )
             
-        # Calculate loss                
-        loss = criterion(logits, batch["labels"].to(device))
+            # Store chunks by audio_id
+            for j, audio_id in enumerate(audio_ids):
+                if audio_id not in audio_chunks:
+                    audio_chunks[audio_id] = []
+                    # Store the label for this audio (all chunks should have the same label)
+                    audio_labels[audio_id] = batch["labels"][j]
+                
+                # Store the logits for this chunk
+                audio_chunks[audio_id].append(logits[j])
+            
+            # Process complete audios (all chunks received)
+            # Here we could add logic to determine when we have all chunks for an audio
+            # For simplicity, let's process any audio that has accumulated chunks each batch
+            complete_audio_ids = list(audio_chunks.keys())
+            
+            if complete_audio_ids:
+                # Zero gradients before processing complete audios
+                optimizer.zero_grad()
+                
+                # Accumulate loss for all complete audios
+                batch_loss = 0.0
+                
+                for audio_id in complete_audio_ids:
+                    # Aggregate predictions from all chunks
+                    chunk_outputs = audio_chunks[audio_id]
+                    aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+                    
+                    # Get label for this audio
+                    label = audio_labels[audio_id]
+                    
+                    # Calculate loss using the aggregated output
+                    # Need to unsqueeze to match expected dimensions [batch_size, num_classes]
+                    loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
+                    batch_loss += loss
+                
+                # Average loss across all processed audios
+                batch_loss = batch_loss / len(complete_audio_ids)
+                
+                # Backpropagation
+                batch_loss.backward()
+                
+                # Update weights
+                optimizer.step()
+                
+                # Update LR
+                scheduler.step()
+                
+                # Track loss by number of recordings (not multiplying by length)
+                train_loss += batch_loss.item() * len(complete_audio_ids)
+                total_samples += len(complete_audio_ids)
+                
+                # Clear processed audio chunks and labels
+                for audio_id in complete_audio_ids:
+                    del audio_chunks[audio_id]
+                    del audio_labels[audio_id]
         
-        # Backpropagation
-        loss.backward()                        
-        # Update weights
-        optimizer.step()        
-        # Update LR
-        scheduler.step()
-        # Track loss 
-        train_loss += loss.item()        
         # cleanup of tensors and loss
         logits_detached = logits.detach()        
         del logits, loss, batch
@@ -110,66 +188,230 @@ def train_epoch(model, train_loader, optimizer, criterion, device, scheduler, us
     gc.collect()
     
     # Calculate average loss
-    avg_train_loss = train_loss / len(train_loader)
+    avg_train_loss = train_loss / total_samples if total_samples > 0 else 0
     
     return avg_train_loss
 
 
-def evaluate(model, val_loader, criterion, device, use_prosodic_features=True):
-    """Evaluate the model on validation data."""
+def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir=None, max_cam_samples=10, epoch=None):
+    """
+    Evaluate the model on validation data.
+    
+    Args:
+        model: Model to evaluate
+        val_loader: DataLoader for evaluation
+        criterion: Loss function
+        device: Device to run evaluation on
+        use_cam: Whether to generate CAM visualizations
+        cam_output_dir: Directory to save CAM visualizations
+        max_cam_samples: Maximum number of samples to visualize per class and prediction outcome
+    """
+    from cam_utils import visualize_cam
+    import random
+    import os
+    
     model.eval()
     val_loss = 0.0
     all_preds = []
     all_labels = []
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    audio_tensors = {} # Store audio tensors for CAM visualization
+    
+    # Counters for CAM visualization
+    cam_counters = {
+        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
+        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+    }
     
     with torch.inference_mode():
         for batch in tqdm(val_loader, desc="Validation"):
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            if use_prosodic_features and "prosodic_features" in batch:
+            # Extract audio_ids if available
+            audio_ids = batch.get("audio_id", None)
+            
+            # If no audio_ids, process normally (no chunking)
+            if audio_ids is None:
+                # Forward pass
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    prosodic_features=batch["prosodic_features"]
-                )
-            else:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"] 
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
-            # Calculate loss
-            loss = criterion(logits, batch["labels"])
-            # Track loss
-            val_loss += loss.item()
-            # Get predictions
-            preds = torch.argmax(logits, dim=-1)
-            # Track predictions and labels
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(batch["labels"].cpu().numpy())
+                # Calculate loss
+                loss = criterion(logits, batch["labels"])
+                # Track loss
+                val_loss += loss.item()
+                # Get predictions
+                preds = torch.argmax(logits, dim=-1)
+                
+                # Track predictions and labels
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(batch["labels"].cpu().numpy())
+                
+                # Process CAM visualization for selected samples if enabled
+                if use_cam and cam_output_dir:
+                    process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples)
+            else:
+                # Process batches with audio_ids for chunking
+                # Forward pass to get logits for each chunk
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
+                )
+                
+                # Store chunks by audio_id
+                for j, audio_id in enumerate(audio_ids):
+                    if audio_id not in audio_chunks:
+                        audio_chunks[audio_id] = []
+                        # Store the label and audio for this audio
+                        audio_labels[audio_id] = batch["labels"][j]
+                        
+                        # Store audio tensor for later CAM visualization
+                        if use_cam:
+                            # Initialize list for this audio_id
+                            audio_tensors[audio_id] = []
+                    
+                    # Store the logits for this chunk
+                    audio_chunks[audio_id].append(logits[j])
+                    
+                    # Also store the audio chunk itself for visualization
+                    if use_cam:
+                        audio_tensors[audio_id].append(batch["audio"][j:j+1].detach().clone())
+    
+    # Process all remaining audios after going through the entire dataset
+    if audio_chunks:        
+        for audio_id, chunk_outputs in audio_chunks.items():
+            # Aggregate predictions from all chunks
+            aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
+            
+            # Get label for this audio
+            label = audio_labels[audio_id]
+            
+            # Calculate loss using the aggregated output
+            loss = criterion(aggregated_output.unsqueeze(0), label.unsqueeze(0))
+            val_loss += loss.item() 
+            
+            # Get prediction from aggregated output
+            pred = torch.argmax(aggregated_output)
+            all_preds.append(pred.cpu().numpy())
+            all_labels.append(label.cpu().numpy())
+            
+            # Process CAM for chunked audio
+            if use_cam and cam_output_dir and audio_id in audio_tensors:
+                true_class = label.item()
+                pred_class = pred.item()
+                
+                # Check if prediction is correct
+                is_correct = pred_class == true_class
+                status = 'correct' if is_correct else 'incorrect'
+
+                # If we haven't reached the maximum samples for this class and outcome
+                if cam_counters[status][true_class] < max_cam_samples:
+                    # For incorrect predictions, use pred_class to visualize what the model actually saw
+                    target_for_cam = pred_class if not is_correct else true_class
+
+                    # Now we're passing all collected audio chunks for this ID
+                    print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
+                    print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
+                    
+                    # Get first chunk as reference, but pass all chunks
+                    first_chunk = audio_tensors[audio_id][0]
+                    
+                    visualize_cam(
+                        audio=first_chunk,  # Pass the first chunk for reference
+                        model=model,
+                        target_class=target_for_cam,
+                        save_path=cam_output_dir,
+                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        correct=is_correct,
+                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                        epoch=epoch,
+                        audio_chunks=audio_tensors[audio_id],  # Pass all collected chunks
+                        chunk_outputs=chunk_outputs,
+                        show_time_domain=True  # Enable time-domain visualization
+                    )
+                    
+                    # Update counter
+                    cam_counters[status][true_class] += 1
     
     return val_loss, all_labels, all_preds
 
-
-def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features=True):
-    """Train the CNN+RNN model."""        
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
+def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples):
+    """Process batch for CAM visualization"""
+    import os
+    from cam_utils import visualize_cam
     
+    # Process some samples for CAM visualization
+    for i in range(len(preds)):
+        true_class = batch["labels"][i].item()
+        pred_class = preds[i].item()
+        
+        # Check if prediction is correct
+        is_correct = pred_class == true_class
+        status = 'correct' if is_correct else 'incorrect'
+        
+        # If we haven't reached the maximum samples for this class and outcome
+        if cam_counters[status][true_class] < max_cam_samples:
+            # For incorrect predictions, use pred_class to visualize what the model actually saw
+            target_for_cam = pred_class if not is_correct else true_class
+            # Get audio for this sample
+            audio = batch["audio"][i:i+1]  # Keep batch dimension
+            
+            # Generate CAM
+            audio_id = f"eval_sample_{i}"
+            if "audio_id" in batch and batch["audio_id"] is not None:
+                audio_id = batch["audio_id"][i]
+            
+            visualize_cam(
+                audio=audio,
+                model=model,
+                target_class=target_for_cam,  # Use prediction for incorrect samples
+                save_path=cam_output_dir,
+                audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
+                correct=is_correct,
+                audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                show_time_domain=True  # Enable time-domain visualization
+            )
+            
+            # Update counter
+            cam_counters[status][true_class] += 1
+
+
+def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
+    """Train the CNN+RNN model."""        
+    from sklearn.utils.class_weight import compute_class_weight
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # From HPO:        
+    hpo_max_lr = 0.0010831279442946378
+    hpo_focal_loss_gamma = 1.2214471854780586
+    hpo_weight_scaling_factor = 0.42877749204715
+    hpo_weight_decay = 6.754417251186016e-05
+    hpo_pct_start = 0.24140038998213117
+    hpo_div_factor = 26.312388937073905
+    hpo_final_div_factor = 294.73021118648194
+
     # Initialize wandb
     if not wandb.run:
         wandb.init(
             project=myConfig.wandb_project,
             entity=myConfig.wandb_entity,
-            name=f"cnn_rnn{'_manual' if use_prosodic_features else '_no_manual'}",
+            name="cnn_rnn",
             config={
                 "model_type": "CNN+RNN",
-                "use_prosodic_features": use_prosodic_features,
-                "learning_rate": 2e-4,
+                "learning_rate": hpo_max_lr,
                 "epochs": num_epochs,
                 "batch_size": 96,
-                "weight_decay": 5.47e-5,
-                "prosodic_features_dim": len(myData.extracted_features) if use_prosodic_features else 0
+                "weight_decay": hpo_weight_decay
             }
         )
         
@@ -177,32 +419,49 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
 
-    # Set up the loss function with default weighting
-    criterion = FocalLoss(gamma=0.8, weight=None)
+    # Calculate class weights with scaling factor
+    classes = np.array([0, 1, 2])  
+    class_counts = myConfig.num_samples_per_class
+    y = np.array([])
+    # Create array with labels based on known counts
+    for class_id, count in class_counts.items():
+        y = np.append(y, [class_id] * count)
+    # Compute balanced weights
+    raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+    # Apply scaling factor to make weights less extreme
+    scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
+    # Normalize to maintain sum proportionality
+    scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+    # Convert to tensor
+    weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+    # Set up the loss function with class weighting
+    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+        
+    model.to(device)
 
-    # Set up the optimizer with proper hyperparameters
-    optimizer = torch.optim.AdamW(
+    # Set up the optimizer with proper hyperparameters    
+    initial_lr = hpo_max_lr / hpo_div_factor
+    optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=2e-4,            # Starting LR (will be scaled by OneCycleLR)
-        weight_decay=5.47e-5,  # L2 regularization
-        betas=(0.9, 0.999)  # Default Adam betas
+        lr=initial_lr,
+        weight_decay=hpo_weight_decay,  # L2 regularization
     )
-    
-    # Calculate total steps for 1cycle scheduler
+
     total_steps = len(dataloaders["train"]) * num_epochs
     
-    # 1cycle LR scheduler with optimized parameters
+    # Create scheduler with optimized hyperparameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=6e-3,           
+        max_lr=hpo_max_lr,
         total_steps=total_steps,
-        pct_start=0.3,          # Warm up for 30% of training
-        div_factor=25,          # Initial LR = max_lr/25
-        final_div_factor=1000,  # Final LR = max_lr/1000
-        anneal_strategy='cos',  # Cosine annealing
-        three_phase=False       # Use standard two-phase schedule
-    )
+        pct_start=hpo_pct_start,
+        div_factor=hpo_div_factor,
+        final_div_factor=hpo_final_div_factor,
+        anneal_strategy='cos',
+        three_phase=False
+    )    
     
+   
     # Create output directory for CNN+RNN model
     cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
     os.makedirs(cnn_rnn_output_dir, exist_ok=True)
@@ -222,9 +481,8 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             dataloaders["train"], 
             optimizer, 
             criterion, 
-            device, 
-            scheduler, 
-            use_prosodic_features
+            device,
+            scheduler
         )
         
         # Validation phase
@@ -232,12 +490,16 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             model, 
             dataloaders["validation"], 
             criterion, 
-            device, 
-            use_prosodic_features
+            device,
+            use_cam=True,                                      # Enable CAM visualization
+            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+            max_cam_samples=10,                                 # Max samples per class/outcome
+            epoch=epoch
         )
                        
         # Calculate metrics
-        avg_val_loss = val_loss / len(dataloaders["validation"])
+        total_val_recordings = len(all_labels)  # This now represents total processed recordings
+        avg_val_loss = val_loss / total_val_recordings
         val_accuracy = accuracy_score(all_labels, all_preds)
         val_f1_macro = f1_score(all_labels, all_preds, average='macro')
         val_f1_per_class = f1_score(all_labels, all_preds, average=None)
@@ -311,14 +573,14 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
             
-            # Also save in safetensors format if available
+            """ # Also save in safetensors format if available
             try:
                 from safetensors.torch import save_file
                 safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
                 save_file(model.state_dict(), safetensors_path)
                 print(f"  Also saved model in safetensors format to {safetensors_path}")
             except ImportError:
-                print("  safetensors not available, skipping safetensors format")
+                print("  safetensors not available, skipping safetensors format") """
     
     # End of training, log best model if enabled    
     if wandb.run:
@@ -343,8 +605,20 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10, use_prosodic_features
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
-    """Test the CNN+RNN model on the test set."""
+def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=10):
+    """
+    Test the CNN+RNN model on the test set with optional CAM visualization.
+    
+    Args:
+        model: The model to test
+        test_loader: DataLoader for test data
+        use_cam: Whether to generate CAM visualizations
+        cam_output_dir: Directory to save CAM visualizations
+        max_cam_samples: Maximum number of samples to visualize per class and prediction outcome
+    """
+    from cam_utils import visualize_cam
+    import os
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
@@ -352,26 +626,128 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
     all_preds = []
     all_labels = []
     
+    # Dictionary to track chunks by audio_id
+    audio_chunks = {}
+    audio_labels = {}
+    audio_tensors = {}  # Store audio tensors for CAM visualization
+    
+    # Counters for CAM visualization
+    cam_counters = {
+        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
+        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+    }
+    
+    # Create output directories if needed
+    if use_cam and cam_output_dir:
+        os.makedirs(cam_output_dir, exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'correct'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'incorrect'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'correct'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'incorrect'), exist_ok=True)
+        os.makedirs(os.path.join(cam_output_dir, 'audio_paths'), exist_ok=True)
+    
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Testing"):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             
-            if use_prosodic_features and "prosodic_features" in batch:
+            # Extract audio_ids if available
+            audio_ids = batch.get("audio_id", None)
+            
+            # If no audio_ids, process normally (no chunking)
+            if audio_ids is None:
                 logits = model(
                     batch["audio"], 
-                    audio_lengths=batch["audio_lengths"],  
-                    prosodic_features=batch["prosodic_features"]
-                )
-            else:
-                logits = model(
-                    batch["audio"], 
-                    audio_lengths=batch["audio_lengths"] 
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
                 )
                 
-            preds = torch.argmax(logits, dim=-1)
+                preds = torch.argmax(logits, dim=-1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(batch["labels"].cpu().numpy())
+                
+                # Process CAM visualization for selected samples if enabled
+                if use_cam and cam_output_dir:
+                    process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max_cam_samples)
+            else:
+                # Process batches with audio_ids for chunking
+                logits = model(
+                    batch["audio"], 
+                    audio_lengths=batch["audio_lengths"],
+                    augmentation_id=batch.get("augmentation_id", None),
+                    prosodic_features=batch.get("prosodic_features", None),
+                    chunk_context=batch.get("chunk_context", None)
+                )
+                
+                # Store chunks by audio_id
+                for j, audio_id in enumerate(audio_ids):
+                    if audio_id not in audio_chunks:
+                        audio_chunks[audio_id] = []
+                        # Store the label for this audio
+                        audio_labels[audio_id] = batch["labels"][j]
+                        
+                        # Store audio tensor for later CAM visualization
+                        if use_cam:
+                            # Initialize list for this audio_id
+                            audio_tensors[audio_id] = []
+                    
+                    # Store the logits for this chunk
+                    audio_chunks[audio_id].append(logits[j])
+                    
+                    # Also store the audio chunk itself for visualization
+                    if use_cam:
+                        audio_tensors[audio_id].append(batch["audio"][j:j+1].detach().clone())
+    
+    # Process all remaining audios after going through the entire dataset
+    if audio_chunks:
+        for audio_id, chunk_outputs in audio_chunks.items():
+            # Aggregate predictions from all chunks
+            aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
             
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(batch["labels"].cpu().numpy())
+            # Get label for this audio
+            label = audio_labels[audio_id]
+            
+            # Get prediction from aggregated output
+            pred = torch.argmax(aggregated_output)
+            all_preds.append(pred.cpu().numpy())
+            all_labels.append(label.cpu().numpy())
+            
+            # Process CAM for chunked audio
+            if use_cam and cam_output_dir and audio_id in audio_tensors:
+                true_class = label.item()
+                pred_class = pred.item()
+                
+                # Check if prediction is correct
+                is_correct = pred_class == true_class
+                status = 'correct' if is_correct else 'incorrect'
+                target_for_cam = pred_class if not is_correct else true_class
+                
+                # If we haven't reached max samples for this class/outcome
+                if cam_counters[status][true_class] < max_cam_samples:
+                    # Now we're passing all collected audio chunks
+                    print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
+                    print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
+                    
+                    # Get first chunk as reference, but pass all chunks
+                    first_chunk = audio_tensors[audio_id][0]
+                    
+                    # Generate CAM visualization
+                    visualize_cam(
+                        audio=first_chunk,
+                        model=model,
+                        target_class=target_for_cam,
+                        save_path=cam_output_dir,
+                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        correct=is_correct,
+                        audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                        audio_chunks=audio_tensors[audio_id],
+                        chunk_outputs=chunk_outputs,
+                        show_time_domain=True  # Enable time-domain visualization
+                    )
+                    
+                    # Update counter
+                    cam_counters[status][true_class] += 1
     
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
@@ -382,49 +758,80 @@ def test_cnn_rnn_model(model, test_loader, use_prosodic_features=True):
     print(f"Test Accuracy: {test_accuracy:.4f}")
     print("Classification Report:")
     print(report)
-
-
-def main_cnn_rnn(use_prosodic_features=True):
-    """Main function for the CNN+RNN pipeline."""
-    from cnn_rnn_model import BalancedAugmentedDataset, DualPathAudioClassifier
     
-    print(f"Running CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features")
+    # Print CAM generation summary if enabled
+    if use_cam:
+        print("\nCAM Visualization Summary:")
+        for status in ['correct', 'incorrect']:
+            print(f"  {status.capitalize()} predictions:")
+            for class_id, count in cam_counters[status].items():
+                class_name = ["Healthy", "MCI", "AD"][class_id]
+                print(f"    Class {class_name}: {count} samples")
+        print(f"\nVisualizations saved to {cam_output_dir}")
+    
+    return test_accuracy, all_preds, all_labels
+
+
+def main_cnn_rnn(use_prosodic_features=False):
+    """Main function for the CNN+RNN pipeline."""
+    from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
+    hpo_n_mels = 128
+    print("Running CNN+RNN model")
     
     # Load and prepare dataset using the dedicated cnn_rnn_data module
     dataset = prepare_cnn_rnn_dataset()
     
-    # Create balanced training dataset with augmentations
+    """ # Create balanced training dataset with augmentations
     print("Creating balanced training dataset with augmentations...")
-    balanced_train_dataset = BalancedAugmentedDataset(
-        original_dataset=dataset["train"],
-        total_target_samples=1000,
+    augmented_train_dataset = AugmentedDataset(
+        original_dataset=dataset["train"],        
         num_classes=3
     )
     
     # Display class distribution
-    balanced_train_dataset.print_distribution_stats()
+    augmented_train_dataset.print_distribution_stats()
     
     # Update dataset with balanced training set
-    balanced_dataset = {
-        "train": balanced_train_dataset,
+    augmented_dataset = {
+        "train": augmented_train_dataset,
         "validation": dataset["validation"],
         "test": dataset["test"]
-    }
+    }  """
     
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset, 
-        batch_size=96,
-        use_prosodic_features=use_prosodic_features
+        dataset,         
+        batch_size=96
     )
     
     # Create model
-    model = DualPathAudioClassifier(
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        n_mels=hpo_n_mels
+    ) """
+    """ hpo_dropout = 0.27059238539331787
+    model = CNN14Classifier(
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=hpo_dropout,  
+    freeze_extractor=True  
+    ) """
+    
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
     )
+
     print("Model created!")
     
     # Train model
@@ -432,32 +839,29 @@ def main_cnn_rnn(use_prosodic_features=True):
     train_cnn_rnn_model(
         model, 
         dataloaders, 
-        num_epochs=10, 
-        use_prosodic_features=use_prosodic_features
+        num_epochs=10
     )
     print("Training complete!")
 
 
-def test_cnn_rnn(use_prosodic_features=True):
+def test_cnn_rnn():
     """Test function for the CNN+RNN pipeline."""
     from cnn_rnn_model import DualPathAudioClassifier
-    
+    hpo_n_mels = 128
     # Prepare data
     dataset = prepare_cnn_rnn_dataset()
     
     # Get dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=96
     )
     
     # Create model
     model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features)
+        n_mels=hpo_n_mels
     )
     
     # Load the best model weights if available
@@ -469,12 +873,18 @@ def test_cnn_rnn(use_prosodic_features=True):
         print("No pre-trained model found. Using randomly initialized weights.")
     
     # Run evaluation
-    test_cnn_rnn_model(model, dataloaders["test"], use_prosodic_features)
+    test_cnn_rnn_model(
+        model,
+        dataloaders["test"],
+        use_cam=True,                                  # Enable CAM visualization
+        cam_output_dir="/ProcessedFiles/CAM_Test",     # Output directory
+        max_cam_samples=10                             # Max samples per class/outcome
+    )
 
 
-def optimize_cnn_rnn(use_prosodic_features=True):
+def optimize_cnn_rnn():
     """Function to run threshold optimization for CNN+RNN model"""    
-    
+    hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
@@ -485,14 +895,33 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier
-    model = DualPathAudioClassifier(
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        n_mels=hpo_n_mels
     )
-    
+     """
+    """ hpo_dropout = 0.27059238539331787
+    model = CNN14Classifier(
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=hpo_dropout,  
+    freeze_extractor=True  
+    ) """
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
+    )
     # Load the best model weights if available
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -504,8 +933,7 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     # Create validation dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=96
     )["validation"]
     
     # Set output directory
@@ -515,45 +943,21 @@ def optimize_cnn_rnn(use_prosodic_features=True):
     # Run threshold optimization
     class_names = ["Healthy", "MCI", "AD"]
     
-    # Custom prediction function for CNN+RNN model
-    def predict_fn(model, batch, device):
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        
-        if use_prosodic_features and "prosodic_features" in batch:
-            logits = model(
-                batch["audio"], 
-                audio_lengths=batch["audio_lengths"],  
-                prosodic_features=batch["prosodic_features"]
-            )
-        else:
-            logits = model(
-                batch["audio"], 
-                audio_lengths=batch["audio_lengths"]
-            )
-        
-        # Get probabilities
-        probs = torch.softmax(logits, dim=-1)
-        # Get true labels
-        labels = batch["labels"]
-        
-        return probs, labels
-    
     # Run optimization
-    print(f"Running threshold optimization for CNN+RNN model {'with' if use_prosodic_features else 'without'} manual features...")
+    print("Running threshold optimization for CNN+RNN model...")
     optimize_thresholds_for_model(
         model=model,
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
-        use_prosodic_features=use_prosodic_features,
         is_cnn_rnn=True, 
-        log_to_wandb=not myConfig.running_offline,        
+        log_to_wandb=not myConfig.running_offline        
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
 
 
-def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
+def test_cnn_rnn_with_thresholds():
     """Test CNN+RNN model using the optimized thresholds"""
     import os
     import json
@@ -561,24 +965,43 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     import seaborn as sns
     from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
     
+    hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
         setattr(myConfig, key, path)
     
     # Prepare dataset
-    print(f"Loading dataset for testing with thresholds ({'with' if use_prosodic_features else 'without'} manual features)...")
+    print("Loading dataset for testing with thresholds...")
     dataset = prepare_cnn_rnn_dataset()
     
     # Create model
-    from cnn_rnn_model import DualPathAudioClassifier
-    model = DualPathAudioClassifier(
+    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
+    """ model = DualPathAudioClassifier(
         num_classes=3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
+        n_mels=hpo_n_mels
+    ) """
+    """ hpo_dropout = 0.27059238539331787
+    model = CNN14Classifier(
+    num_classes=3,
+    sample_rate=16000,
+    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+    dropout_rate=hpo_dropout,  
+    freeze_extractor=True  
+    ) """
+    hpo_attention_dropout = 0.21790974595973722
+    hpo_fusion_dropout = 0.3668445892921854
+    hpo_prosodic_weight = 0.8587093661398519
+
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=3,
+        sample_rate=16000,
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
+        attention_dropout=hpo_attention_dropout,
+        fusion_dropout=hpo_fusion_dropout,
+        prosodic_weight=hpo_prosodic_weight                
     )
-    
     # Load the best model weights
     model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
     if os.path.exists(model_path):
@@ -590,8 +1013,7 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
     # Create test dataloader
     dataloader = get_cnn_rnn_dataloaders(
         dataset, 
-        batch_size=8,
-        use_prosodic_features=use_prosodic_features
+        batch_size=96
     )["test"]
     
     # Try to load threshold values from the optimization results
@@ -627,28 +1049,66 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
             all_probs = []
             all_labels = []
             
-            # Collect all predictions and labels
+            # Dictionary to track chunks by audio_id
+            audio_chunks = {}
+            audio_labels = {}
+
             with torch.inference_mode():
                 for batch in tqdm(dataloader, desc="Evaluating"):
-                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                    batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
                     
-                    if use_prosodic_features and "prosodic_features" in batch:
+                    # Extract audio_ids if available
+                    audio_ids = batch.get("audio_id", None)
+                    
+                    # If no audio_ids, process normally (no chunking)
+                    if audio_ids is None:
                         logits = model(
                             batch["audio"], 
-                            audio_lengths=batch["audio_lengths"],  
-                            prosodic_features=batch["prosodic_features"]
+                            audio_lengths=batch["audio_lengths"],
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
                         )
+                        
+                        # Get probabilities
+                        probs = torch.softmax(logits, dim=-1)
+                        
+                        all_probs.append(probs.cpu().numpy())
+                        all_labels.append(batch["labels"].cpu().numpy())
                     else:
+                        # Process batches with audio_ids for chunking
                         logits = model(
                             batch["audio"], 
-                            audio_lengths=batch["audio_lengths"] 
+                            audio_lengths=batch["audio_lengths"],
+                            augmentation_id=batch.get("augmentation_id", None),
+                            prosodic_features=batch.get("prosodic_features", None),
+                            chunk_context=batch.get("chunk_context", None)
                         )
+                        
+                        # Store chunks by audio_id
+                        for j, audio_id in enumerate(audio_ids):
+                            if audio_id not in audio_chunks:
+                                audio_chunks[audio_id] = []
+                                # Store the label for this audio
+                                audio_labels[audio_id] = batch["labels"][j]
+                            
+                            # Store the logits for this chunk
+                            audio_chunks[audio_id].append(logits[j])
+
+            # Process all remaining audios after going through the entire dataset
+            if audio_chunks:
+                for audio_id, chunk_outputs in audio_chunks.items():
+                    # Aggregate predictions from all chunks
+                    aggregated_output = model.aggregate_chunk_predictions(chunk_outputs)
                     
-                    # Get probabilities
-                    probs = torch.softmax(logits, dim=-1)
+                    # Get label for this audio
+                    label = audio_labels[audio_id]
                     
-                    all_probs.append(probs.cpu().numpy())
-                    all_labels.append(batch["labels"].cpu().numpy())
+                    # Get probabilities from aggregated output
+                    probs = torch.softmax(aggregated_output, dim=-1)
+                    
+                    all_probs.append(probs.cpu().numpy().reshape(1, -1))
+                    all_labels.append(label.cpu().numpy().reshape(1))
             
             # Convert to numpy arrays
             all_probs = np.vstack(all_probs)
@@ -755,212 +1215,29 @@ def test_cnn_rnn_with_thresholds(use_prosodic_features=True):
         print("Please run optimize_cnn_rnn() first to generate threshold values.")
 
 
-def run_cross_validation(use_prosodic_features=True, n_folds=5):
-    """Run k-fold cross-validation for the CNN+RNN model."""
-    from sklearn.model_selection import KFold
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
-    import numpy as np
-    import json
-    
-    print(f"Running {n_folds}-fold cross-validation...")
-    
-    # Load and prepare dataset
-    dataset = prepare_cnn_rnn_dataset()
-    
-    # Combine train and validation for cross-validation
-    combined_data = []
-    for split in ["train", "validation"]:
-        for i in range(len(dataset[split])):
-            item = dataset[split][i]
-            combined_data.append(item)
-    
-    # Prepare indices for k-fold splits
-    indices = np.arange(len(combined_data))
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-    
-    cv_results = []
-    fold_metrics = []
-    
-    # Run training for each fold
-    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(indices)):
-        print(f"\n--- Processing Fold {fold_idx+1}/{n_folds} ---")
-        
-        # Create fold-specific datasets
-        fold_train = [combined_data[i] for i in train_idx]
-        fold_val = [combined_data[i] for i in val_idx]
-        fold_test = dataset["test"]  # Use original test set
-        
-        # Create balanced training dataset
-        print("Creating balanced dataset for this fold...")
-        fold_train_balanced = BalancedAugmentedDataset(
-            original_dataset=fold_train,
-            total_target_samples=1000,
-            num_classes=3
-        )
-        fold_train_balanced.print_distribution_stats()
-        
-        # Create temporary dataset with the fold splits
-        fold_dataset = {
-            "train": fold_train_balanced,
-            "validation": fold_val,
-            "test": fold_test
-        }
-        
-        # Get dataloaders for this fold
-        fold_dataloaders = get_cnn_rnn_dataloaders(
-            fold_dataset,
-            batch_size=32,
-            use_prosodic_features=use_prosodic_features
-        )
-        
-        # Create new model for this fold
-        fold_model = DualPathAudioClassifier(
-            num_classes=3,
-            sample_rate=16000,
-            use_prosodic_features=use_prosodic_features,
-            prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0
-        )
-        
-        # Train the model on this fold
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        fold_model.to(device)
-        
-        # Setup training for this fold with progress tracking
-        criterion = FocalLoss(gamma=0, weight=None)
-        optimizer = torch.optim.AdamW(
-            fold_model.parameters(),
-            lr=2e-5,
-            weight_decay=0.01,
-            betas=(0.9, 0.999)
-        )
-        
-        # Calculate total steps for 1cycle scheduler
-        total_steps = len(fold_dataloaders["train"]) * 5  # Use 5 epochs for CV
-        
-        # 1cycle LR scheduler
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=5e-4,
-            total_steps=total_steps,
-            pct_start=0.3,
-            div_factor=25,
-            final_div_factor=1000,
-            anneal_strategy='cos',
-            three_phase=False
-        )
-        
-        # Train for fewer epochs in cross-validation
-        best_val_f1 = 0.0
-        fold_best_metrics = {}
-        
-        print(f"Training fold {fold_idx+1}...")
-        for epoch in range(5):  # 5 epochs per fold
-            # Train
-            train_loss = train_epoch(
-                fold_model, fold_dataloaders["train"], optimizer, 
-                criterion, device, scheduler, use_prosodic_features
-            )
-            
-            # Validate
-            val_loss, val_labels, val_preds = evaluate(
-                fold_model, fold_dataloaders["validation"], 
-                criterion, device, use_prosodic_features
-            )
-            
-            # Calculate metrics
-            val_accuracy = accuracy_score(val_labels, val_preds)
-            val_f1_macro = f1_score(val_labels, val_preds, average='macro')
-            
-            print(f"Fold {fold_idx+1}, Epoch {epoch+1}: Val Acc={val_accuracy:.4f}, F1={val_f1_macro:.4f}")
-            
-            # Track best model
-            if val_f1_macro > best_val_f1:
-                best_val_f1 = val_f1_macro
-                fold_best_metrics = {
-                    "fold": fold_idx+1,
-                    "val_accuracy": val_accuracy,
-                    "val_f1_macro": val_f1_macro,
-                    "val_loss": val_loss / len(fold_dataloaders["validation"]),
-                    "epoch": epoch + 1
-                }
-        
-        # Test the best model on this fold
-        test_loss, test_labels, test_preds = evaluate(
-            fold_model, fold_dataloaders["test"],
-            criterion, device, use_prosodic_features
-        )
-        
-        # Calculate test metrics
-        test_accuracy = accuracy_score(test_labels, test_preds)
-        test_f1_macro = f1_score(test_labels, test_preds, average='macro')
-        
-        # Add test metrics to fold results
-        fold_best_metrics.update({
-            "test_accuracy": test_accuracy,
-            "test_f1_macro": test_f1_macro,
-            "test_loss": test_loss / len(fold_dataloaders["test"])
-        })
-        
-        fold_metrics.append(fold_best_metrics)
-        print(f"Fold {fold_idx+1} test results: Acc={test_accuracy:.4f}, F1={test_f1_macro:.4f}")
-        
-        # Clean up to free memory
-        del fold_model, optimizer, scheduler, criterion
-        del fold_dataloaders, fold_dataset, fold_train, fold_val
-        gc.collect()
-        torch.cuda.empty_cache()
-    
-    # Calculate average metrics across folds
-    avg_metrics = {
-        "val_accuracy": np.mean([fold["val_accuracy"] for fold in fold_metrics]),
-        "val_f1_macro": np.mean([fold["val_f1_macro"] for fold in fold_metrics]),
-        "test_accuracy": np.mean([fold["test_accuracy"] for fold in fold_metrics]),
-        "test_f1_macro": np.mean([fold["test_f1_macro"] for fold in fold_metrics]),
-    }
-    
-    # Store full results
-    cv_results = {
-        "fold_metrics": fold_metrics,
-        "avg_metrics": avg_metrics
-    }
-    
-    # Print cross-validation summary
-    print("\n=== Cross-Validation Results ===")
-    print(f"Average validation accuracy: {avg_metrics['val_accuracy']:.4f}")
-    print(f"Average validation F1-macro: {avg_metrics['val_f1_macro']:.4f}")
-    print(f"Average test accuracy: {avg_metrics['test_accuracy']:.4f}")
-    print(f"Average test F1-macro: {avg_metrics['test_f1_macro']:.4f}")
-    
-    # Save results
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "cross_validation")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    with open(os.path.join(output_dir, f"cv_{n_folds}fold_results.json"), "w") as f:
-        json.dump(cv_results, f, indent=2)
-    
-    print(f"Cross-validation results saved to {output_dir}")
-    return cv_results
 
 
-def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_study=False):
-    """Run Bayesian hyperparameter optimization for the CNN+RNN model."""
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
+    """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier,PretrainedDualPathAudioClassifier
+    from sklearn.utils.class_weight import compute_class_weight
+    from sklearn.model_selection import StratifiedKFold
     import json
     import joblib
     
     # Initialize wandb if not already running
     if not wandb.run:
         wandb.init(
-            project="CNN-RNN-HPO",
+            project="CNN14-HPO",
             entity=myConfig.wandb_entity,
-            name="hpo_cnn_rnn",
+            name=f"hpo_cnn14_{n_folds}fold",
             config={
-                "model_type": "CNN+RNN HPO",
-                "use_prosodic_features": use_prosodic_features,
+                "model_type": "CNN14 Classifier HPO with CV",
                 "n_trials": n_trials,
-                "optimization_type": "bayesian"
+                "optimization_type": "bayesian",
+                "n_folds": n_folds
             },
-            tags=["hpo", "bayesian-optimization", "cnn-rnn"]
+            tags=["hpo", "bayesian-optimization", "cnn14", "cross-validation"]
         )
     
     # Create output directory for hyperparameter optimization    
@@ -968,35 +1245,20 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     os.makedirs(output_dir, exist_ok=True)
     
     # Load and prepare dataset
-    print("Loading dataset for hyperparameter optimization...")
+    print("Loading dataset for hyperparameter optimization with cross-validation...")
     dataset = prepare_cnn_rnn_dataset()
     
-    # Create balanced training dataset
-    print("Creating balanced training dataset for optimization...")
-    balanced_train_dataset = BalancedAugmentedDataset(
-        original_dataset=dataset["train"],
-        total_target_samples=1000,
-        num_classes=3
-    )
-    balanced_train_dataset.print_distribution_stats()
-
-    # Update dataset with balanced training set
-    balanced_dataset = {
-        "train": balanced_train_dataset,
-        "validation": dataset["validation"],
-        "test": dataset["test"]
-    }
+    # Combine train and validation for cross-validation
+    combined_data = []
+    combined_labels = []
+    for split in ["train", "validation"]:
+        for i in range(len(dataset[split])):
+            combined_data.append(dataset[split][i])
+            combined_labels.append(dataset[split][i]["label"])
     
-    # Get dataloaders with balanced training data
-    dataloaders = get_cnn_rnn_dataloaders(
-        balanced_dataset,
-        batch_size=96,
-        use_prosodic_features=use_prosodic_features
-    )
-    
-    train_loader = dataloaders["train"]
-    val_loader = dataloaders["validation"]
-    test_loader = dataloaders["test"]
+    # Prepare indices for stratified k-fold splits to handle class imbalance
+    indices = np.arange(len(combined_data))
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -1004,166 +1266,267 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
         try:            
             torch.cuda.empty_cache()
             gc.collect()
-            
-            # Focus HPO on learning dynamics parameters
-            lr = trial.suggest_float("learning_rate", 0.00008, 0.0003, log=True)  
-            weight_decay = trial.suggest_float("weight_decay", 1e-5, 5e-4, log=True)            
-            max_lr = trial.suggest_float("max_lr", 0.0001, 0.003, log=True)
-            
-            # Fix other parameters to best values from previous HPO
-            pct_start = 0.3031315684459232  # Best from previous HPO
-            gamma = 0.7927673024435109      # Best from previous HPO
-            n_mels = 110                    # Best from previous HPO
-            time_mask_param = 9             # Best from previous HPO
-            freq_mask_param = 66            # Best from previous HPO
-            
-            trial_history = []
-                                    
-            # Create model with trial hyperparameters
-            model = DualPathAudioClassifier(
-                num_classes=3,
-                sample_rate=16000,
-                use_prosodic_features=use_prosodic_features,
-                prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
-                n_mels=n_mels,
-                apply_specaugment=True
-            )
-            
-            # Update SpecAugment parameters if the model has that module
-            if hasattr(model, 'spec_augment'):
-                model.spec_augment.time_mask_param = time_mask_param
-                model.spec_augment.freq_mask_param = freq_mask_param
-            
-            model.to(device)
-            
-            # Create optimizer with trial hyperparameters
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=lr,
-                weight_decay=weight_decay,
-                betas=(0.9, 0.999)
-            )
-            
-            # Create focal loss with trial gamma
-            criterion = FocalLoss(gamma=gamma)
-            
-            # Calculate total steps for shorter training (3 epochs)
-            n_batches = len(train_loader)
-            n_epochs = 10  # Number of epochs for HPO
-            total_steps = n_batches * n_epochs
-            
-            # Create scheduler with trial hyperparameters
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=max_lr,
-                total_steps=total_steps,
-                pct_start=pct_start,
-                div_factor=25,
-                final_div_factor=1000,
-                anneal_strategy='cos',
-                three_phase=False
-            )                       
+                        
+            # Core hyperparameters from previous optimization
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.2, 0.5)
+            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.8, 2.0)
+            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 2e-3, log=True)
+            hpo_pct_start = trial.suggest_float("pct_start", 0.2, 0.4)  
+            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 40.0)  
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)
 
-            # training loop  length
-            max_training_epochs = n_epochs
+            #hyperparameters specific to the Dual Path model
+            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.5)                        
+            prosodic_weight = trial.suggest_float("prosodic_weight", 0.5, 2.0)
             
-            best_trial_f1 = 0.0
             
-            trial_name = f"trial_{trial.number}"
             
+            trial_name = f"trial_{trial.number}"            
             # Log trial parameters to wandb
             if wandb.run:
-                wandb.run.summary[f"{trial_name}_params"] = {
-                    param: value for param, value in trial.params.items()
-                }
-            
-            for epoch in range(max_training_epochs):
-                try:
-                    # Train
-                    train_loss = train_epoch(
-                        model, train_loader, optimizer, 
-                        criterion, device, scheduler, 
-                        use_prosodic_features
-                    )
-                    # Evaluate 
-                    val_loss, val_labels, val_preds = evaluate(
-                        model, val_loader, criterion, device, use_prosodic_features
-                    )
-                    val_f1_macro = f1_score(val_labels, val_preds, average='macro')            
-                    # Rest of the code...
-                except Exception as epoch_error:
-                    print(f"Error in epoch {epoch} of trial {trial.number}: {str(epoch_error)}")
-                    if wandb.run:
-                        wandb.log({f"trial_{trial.number}_epoch_{epoch}_error": str(epoch_error)})
-                    raise  # Re-raise to be caught by the outer try/except
-                # Calculate average batch validation loss 
-                avg_val_loss = val_loss / len(val_loader)
-                            
-                # Append to history 
-                trial_history.append({
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "val_loss": avg_val_loss,
-                    "val_f1": val_f1_macro
+                wandb.log({
+                    f"{trial_name}_params": {
+                        param: value for param, value in trial.params.items()
+                    }
                 })
-                # Log to wandb after each epoch evaluation
-                if wandb.run:
-                    wandb.log({
-                        f"{trial_name}/epoch": epoch,
-                        f"{trial_name}/train_loss": train_loss,
-                        f"{trial_name}/val_loss": avg_val_loss,
-                        f"{trial_name}/val_f1": val_f1_macro
-                    })
-                # Check for pruning
-                trial.report(val_f1_macro, epoch)
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
+                        
+            fold_f1_scores = []
+            fold_val_losses = []
+                        
+            # Number of epochs for HPO cross-validation
+            n_epochs = 8            
+            print(f"\n--- Trial {trial.number}: Running {n_folds}-fold cross-validation ---")            
+            # Store fold histories
+            fold_histories = []
+            
+            # For each fold - using stratified k-fold for better class balance
+            for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, combined_labels)):
+                print(f"  Processing fold {fold_idx+1}/{n_folds} for trial {trial.number}")
+                # Create fold-specific datasets
+                fold_train = [combined_data[i] for i in train_idx]
+                fold_val = [combined_data[i] for i in val_idx]
 
-            if val_f1_macro > best_trial_f1:
-                best_trial_f1 = val_f1_macro
-                                
-                trial_model_dir = os.path.join(
-                    myConfig.OUTPUT_PATH, 
-                    "hyperparameter_optimization"
+                # Create balanced training dataset for this fold
+                fold_train_balanced = AugmentedDataset(
+                    original_dataset=fold_train,            
+                    num_classes=3
                 )
-                os.makedirs(trial_model_dir, exist_ok=True)
+
+                # Create fold dataset dictionary
+                fold_dataset = {
+                    "train": fold_train_balanced,
+                    "validation": fold_val,
+                    "test": dataset["test"]
+                }
+
+                # Get dataloaders for this fold 
+                fold_dataloaders = get_cnn_rnn_dataloaders(
+                    fold_dataset,
+                    batch_size=96
+                )
+                fold_train_loader = fold_dataloaders["train"]
+                fold_val_loader = fold_dataloaders["validation"]                
+                """ fold_model = DualPathAudioClassifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    n_mels=n_mels,
+                    apply_specaugment=True,
+                ) """
+                """ fold_model = CNN14Classifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+                    dropout_rate=dropout_rate,  # Direct control of dropout in classifier head  
+                    freeze_extractor=True  # Always keep extractor frozen  
+                ) """
+                fold_model = PretrainedDualPathAudioClassifier(
+                    num_classes=3,
+                    sample_rate=16000,
+                    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+                    attention_dropout=attention_dropout,
+                    fusion_dropout=fusion_dropout,
+                    prosodic_weight=prosodic_weight
+                )
+                fold_model.to(device)
                 
-                # Remove any previous model for this trial if it exists
-                trial_model_path = os.path.join(
-                    trial_model_dir, 
-                    f"trial_{trial.number}_model.pt"
+                # Calculate class weights with scaling factor
+                classes = np.array([0, 1, 2])  
+                class_counts = myConfig.num_samples_per_class
+                y = np.array([])
+                # Create array with labels based on known counts
+                for class_id, count in class_counts.items():
+                    y = np.append(y, [class_id] * count)
+                # Compute balanced weights
+                raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+                # Apply scaling factor to make weights less extreme
+                scaled_weights = np.power(raw_weights, weight_scaling_factor)
+                # Normalize to maintain sum proportionality
+                scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+                # Convert to tensor
+                weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+
+                # Set up the loss function with class weighting
+                criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+                
+                # Create optimizer with trial hyperparameters
+                
+                optimizer = torch.optim.Adam(
+                    fold_model.parameters(),
+                    lr=hpo_max_learning_rate/hpo_div_factor,
+                    weight_decay=weight_decay,
                 )
-                if os.path.exists(trial_model_path):
-                    os.remove(trial_model_path)
-                torch.save(model.state_dict(), trial_model_path)
+                total_steps = len(fold_dataloaders["train"]) * n_epochs
+    
+                # Create scheduler with optimized hyperparameters
+                scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                    optimizer,
+                    max_lr=hpo_max_learning_rate,
+                    total_steps=total_steps,
+                    pct_start=hpo_pct_start,
+                    div_factor=hpo_div_factor,
+                    final_div_factor=hpo_final_div_factor,
+                    anneal_strategy='cos',
+                    three_phase=False
+                )
+                # Train for specified epochs in each fold
+                fold_history = []
+                best_fold_f1 = 0.0
+                patience = 3
+                no_improvement = 0
+
+                for epoch in range(n_epochs):
+                    try:
+                        # Train
+                        train_loss = train_epoch(
+                            fold_model, fold_train_loader, optimizer, 
+                            criterion, device,scheduler
+                        )
+
+                        # Evaluate 
+                        val_loss, val_labels, val_preds = evaluate(
+                            fold_model, 
+                            fold_val_loader, 
+                            criterion, 
+                            device,
+                            use_cam=True,
+                            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+                            max_cam_samples=10                                 # Max samples per class/outcome
+                        )
+
+                        val_f1_macro = f1_score(val_labels, val_preds, average='macro')
+
+                        # Calculate average validation loss
+                        total_val_recordings = len(val_labels)
+                        avg_val_loss = val_loss / total_val_recordings
+                        # Append to fold history
+                        fold_history.append({
+                            "epoch": epoch,
+                            "train_loss": train_loss,
+                            "val_loss": avg_val_loss,
+                            "val_f1": val_f1_macro
+                        })
+                        # Log to wandb
+                        if wandb.run:
+                            wandb.log({
+                                f"{trial_name}/fold_{fold_idx}/epoch": epoch,
+                                f"{trial_name}/fold_{fold_idx}/train_loss": train_loss,
+                                f"{trial_name}/fold_{fold_idx}/val_loss": avg_val_loss,
+                                f"{trial_name}/fold_{fold_idx}/val_f1": val_f1_macro
+                            })
+                        # Track best F1 for this fold with early stopping
+                        if val_f1_macro > best_fold_f1:
+                            best_fold_f1 = val_f1_macro
+                            no_improvement = 0
+                        else:
+                            no_improvement += 1
+                            if no_improvement >= patience:
+                                print(f"    Early stopping at epoch {epoch} for fold {fold_idx+1}")
+                                break
+                        # Report intermediate value for pruning more aggressively
+                        if epoch >= 2:  # Report earlier for faster pruning of poor trials
+                            trial.report(val_f1_macro, epoch + fold_idx * n_epochs)
+                            if trial.should_prune():
+                                print(f"    Trial {trial.number} pruned at epoch {epoch} for fold {fold_idx+1}")
+                                raise optuna.exceptions.TrialPruned()
+                    except optuna.exceptions.TrialPruned:
+                        raise
+                    except Exception as epoch_error:
+                        print(f"Error in epoch {epoch} of fold {fold_idx} in trial {trial.number}: {str(epoch_error)}")
+                        if wandb.run:
+                            wandb.log({f"{trial_name}/fold_{fold_idx}/error": str(epoch_error)})
+                        raise
+                
+                # Store best F1 and min val loss for this fold
+                fold_f1_scores.append(best_fold_f1)
+                min_fold_loss = min(entry["val_loss"] for entry in fold_history)
+                fold_val_losses.append(min_fold_loss)
+                fold_histories.append(fold_history)
+                
+                # Clean up to free memory
+                del fold_model, optimizer, criterion
+                del fold_train_loader, fold_val_loader
+                del fold_train, fold_val
+                gc.collect()
+                torch.cuda.empty_cache()
             
-            # Clean up to free memory
-            del model, optimizer, scheduler, criterion
-            torch.cuda.empty_cache()
-            gc.collect()
+            # Calculate average performance across all folds
+            avg_f1_macro = np.mean(fold_f1_scores)
+            avg_val_loss = np.mean(fold_val_losses)
             
-            # Store history
+            # 10% above max observed loss
+            MAX_VAL_LOSS = max(np.max(fold_val_losses) * 1.1, 1.0)
+            # Normalize validation loss to [0,1] scale (lower is better)
+            norm_val_loss = max(0, 1 - (avg_val_loss / MAX_VAL_LOSS))
+            
+            # Combined objective: prioritize both high F1 and low validation loss
+            #combined_score = avg_f1_macro * (0.8 + 0.2 * norm_val_loss)
+            combined_score = avg_f1_macro
+            
+            print(f"Trial {trial.number} completed: Avg F1 across {n_folds} folds: {avg_f1_macro:.4f}, Combined Score: {combined_score:.4f}")
+            print(f"Individual fold F1 scores: {fold_f1_scores}")
+            
+            # Store all fold histories and metrics
             history_dir = os.path.join(
                 myConfig.OUTPUT_PATH, 
                 "hyperparameter_optimization"
             )
-            os.makedirs(history_dir, exist_ok=True)  
-
+            os.makedirs(history_dir, exist_ok=True)
+            
+            trial_results = {
+                "fold_f1_scores": fold_f1_scores,
+                "avg_f1_macro": avg_f1_macro,
+                "fold_val_losses": fold_val_losses,
+                "avg_val_loss": avg_val_loss,
+                "norm_val_loss": norm_val_loss,
+                "combined_score": combined_score,
+                "fold_histories": fold_histories
+            }
+            
             with open(os.path.join(
                 history_dir,
-                f"trial_{trial.number}_history.json"
+                f"trial_{trial.number}_cv_history.json"
             ), "w") as f:
-                json.dump(trial_history, f)
+                json.dump(trial_results, f)
             
-            # Log the final result to wandb
+            # Log the final results to wandb
             if wandb.run:
-                wandb.run.summary[f"{trial_name}_best_f1"] = best_trial_f1
-                        
-            # Store the best validation loss as trial user attribute
-            min_val_loss = min(entry["val_loss"] for entry in trial_history)
-            trial.set_user_attr("val_loss", min_val_loss)
+                wandb.log({
+                    f"{trial_name}/avg_f1_across_folds": avg_f1_macro,
+                    f"{trial_name}/avg_val_loss_across_folds": avg_val_loss,
+                    f"{trial_name}/norm_val_loss": norm_val_loss,
+                    f"{trial_name}/combined_score": combined_score,
+                    **{f"{trial_name}/fold_{i}_f1": score for i, score in enumerate(fold_f1_scores)},
+                    **{f"{trial_name}/fold_{i}_val_loss": loss for i, loss in enumerate(fold_val_losses)}
+                })
+                wandb.run.summary[f"{trial_name}_avg_f1"] = avg_f1_macro
             
-            return best_trial_f1
+            # Store the average validation loss as trial user attribute
+            trial.set_user_attr("val_loss", avg_val_loss)
+            
+            return combined_score  # Return combined score that balances performance and consistency
+            
         except Exception as e:
             print(f"Trial {trial.number} failed with error: {str(e)}")            
             if wandb.run:
@@ -1179,27 +1542,31 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     study_storage_path = os.path.join(
         myConfig.OUTPUT_PATH, 
         "hyperparameter_optimization",
-        f"hpo_study_{'with' if use_prosodic_features else 'no'}_manual.pkl"
+        f"hpo_study_cnn_rnn_{n_folds}fold.pkl"
     )
     
     # Create study for maximizing F1-macro
-    print(f"Running Bayesian optimization with {n_trials} trials...")
-    study_name = f"cnn_rnn_{'with' if use_prosodic_features else 'without'}_manual_features"
+    print(f"Running Bayesian optimization with {n_trials} trials using {n_folds}-fold cross-validation...")
+    study_name = f"cnn_rnn_{n_folds}fold"
     
     # Initialize or resume study
     if resume_study and os.path.exists(study_storage_path):
         print(f"Resuming study from {study_storage_path}")
         study = joblib.load(study_storage_path)
     else:
-        # Pruner that balances exploration and exploitation
+        # More aggressive pruner to terminate underperforming trials earlier
         pruner = optuna.pruners.MedianPruner(
-            n_startup_trials=5,  # Don't prune the first 5 trials
-            n_warmup_steps=3,    # Don't prune before 3 epochs
+            n_startup_trials=3,  
+            n_warmup_steps=2,    
             interval_steps=1
         )
-
-        # Sampler for more efficient search
-        sampler = optuna.samplers.TPESampler(seed=42)
+        
+        sampler = optuna.samplers.TPESampler(
+            seed=42,
+            multivariate=True,  
+            n_startup_trials=5, 
+            constant_liar=True   
+        )
 
         study = optuna.create_study(
             study_name=study_name,
@@ -1207,8 +1574,25 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
             pruner=pruner,
             sampler=sampler
         )
+        
+        # Best previous hyperparameters as a starting point
+        previous_best = {
+            # Core parameters from previous best run
+            "learning_rate": 0.0012349118136969503,  
+            "focal_loss_gamma": 1.2823995520334321, 
+            "weight_scaling_factor": 0.33101479502425385, 
+            "weight_decay": 3.564042168831547e-05,            
+            "pct_start": 0.3039854042370648,
+            "div_factor": 28.511116929054193,
+            "final_div_factor": 337.0803040420639,
+            "attention_dropout": 0.25,  
+            "fusion_dropout": 0.35,     
+            "prosodic_weight": 1.0      
+        }
+
+        study.enqueue_trial(previous_best)
     
-    wandb_callback = WandbCallback(metric_name="f1_macro")
+    wandb_callback = WandbCallback(metric_name="combined_score")
 
     study.optimize(objective, n_trials=n_trials, callbacks=[wandb_callback])
     
@@ -1216,8 +1600,8 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     best_params = study.best_params
     best_value = study.best_value
     
-    print("\n=== Bayesian Optimization Results ===")
-    print(f"Best F1-macro on validation set: {best_value:.4f}")
+    print(f"\n=== Bayesian Optimization Results with {n_folds}-fold CV ===")
+    print(f"Best combined score across folds: {best_value:.4f}")
     print("Best hyperparameters:")
     for param, value in best_params.items():
         print(f"  {param}: {value}")
@@ -1230,10 +1614,10 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     result = {
         "best_params": best_params,
         "best_value": best_value,
-        "feature_type": "with_manual" if use_prosodic_features else "without_manual"
+        "n_folds": n_folds
     }
     
-    with open(os.path.join(output_dir, f"best_hyperparams_{'with' if use_prosodic_features else 'no'}_manual.json"), "w") as f:
+    with open(os.path.join(output_dir, f"best_hyperparams_cnn_rnn_{n_folds}fold.json"), "w") as f:
         json.dump(result, f, indent=2)
     
     # Print importance of hyperparameters if optuna has enough trials
@@ -1246,17 +1630,16 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     # Create visualization if not in offline mode
     if not myConfig.running_offline:
         try:
-            # Save optimization plots
-            import matplotlib.pyplot as plt
+            # Save optimization plots            
             from optuna.visualization import plot_optimization_history, plot_param_importances
             
             # History plot
             fig1 = plot_optimization_history(study)
-            fig1.write_image(os.path.join(output_dir, f"optimization_history_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            fig1.write_image(os.path.join(output_dir, f"optimization_history_cnn_rnn_{n_folds}fold.png"))
             
             # Parameter importance plot
             fig2 = plot_param_importances(study)
-            fig2.write_image(os.path.join(output_dir, f"param_importances_{'with' if use_prosodic_features else 'no'}_manual.png"))
+            fig2.write_image(os.path.join(output_dir, f"param_importances_cnn_rnn_{n_folds}fold.png"))
             
             print(f"Optimization visualizations saved to {output_dir}")
         except Exception as e:
@@ -1266,29 +1649,9 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     
     if wandb.run:
         # Log best parameters
-        wandb.run.summary["best_f1_macro"] = best_value
+        wandb.run.summary["best_combined_score"] = best_value
         wandb.run.summary["best_params"] = best_params
-        
-        # Log best model artifact
-        best_trial_number = study.best_trial.number
-        best_model_path = os.path.join(
-            myConfig.OUTPUT_PATH, 
-            "hyperparameter_optimization", 
-            f"trial_{best_trial_number}_model.pt"
-        )
-        
-        if os.path.exists(best_model_path):
-            artifact = wandb.Artifact(
-                f"hpo-best-model-{wandb.run.id}", 
-                type="model",
-                description=f"Best model from HPO with F1={best_value:.4f}"
-            )
-            artifact.add_file(best_model_path, name="best_model.pt")
-            wandb.log_artifact(artifact)
-    
-    # Train final model with best hyperparameters (optional)
-    if input("Train final model with best hyperparameters? (y/n): ").lower() == "y":
-        train_with_best_hyperparameters(dataset, best_params, use_prosodic_features)
+        wandb.run.summary["n_folds"] = n_folds
     
     # Save study state for possible resumption
     os.makedirs(os.path.dirname(study_storage_path), exist_ok=True)
@@ -1297,6 +1660,11 @@ def run_bayesian_optimization(use_prosodic_features=True, n_trials=50, resume_st
     
     if wandb.run and wandb.run.name.startswith("hpo_cnn_rnn"):
         wandb.finish()
+    
+    # Optionally train final model with more epochs for better results
+    if input(f"Train final model with best hyperparameters from {n_folds}-fold CV? (y/n): ").lower() == "y":
+        print("Training final model with 20 epochs instead of the default...")
+        train_with_best_hyperparameters(dataset, best_params)
     
     return result
 
@@ -1413,8 +1781,10 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             model, 
             dataloaders["validation"], 
             criterion, 
-            device, 
-            use_prosodic_features
+            device,
+            use_cam=True,                                      # Enable CAM visualization
+            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
+            max_cam_samples=10                                 # Max samples per class/outcome
         )
         
         # Calculate metrics
@@ -1440,14 +1810,14 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
             
-            # Save in safetensors format if available
+            """ # Save in safetensors format if available
             try:
                 from safetensors.torch import save_file
                 safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
                 save_file(model.state_dict(), safetensors_path)
                 print(f"  Also saved model in safetensors format to {safetensors_path}")
             except ImportError:
-                print("  safetensors not available, skipping safetensors format")
+                print("  safetensors not available, skipping safetensors format") """
     
     # Test the best model
     # Load the best model
@@ -1456,7 +1826,13 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Test on test set
     print("\nTesting optimized model on test set...")
     test_loss, test_labels, test_preds = evaluate(
-        model, dataloaders["test"], criterion, device, use_prosodic_features
+        model, 
+        dataloaders["test"], 
+        criterion, 
+        device, 
+        use_prosodic_features,
+        cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Test'  ,   # Output directory
+        max_cam_samples=10  # Max samples per class/outcome
     )
     
     # Calculate test metrics

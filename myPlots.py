@@ -6,6 +6,13 @@ import librosa.display
 import numpy as np
 import pandas as pd
 import os   
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
+import plotly.graph_objs as go
+import plotly.io as pio
+from plotly.offline import plot
+import os
 
 def plotAgeDistribution(data_df):
     plt.style.use("default")
@@ -512,9 +519,8 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     # Load the CNN extractor 
     model = DualPathAudioClassifier(
         num_classes=3,
-        sample_rate=16000,
-        use_prosodic_features=False,  # Not needed for feature extraction
-        apply_specaugment=False  # We'll apply augmentation manually
+        sample_rate=16000,        
+        apply_specaugment=False
     ).to(device)
     model.eval()  # Set to evaluation mode
     
@@ -790,7 +796,142 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
         import traceback
         traceback.print_exc()
 
-def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95):
+# Add these imports at the top of your file
+import plotly.graph_objs as go
+import plotly.io as pio
+from plotly.offline import plot
+import os
+
+def create_interactive_3d_plot(embeddings_3d, color_field, unique_categories, color_mapping, title, output_filename):
+    """
+    Creates an interactive 3D plot with manual rotation control using Plotly.
+    
+    Args:
+        embeddings_3d: The 3D t-SNE embeddings
+        color_field: List of category labels for each point
+        unique_categories: List of unique categories
+        color_mapping: Dictionary mapping categories to colors
+        title: Title for the plot
+        output_filename: Filename to save the HTML file to
+    """
+    print(f"Creating interactive 3D visualization for {title}...")
+    
+    # Convert matplotlib colors to hex format for plotly
+    def rgba_to_hex(rgba_color):
+        r, g, b, a = rgba_color
+        return f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}'
+    
+    hex_color_mapping = {cat: rgba_to_hex(color_mapping[cat]) for cat in unique_categories}
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add traces for each category
+    for category in unique_categories:
+        indices = [i for i, cat in enumerate(color_field) if cat == category]
+        if not indices:
+            continue
+            
+        fig.add_trace(go.Scatter3d(
+            x=embeddings_3d[indices, 0],
+            y=embeddings_3d[indices, 1],
+            z=embeddings_3d[indices, 2],
+            mode='markers',
+            marker=dict(
+                size=5,
+                color=hex_color_mapping[category],
+                opacity=0.7,
+                line=dict(width=0.5, color='#FFFFFF')
+            ),
+            name=f"{category} (n={len(indices)})"
+        ))
+    
+    # Set layout
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title="t-SNE Dimension 1",
+            yaxis_title="t-SNE Dimension 2",
+            zaxis_title="t-SNE Dimension 3"
+        ),
+        legend=dict(
+            title="Categories",
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        scene_camera=dict(
+            up=dict(x=0, y=0, z=1),
+            center=dict(x=0, y=0, z=0),
+            eye=dict(x=1.5, y=1.5, z=1.5)
+        )
+    )
+    
+    # Save to HTML file
+    html_filename = f"{output_filename.split('.')[0]}.html"
+    plot(fig, filename=html_filename, auto_open=False)
+    
+    print(f"Saved interactive 3D visualization to {html_filename}")
+    return html_filename
+
+
+
+def create_rotating_3d_plot(embeddings_3d, color_field, unique_categories, color_mapping, title, output_filename):
+    """
+    Creates and saves a rotating 3D animation of the embeddings.
+    
+    Args:
+        embeddings_3d: The 3D t-SNE embeddings
+        color_field: List of category labels for each point
+        unique_categories: List of unique categories
+        color_mapping: Dictionary mapping categories to colors
+        title: Title for the plot
+        output_filename: Filename to save the animation to
+    """
+    print(f"Creating rotating 3D animation for {title}...")
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Plot each category with its own color
+    for category in unique_categories:
+        indices = [i for i, cat in enumerate(color_field) if cat == category]
+        if not indices:
+            continue
+        
+        ax.scatter(
+            embeddings_3d[indices, 0],
+            embeddings_3d[indices, 1],
+            embeddings_3d[indices, 2],
+            c=[color_mapping[category]],
+            label=f"{category} (n={len(indices)})",
+            alpha=0.7,
+            s=50
+        )
+    
+    # Set labels and title
+    ax.set_title(title, fontsize=14)
+    ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+    ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+    ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+    ax.legend(title="Categories", bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Function to update the view for animation
+    def rotate(angle):
+        ax.view_init(elev=20, azim=angle)
+        return fig,
+    
+    # Create animation with 360-degree rotation
+    anim = FuncAnimation(fig, rotate, frames=np.arange(0, 360, 5), interval=100)
+    
+    # Save as GIF
+    anim.save(output_filename, writer='pillow', dpi=100)
+    plt.close()
+    print(f"Saved rotating 3D animation to {output_filename}")
+
+
+def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=None, similarity_threshold=0.95, exclusion_csv=None):
     """
     Analyzes the similarity between samples across dataset splits (train, valid, test)
     to detect potential data leakage.
@@ -816,11 +957,35 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     import os
     import gc
     from datasets import load_from_disk
-    from cnn_rnn_model import DualPathAudioClassifier
     import librosa
+    from panns_inference.panns_inference.models import Cnn14
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Load exclusion list if provided
+    excluded_files = set()
+    if exclusion_csv:
+        try:
+            exclusion_df = pd.read_csv(exclusion_csv)
+            print(f"Loaded {len(exclusion_df)} files to exclude from analysis")
+            
+            # Extract the actual filenames (without split prefix)
+            for filename in exclusion_df['filename']:
+                # The actual filename starts after the second underscore
+                parts = filename.split('_', 2)
+                if len(parts) >= 3:
+                    actual_filename = parts[2]
+                    excluded_files.add(actual_filename)
+                else:
+                    # If the format is different, add the whole filename
+                    excluded_files.add(filename+'.wav')
+                    
+            print(f"Extracted {len(excluded_files)} unique filenames to exclude")
+        except Exception as e:
+            print(f"Error loading exclusion CSV file: {e}")
+            print("Continuing without exclusions")
+            excluded_files = set()
     
     # Load dataset from disk
     print(f"Loading dataset from {dataset_path}")
@@ -842,52 +1007,79 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
             print(f"Sample structure in {split} split: {list(sample.keys())}")
     
     # Load or create model
-    print("Loading feature extraction model...")
-    model = DualPathAudioClassifier(
-        num_classes=3,  
-        sample_rate=16000,
-        use_prosodic_features=False,
-        apply_specaugment=False
-    ).to(device)
+    print("Loading feature extraction model...")    
+    import torchvision.models as models
+    from torchvision import transforms
     
-    if model_path and os.path.exists(model_path):
-        print(f"Loading model weights from: {model_path}")
-        model.load_state_dict(torch.load(model_path, map_location=device))
-    else:
-        print("Using model with random weights")
+    # Load pre-trained DenseNet model
+    """ feature_extractor = models.densenet121(pretrained=True).to(device)
+    # Remove the classifier layer - we just want the features
+    feature_extractor.classifier = torch.nn.Identity()
+    feature_extractor.eval()
     
-    model.eval()  # Set to evaluation mode
+    # Define normalization for DenseNet (ImageNet standard)
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    ) 
+    
+    # Define target size for DenseNet (224x224)
+    target_size = (224, 224)
+    
+    print("Using DenseNet121 (pretrained on ImageNet) as feature extractor") """
+        
+    print("Using CNN14 as feature extractor")
+
+    def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
+        model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64,hop_size=320, window_size=1024,fmin=50, fmax=8000)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        model.load_state_dict(checkpoint['model'])
+        model.eval()
+        return model
+    feature_extractor = load_cnn14(myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth') 
     
     # Create feature extraction function
-    def extract_features(audio_path):
+    def extract_features(audio_path, feature_extractor):
+        
+        # CNN14
+        def extract_embedding(model, sample_audio):
+            with torch.no_grad():
+                output = model(sample_audio)
+                embedding = output['embedding']
+            return embedding  # shape: [1, 2048]
+                
         try:
             # Load audio
-            y, sr = librosa.load(audio_path, sr=16000)
-            
-            # Create log mel spectrogram
-            mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+            sample_audio, sr = librosa.load(audio_path, sr=16000)
+            # Create log mel spectrogram (DenseNet)
+            """ mel_spec = librosa.feature.melspectrogram(y=sample_audio, sr=sr, n_mels=128, fmax=8000)
             log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
-            
-            # Convert to tensor
-            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time]
+            log_mel_tensor = torch.from_numpy(log_mel_spec).unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, freq, time] """
+            # CNN14
+            sample_audio = torch.tensor(sample_audio).unsqueeze(0)  # [1, time]                     
             
             with torch.inference_mode():
-                #TDO: Remove these transformations
                 # Normalize as in model preprocessing
-                log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
+                # Code block needed for DenseNet
+                """ log_mel_tensor = (log_mel_tensor - log_mel_tensor.min()) / (log_mel_tensor.max() - log_mel_tensor.min() + 1e-6)
                 
                 # Resize to model's expected input size
-                log_mel_tensor = F.interpolate(log_mel_tensor, size=(384, 384), 
+                log_mel_tensor = F.interpolate(log_mel_tensor, size=target_size, 
                                              mode='bilinear', align_corners=False)
+                
+                # Convert 1-channel grayscale to 3-channel RGB (DenseNet expects RGB input)
+                log_mel_tensor = log_mel_tensor.repeat(1, 3, 1, 1)
                 
                 # Apply standard normalization
                 log_mel_tensor = (log_mel_tensor - log_mel_tensor.mean()) / (log_mel_tensor.std() + 1e-5)
                 
                 # Apply ImageNet normalization
-                log_mel_tensor = model.normalize(log_mel_tensor)
+                log_mel_tensor = normalize(log_mel_tensor)
                 
-                # Extract features using CNN
-                features = model.cnn_extractor(log_mel_tensor).flatten().cpu().numpy()
+                # Extract features using DenseNet
+                features = feature_extractor(log_mel_tensor).flatten().cpu().numpy() """
+                # Extract features using CNN14
+                features = extract_embedding(feature_extractor, sample_audio).flatten().cpu().numpy()
                 
             return features
         except Exception as e:
@@ -919,18 +1111,17 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     file_info = {}      # Will store {file_id: {path, split, class_label}}
     
     print("Extracting features from all audio files...")
+    skipped_files = 0
     for split in dataset.keys():
         print(f"Processing {split} split...")
         
         for idx, sample in enumerate(tqdm(dataset[split], desc=f"Processing {split}")):
             try:
-                
+                # Get file path from sample
                 if 'file_path' in sample:
                     file_path = sample['file_path']
-                
                 elif 'audio' in sample and isinstance(sample['audio'], dict) and 'path' in sample['audio']:
                     file_path = sample['audio']['path']
-                
                 else:
                     potential_path_fields = [k for k in sample.keys() if 'path' in k.lower() or 'file' in k.lower()]
                     if potential_path_fields:
@@ -938,6 +1129,16 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     else:
                         print(f"Cannot find file path in sample keys: {list(sample.keys())}")
                         continue
+                
+                # Check if this file should be excluded
+                basename = os.path.basename(file_path)
+                if basename in excluded_files:
+                    skipped_files += 1
+                    if skipped_files <= 5:
+                        print(f"Skipping excluded file: {basename}")
+                    elif skipped_files == 6:
+                        print("Skipping more excluded files...")
+                    continue
                 
                 # Create a unique file ID
                 file_id = f"{split}_{idx}_{os.path.basename(file_path)}"
@@ -958,12 +1159,10 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                     'class': label
                 }
                 
-                # Resolve full path
+                # Resolve full path and extract features
                 try:
                     full_path = resolve_audio_path(file_path)
-                    
-                    # Extract features
-                    features = extract_features(full_path)
+                    features = extract_features(full_path, feature_extractor)
                     if features is not None:
                         features_dict[file_id] = features
                 except FileNotFoundError as e:
@@ -980,9 +1179,10 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 gc.collect()
     
     print(f"Successfully extracted features for {len(features_dict)} files")
+    print(f"Skipped {skipped_files} files from the exclusion list")
     
     # Clean up memory
-    del model
+    del feature_extractor
     torch.cuda.empty_cache()
     gc.collect()
     
@@ -1157,7 +1357,256 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
     plt.savefig('within_split_similarity_distribution.png')
     plt.close()
     
-    # Return results as a dictionary
+    # Add 2D clustering visualization with t-SNE
+    print("\nCreating 2D clustered representation of embeddings...")
+    
+    # Collect all feature vectors and metadata
+    all_feature_vectors = []
+    all_splits = []
+    all_classes = []
+    all_file_ids = []
+    
+    for file_id, features in tqdm(features_dict.items(), desc="Preparing for t-SNE"):
+        all_feature_vectors.append(features)
+        all_splits.append(file_info[file_id]['split'])
+        all_classes.append(file_info[file_id]['class'])
+        all_file_ids.append(file_id)
+    
+    # Convert to numpy arrays
+    feature_matrix = np.array(all_feature_vectors)
+    
+    # Apply dimensionality reduction for visualization
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    
+    # First use PCA to reduce dimensionality before applying t-SNE
+    print("Reducing dimensionality with PCA...")
+    n_components = min(50, feature_matrix.shape[0], feature_matrix.shape[1])
+    pca = PCA(n_components=n_components)
+    features_pca = pca.fit_transform(feature_matrix)
+    
+    print(f"Explained variance by PCA: {sum(pca.explained_variance_ratio_):.3f}")
+    
+    # Apply t-SNE
+    print("Applying t-SNE for 2D visualization...")
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_matrix)-1))
+    embeddings_2d = tsne.fit_transform(features_pca)
+    
+    # Add 3D t-SNE visualization 
+    print("Applying t-SNE for 3D visualization...")
+    tsne_3d = TSNE(n_components=3, random_state=42, perplexity=min(30, len(feature_matrix)-1))
+    embeddings_3d = tsne_3d.fit_transform(features_pca)
+    
+    # Create visualizations for clustering by split and by class
+    for viz_type in ['split', 'class']:
+        plt.figure(figsize=(12, 10))
+        
+        if viz_type == 'split':
+            # Get unique splits and assign colors
+            unique_categories = sorted(set(all_splits))
+            title = 'Audio Embeddings Clustered by Dataset Split'
+            color_field = all_splits
+        else:
+            # Get unique classes and assign colors
+            unique_categories = sorted(set(all_classes))
+            title = 'Audio Embeddings Clustered by Class'
+            color_field = all_classes
+        
+        # Create a colormap
+        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_categories)))
+        color_mapping = {cat: colors[i] for i, cat in enumerate(unique_categories)}
+        
+        # Plot each category with its own color (2D plot - existing code)
+        for category in unique_categories:
+            indices = [i for i, cat in enumerate(color_field) if cat == category]
+            if not indices:
+                continue
+            plt.scatter(
+                embeddings_2d[indices, 0], 
+                embeddings_2d[indices, 1],
+                c=[color_mapping[category]],
+                label=f"{category} (n={len(indices)})",
+                alpha=0.7,
+                s=50
+            )
+        
+        plt.title(f"2D t-SNE Visualization of {title}", fontsize=14)
+        plt.xlabel("t-SNE Dimension 1", fontsize=12)
+        plt.ylabel("t-SNE Dimension 2", fontsize=12)
+        plt.legend(title="Categories")
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+        
+        # Save the 2D plot
+        filename = f"embeddings_by_{viz_type}.png"
+        plt.savefig(filename, dpi=300)
+        plt.close()
+        print(f"Saved 2D visualization to {filename}")
+        
+        # Create static 3D plot
+        fig = plt.figure(figsize=(12, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot each category in 3D
+        for category in unique_categories:
+            indices = [i for i, cat in enumerate(color_field) if cat == category]
+            if not indices:
+                continue
+            
+            ax.scatter(
+                embeddings_3d[indices, 0],
+                embeddings_3d[indices, 1],
+                embeddings_3d[indices, 2],
+                c=[color_mapping[category]],
+                label=f"{category} (n={len(indices)})",
+                alpha=0.7,
+                s=50
+            )
+        
+        ax.set_title(f"3D t-SNE Visualization of {title}", fontsize=14)
+        ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+        ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+        ax.set_zlabel("t-SNE Dimension 3", fontsize=12)
+        ax.legend(title="Categories", bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Save the 3D static plot
+        filename_3d = f"embeddings_3d_by_{viz_type}.png"
+        plt.tight_layout()
+        plt.savefig(filename_3d, dpi=300)
+        plt.close()
+        print(f"Saved static 3D visualization to {filename_3d}")
+        
+        # Create rotating 3D animation for this visualization type
+        gif_filename = f"embeddings_3d_rotating_{viz_type}.gif"
+        create_rotating_3d_plot(
+            embeddings_3d, 
+            color_field, 
+            unique_categories, 
+            color_mapping, 
+            f"3D t-SNE Visualization of {title}",
+            gif_filename
+        )
+        
+        # Create interactive 3D visualization for each viz_type
+        html_filename = create_interactive_3d_plot(
+            embeddings_3d,
+            color_field,
+            unique_categories,
+            color_mapping,
+            f"Interactive 3D t-SNE Visualization of {title}",
+            f"interactive_3d_{viz_type}.html"
+        )
+    
+    # Create interactive 3D visualization for high similarity pairs
+    if high_similarity_pairs:
+        print("Creating interactive 3D visualization for high similarity pairs...")
+        fig = go.Figure()
+        
+        # Add traces for each category - background points with lower opacity
+        for category in unique_categories:
+            indices = [i for i, cat in enumerate(all_classes) if cat == category]
+            if not indices:
+                continue
+                
+            # Convert matplotlib colors to hex
+            hex_color = "#{:02x}{:02x}{:02x}".format(
+                int(color_mapping[category][0] * 255),
+                int(color_mapping[category][1] * 255),
+                int(color_mapping[category][2] * 255)
+            )
+            
+            fig.add_trace(go.Scatter3d(
+                x=embeddings_3d[indices, 0],
+                y=embeddings_3d[indices, 1],
+                z=embeddings_3d[indices, 2],
+                mode='markers',
+                marker=dict(
+                    size=4,
+                    color=hex_color,
+                    opacity=0.3,
+                    line=dict(width=0, color='#FFFFFF')
+                ),
+                name=f"{category}",
+                hoverinfo="skip"  # Hide hover for background points
+            ))
+        
+        # Add high similarity connections
+        high_sim_traces = []
+        for i, pair in enumerate(high_similarity_pairs[:50]):  # Limit to 50 pairs
+            try:
+                idx1 = all_file_ids.index(pair['file1'])
+                idx2 = all_file_ids.index(pair['file2'])
+                
+                # Add line trace
+                fig.add_trace(go.Scatter3d(
+                    x=[embeddings_3d[idx1, 0], embeddings_3d[idx2, 0]],
+                    y=[embeddings_3d[idx1, 1], embeddings_3d[idx2, 1]],
+                    z=[embeddings_3d[idx1, 2], embeddings_3d[idx2, 2]],
+                    mode='lines',
+                    line=dict(color='rgba(0,0,0,0.5)', width=2),
+                    showlegend=False,
+                    hoverinfo="text",
+                    hovertext=f"Similarity: {pair['similarity']:.4f}"
+                ))
+                
+                # Add highlighted points
+                for idx, file_id, split_name, class_name in [(idx1, pair['file1'], pair['split1'], pair['class1']), 
+                                         (idx2, pair['file2'], pair['split2'], pair['class2'])]:
+                    cat = all_classes[idx]
+                    hex_color = "#{:02x}{:02x}{:02x}".format(
+                        int(color_mapping[cat][0] * 255),
+                        int(color_mapping[cat][1] * 255),
+                        int(color_mapping[cat][2] * 255)
+                    )
+                    
+                    fig.add_trace(go.Scatter3d(
+                        x=[embeddings_3d[idx, 0]],
+                        y=[embeddings_3d[idx, 1]],
+                        z=[embeddings_3d[idx, 2]],
+                        mode='markers',
+                        marker=dict(
+                            size=7,
+                            color=hex_color,
+                            opacity=1,
+                            line=dict(width=1, color='#000000')
+                        ),
+                        showlegend=False,
+                        hoverinfo="text",
+                        hovertext=f"File: {os.path.basename(file_id)}<br>Split: {split_name}<br>Class: {class_name}"
+                    ))
+                
+            except ValueError:
+                continue
+        
+        # Set layout
+        fig.update_layout(
+            title=f"High Similarity Pairs (sim ≥ {similarity_threshold})",
+            scene=dict(
+                xaxis_title="t-SNE Dimension 1",
+                yaxis_title="t-SNE Dimension 2",
+                zaxis_title="t-SNE Dimension 3"
+            ),
+            legend=dict(
+                title="Classes",
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            ),
+            margin=dict(l=0, r=0, b=0, t=30)
+        )
+        
+        # Save to HTML file
+        html_filename = "high_similarity_3d_interactive.html"
+        plot(fig, filename=html_filename, auto_open=False)
+        print(f"Saved interactive 3D visualization to {html_filename}")
+    
+    # Save high similarity pairs to CSV for further analysis
+    if high_similarity_pairs:
+        df = pd.DataFrame(high_similarity_pairs)
+        df.to_csv('high_similarity_pairs.csv', index=False)
+        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
+    
     results = {
         'high_similarity_pairs': high_similarity_pairs,
         'cross_split_statistics': {
@@ -1174,49 +1623,44 @@ def analyze_dataset_split_similarity(dataset_path, audio_root_path, model_path=N
                 'max': np.max(similarities) if similarities else None,
             } for split, similarities in within_split_similarities.items()
         },
+        'excluded_files_count': skipped_files,
         'problematic_files': sorted(list(set(
             [pair['file1'] for pair in high_similarity_pairs] + 
             [pair['file2'] for pair in high_similarity_pairs]
         )))
     }
-    
-    # Save high similarity pairs to CSV for further analysis
-    if high_similarity_pairs:
-        df = pd.DataFrame(high_similarity_pairs)
-        df.to_csv('high_similarity_pairs.csv', index=False)
-        print(f"Saved {len(high_similarity_pairs)} high similarity pairs to high_similarity_pairs.csv")
-    
+
     return results
 
-# Example usage (commented out)
+
+if __name__ == "__main__": 
+
+    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
+    dataset_path = myConfig.OUTPUT_PATH
+    data_df = pd.read_csv(data_file_path) 
+
+    # To visualize one sample per class:
+    #visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
+
+    # To visualize multiple augmentations of a single sample:
+    #visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
+
+    # Analyze how different your augmentations are in feature space
+    #analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
+   
+    results = analyze_dataset_split_similarity(
+        dataset_path=dataset_path,  # Path to your HF dataset
+        audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
+        model_path=None,  # Set to your model path if a trained model is available
+        similarity_threshold=0.95,
+        exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
+    )
+
+    # Access results
+    print(f"Found {len(results['problematic_files'])} potentially problematic files")
 
 
-""" data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
-dataset_path = myConfig.OUTPUT_PATH
-data_df = pd.read_csv(data_file_path) """
-
-# To visualize one sample per class:
-#visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
-
-# To visualize multiple augmentations of a single sample:
-#visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
-
-# Analyze how different your augmentations are in feature space
-#analyze_augmentation_diversity(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=5)
-
-
-""" results = analyze_dataset_split_similarity(
-    dataset_path=dataset_path,  # Path to your HF dataset
-    audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
-    model_path=None,  # Set to your model path if a trained model is available
-    similarity_threshold=0.95
-)
-
-# Access results
-print(f"Found {len(results['problematic_files'])} potentially problematic files")
- """
-
-# Example usage
-""" original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
-processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
-visualize_audio_comparison(original_audio_path, processed_audio_path) """
+    # Example usage
+    """ original_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/01_ExtractedFiles/MCI/MCI-W-50-205.wav"
+    processed_audio_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/MCI-W-50-205.wav"
+    visualize_audio_comparison(original_audio_path, processed_audio_path) """

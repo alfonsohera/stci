@@ -57,15 +57,10 @@ def collate_fn(batch):
         padding=True
     ).input_values
 
-    prosodic_features = torch.stack([
-        torch.tensor(item["prosodic_features"]) for item in batch
-    ])
-
     labels = torch.tensor([item["label"] for item in batch])
 
     return {
         "input_values": input_values.to(device),
-        "prosodic_features": prosodic_features.to(device),
         "labels": labels.to(device)
     }
 
@@ -83,8 +78,7 @@ def testModel(model, dataset):
     with torch.inference_mode():
         for batch in tqdm(test_loader):
             logits = model(
-                input_values=batch["input_values"],
-                prosodic_features=batch["prosodic_features"]
+                input_values=batch["input_values"]
             ).logits
 
             preds = torch.argmax(logits, dim=-1)
@@ -127,8 +121,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
     with torch.inference_mode():
         for batch in tqdm(test_loader, desc="Evaluating"):
             logits = model(
-                input_values=batch["input_values"],
-                prosodic_features=batch["prosodic_features"]
+                input_values=batch["input_values"]
             ).logits
             
             # Get probabilities
@@ -495,12 +488,13 @@ if __name__ == "__main__":
         # Import CNN+RNN threshold optimization if it exists
         try:
             from cnn_rnn_train import optimize_cnn_rnn, test_cnn_rnn_with_thresholds
-            from cnn_rnn_train import run_cross_validation, run_bayesian_optimization
+            from cnn_rnn_train import run_bayesian_optimization
             has_threshold_functions = True
         except ImportError:
             has_threshold_functions = False
             
-        use_manual = not args.no_manual
+        #use_manual = not args.no_manual
+        use_manual = False # Set to False explicitly.
         feature_text = "without" if args.no_manual else "with"
         
         if args.mode == "train":
@@ -514,12 +508,12 @@ if __name__ == "__main__":
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn(use_prosodic_features=use_manual)
+            test_cnn_rnn()
         elif args.mode == "optimize":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Running threshold optimization (CNN+RNN pipeline {feature_text} manual features)...")
-                optimize_cnn_rnn(use_prosodic_features=use_manual)
+                optimize_cnn_rnn()
             else:
                 print("Threshold optimization not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold optimization.")
@@ -527,21 +521,14 @@ if __name__ == "__main__":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Testing with optimized thresholds (CNN+RNN pipeline {feature_text} manual features)...")
-                test_cnn_rnn_with_thresholds(use_prosodic_features=use_manual)
+                test_cnn_rnn_with_thresholds()
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
-        elif args.mode == "cv":
-            if has_threshold_functions:
-                print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
-                run_cross_validation(use_prosodic_features=use_manual, n_folds=args.folds)
-            else:
-                print("Cross-validation not implemented. Please check your installation.")
         elif args.mode == "hpo":
             if has_threshold_functions:
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
-                run_bayesian_optimization(
-                    use_prosodic_features=use_manual, 
+                run_bayesian_optimization(                     
                     n_trials=args.trials,
                     resume_study=args.resume  # Pass the resume flag
                 )
