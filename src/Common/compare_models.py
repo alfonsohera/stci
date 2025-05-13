@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 import librosa
-import myConfig
-from cnn_rnn_model import PretrainedDualPathAudioClassifier
+from . import Config
+from src.Cnn.cnn_model import PretrainedDualPathAudioClassifier
 from panns_inference.panns_inference.models import Cnn14
 
 # Define function to load the fine-tuned CNN14 from your model
@@ -31,7 +31,7 @@ def load_finetuned_cnn14(checkpoint_path):
     # Create the full model with your architecture
     full_model = PretrainedDualPathAudioClassifier(
         num_classes=2,  # Binary classification
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'
+        pretrained_cnn14_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth'
     )
     
     # Load the fine-tuned weights
@@ -386,9 +386,9 @@ def analyze_class_similarity_with_finetuned_model(dataset_path, audio_root_path,
 
 if __name__ == "__main__":
     # Example usage
-    dataset_path = myConfig.OUTPUT_PATH
-    audio_root_path = myConfig.DATA_DIR
-    default_checkpoint = myConfig.checkpoint_dir + '/Cnn14_mAP=0.431.pth'
+    dataset_path = Config.OUTPUT_PATH
+    audio_root_path = Config.DATA_DIR
+    default_checkpoint = Config.checkpoint_dir + '/Cnn14_mAP=0.431.pth'
     finetuned_checkpoint = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/training_output/cnn_rnn_binary/cnn_rnn_best.pt"
     
     # Option 1: Compare the two models

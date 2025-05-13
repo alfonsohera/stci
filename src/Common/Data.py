@@ -63,10 +63,10 @@ def DownloadAndExtract():
     os.makedirs(mci_dir, exist_ok=True)
     os.makedirs(ad_dir, exist_ok=True)
     
-    # Skip download if files already exist in offline mode
-    if Config.running_offline and all(os.path.exists(folder) and os.listdir(folder) 
-                                     for folder in [healthy_dir, mci_dir, ad_dir]):
-        print("Running offline and target folders already exist with files. Skipping download and extraction.")
+    # Skip download if files already exist
+    if all(os.path.exists(folder) and os.listdir(folder) 
+           for folder in [healthy_dir, mci_dir, ad_dir]):
+        print("Target folders already exist with files. Skipping download and extraction.")
         return
     
     urls = [

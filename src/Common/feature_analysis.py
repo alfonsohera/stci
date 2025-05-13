@@ -1,13 +1,17 @@
-import os
-import sys
-import argparse
 import pandas as pd
 import numpy as np
-# Local imports
-import myConfig
-import myData
-import myFunctions
-import myPlots
+import os
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+import joblib
+from . import Config
+from . import Data
+from . import Functions
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torch
+from transformers import EfficientNetPreTrainedModel, SequenceClassifierOutput
 
 
 def check_data_exists():
@@ -33,9 +37,9 @@ def createDataframe_filtered():
     labels = []
     
     # Always use the Data directory at script level
-    data_dir = myFunctions.get_data_dir()
+    data_dir = Functions.get_data_dir()
     
-    for category in myConfig.LABEL_MAP.keys():
+    for category in Config.LABEL_MAP.keys():
         category_path = os.path.join(data_dir, category)
         if not os.path.exists(category_path):
             print(f"Warning: Category directory '{category_path}' not found")
@@ -45,7 +49,7 @@ def createDataframe_filtered():
             # Only include primary wav files (exclude _original files)
             if file.endswith(".wav") and "_original" not in file:
                 audio_files.append(os.path.join(category_path, file))
-                labels.append(myConfig.LABEL_MAP[category])
+                labels.append(Config.LABEL_MAP[category])
 
     if not audio_files:
         print(f"Warning: No audio files found in the data directory")
@@ -60,7 +64,7 @@ def extract_and_report_features():
     generate a statistical report of features across classes,
     excluding files specified in exclude_list.csv.
     """
-    myData.DownloadAndExtract()    
+    Data.DownloadAndExtract()    
     # Check if dataframe.csv exists in the Data directory
     data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
     if os.path.exists(data_file_path):
@@ -69,8 +73,8 @@ def extract_and_report_features():
         print(f"Loaded existing dataframe from {data_file_path}")
     else:
         # Create dataframe and save it
-        data_df = myFunctions.createDataframe()
-        data_df = myFunctions.featureEngineering(data_df)
+        data_df = Functions.createDataframe()
+        data_df = Functions.featureEngineering(data_df)
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
         # Save dataframe
@@ -79,7 +83,7 @@ def extract_and_report_features():
         print("Extracting prosodic and acoustic features...")
     
     # Load exclude list
-    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    exclude_list_path = os.path.join(Config.ROOT_DIR, "exclude_list.csv")
     if os.path.exists(exclude_list_path):
         exclude_df = pd.read_csv(exclude_list_path)
         exclude_filenames = set(exclude_df['filename'].tolist())
@@ -108,7 +112,7 @@ def extract_and_report_features():
     print(f"Excluded {excluded_count} files from the dataset for feature statistics")
                 
     # Create a combined list of features for reporting
-    all_features = myData.extracted_features
+    all_features = Data.extracted_features
     
     # Group by class and compute statistics for all features using filtered data
     stats = filtered_df.groupby('class')[all_features].agg(['mean', 'std'])
@@ -124,7 +128,7 @@ def extract_and_report_features():
     
     #Audio duration stats
     print("\nAudio duration statistics (Filtered Dataset):")
-    myPlots.plotProsodicFeatures(filtered_df)
+    Functions.plotProsodicFeatures(filtered_df)
     return filtered_df, stats
 
 
@@ -137,7 +141,7 @@ def plot_feature_histograms():
     data_df, _ = extract_and_report_features()
     
     # Load exclude list
-    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    exclude_list_path = os.path.join(Config.ROOT_DIR, "exclude_list.csv")
     if os.path.exists(exclude_list_path):
         exclude_df = pd.read_csv(exclude_list_path)
         exclude_filenames = set(exclude_df['filename'].tolist())
@@ -166,7 +170,7 @@ def plot_feature_histograms():
     print(f"Excluded {excluded_count} files from the dataset for histogram plots")
     
     print("Generating histogram plots for prosodic features...")
-    myPlots.histogramProsodicFeatures(filtered_df)
+    Functions.histogramProsodicFeatures(filtered_df)
     
     print("Histogram plots generated successfully using filtered data.")
     return filtered_df
@@ -181,9 +185,7 @@ def main():
     
     args = parser.parse_args()
     
-    # Set offline mode if specified
-    #myConfig.running_offline = args.offline
-    myConfig.running_offline = True
+    # Removed reference to running_offline flag
     
     if args.action == 'report':
         extract_and_report_features()

@@ -324,7 +324,7 @@ def main_fn():
         model.config.save_pretrained(Config.checkpoint_dir)
     
     # Log final model to wandb if enabled
-    if not Config.running_offline and "wandb" in Config.training_args.report_to:
+    if "wandb" in Config.training_args.report_to:
         import wandb
         if wandb.run and Config.wandb_log_model:
             artifact = wandb.Artifact(
@@ -428,7 +428,7 @@ def optimize():
         output_dir=output_dir,
         use_prosodic_features=False,
         is_cnn_rnn=False,
-        log_to_wandb=not Config.running_offline
+        log_to_wandb=True
     )
 
 
@@ -444,8 +444,10 @@ if __name__ == "__main__":
                         help="Specify the pipeline to use: wav2vec2 (transformer-based) or cnn")
     parser.add_argument("--online", action="store_true", 
                         help="Run with online services (WandB logging)")
-    parser.add_argument("--no_manual", action="store_true",
-                        help="Disable manual features for cnn pipeline")
+    parser.add_argument("--no_prosodic", action="store_true",
+                        help="Disable prosodic features for cnn pipeline")
+    parser.add_argument("--multi_class", action="store_false", default=True, dest="binary_classification",
+                        help="Use multi-class classification (Healthy vs MCI vs AD) instead of binary (Healthy vs Non-Healthy)")
     # Add new arguments for cross-validation and hyperparameter optimization
     parser.add_argument("--folds", type=int, default=5,
                         help="Number of folds for cross-validation (default: 5)")
@@ -455,9 +457,6 @@ if __name__ == "__main__":
                         help="Resume previous hyperparameter optimization study")
     
     args = parser.parse_args()
-    
-    # Configure offline/online mode
-    Config.running_offline = not args.online
     
     # Set up the selected pipeline
     if args.pipeline == "wav2vec2":
@@ -493,49 +492,49 @@ if __name__ == "__main__":
         except ImportError:
             has_threshold_functions = False
             
-        #use_manual = not args.no_manual
-        use_manual = False # Set to False explicitly.
-        feature_text = "without" if args.no_manual else "with"
+        use_prosodic = not args.no_prosodic
+        feature_text = "without" if args.no_prosodic else "with"
+        class_text = "binary" if args.binary_classification else "multi-class"
         
         if args.mode == "train":
             Config.training_from_scratch = True
-            print(f"Starting training from scratch (CNN pipeline {feature_text} manual features)...")
-            main_cnn(use_prosodic_features=use_manual, binary_classification=True)
+            print(f"Starting training from scratch (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
+            main_cnn(use_prosodic_features=use_prosodic, binary_classification=args.binary_classification)
         elif args.mode == "finetune":
             Config.training_from_scratch = False
-            print(f"Starting fine-tuning (CNN pipeline {feature_text} manual features)...")
-            main_cnn(use_prosodic_features=use_manual, binary_classification=True)
+            print(f"Starting fine-tuning (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
+            main_cnn(use_prosodic_features=use_prosodic, binary_classification=args.binary_classification)
         elif args.mode == "test":
             Config.training_from_scratch = False
-            print(f"Running model evaluation (CNN pipeline {feature_text} manual features)...")
-            test_cnn(binary_classification=True, use_cam=True, max_cam_samples=50)
+            print(f"Running model evaluation (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
+            test_cnn(binary_classification=args.binary_classification, use_cam=True, max_cam_samples=50)
         elif args.mode == "optimize":
             Config.training_from_scratch = False
             if has_threshold_functions:
-                print(f"Running threshold optimization (CNN pipeline {feature_text} manual features)...")
-                optimize_cnn(binary_classification=True)
+                print(f"Running threshold optimization (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
+                optimize_cnn(binary_classification=args.binary_classification)
             else:
                 print("Threshold optimization not implemented for CNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold optimization.")
         elif args.mode == "test_thresholds":
             Config.training_from_scratch = False
             if has_threshold_functions:
-                print(f"Testing with optimized thresholds (CNN pipeline {feature_text} manual features)...")
-                test_cnn_with_thresholds(binary_classification=True)
+                print(f"Testing with optimized thresholds (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
+                test_cnn_with_thresholds(binary_classification=args.binary_classification)
             else:
                 print("Testing with thresholds not implemented for CNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
         elif args.mode == "cv":
             Config.training_from_scratch = False
-            print(f"Running {args.folds}-fold cross-validation (CNN pipeline {feature_text} manual features)...")
+            print(f"Running {args.folds}-fold cross-validation (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
             if has_threshold_functions:
                 # Import cross-validation function
                 from src.Cnn.cnn_train import cross_validate
                 # Run cross-validation with specified number of folds
                 cross_validate(
                     n_folds=args.folds,
-                    binary_classification=True,
-                    use_prosodic_features=use_manual,
+                    binary_classification=args.binary_classification,
+                    use_prosodic_features=use_prosodic,
                     num_epochs=10
                 )
             else:
@@ -544,10 +543,10 @@ if __name__ == "__main__":
         elif args.mode == "hpo":
             if has_threshold_functions:
                 Config.training_from_scratch = True
-                print(f"Running hyperparameter optimization with {args.trials} trials (CNN pipeline {feature_text} manual features)...")
+                print(f"Running hyperparameter optimization with {args.trials} trials (CNN pipeline {feature_text} prosodic features, {class_text} classification)...")
                 run_bayesian_optimization(                     
                     n_trials=args.trials,
-                    binary_classification=True,
+                    binary_classification=args.binary_classification,
                     resume_study=args.resume  # Pass the resume flag
                 )
             else:

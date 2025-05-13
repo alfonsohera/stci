@@ -971,7 +971,7 @@ def main_cnn(use_prosodic_features=False, binary_classification=False):
         use_prosodic_features: Whether to use prosodic features
         binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
     """
-    from cnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
+    from .cnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
     hpo_n_mels = 128
     
     if binary_classification:
@@ -1047,7 +1047,7 @@ def test_cnn(binary_classification=False, use_cam=False, max_cam_samples=20):
     Args:
         binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
     """
-    from cnn_model import PretrainedDualPathAudioClassifier
+    from .cnn_model import PretrainedDualPathAudioClassifier
     hpo_n_mels = 128
     
     # Prepare data with appropriate classification mode
@@ -1213,7 +1213,7 @@ def optimize_cnn(binary_classification=False):
     dataset = prepare_cnn_dataset(binary_classification=binary_classification)
     
     # Create model with appropriate number of classes
-    from cnn_model import PretrainedDualPathAudioClassifier
+    from .cnn_model import PretrainedDualPathAudioClassifier
     
 
     model = PretrainedDualPathAudioClassifier(
@@ -1262,7 +1262,7 @@ def optimize_cnn(binary_classification=False):
         class_names=class_names,
         output_dir=output_dir,
         is_cnn=True, 
-        log_to_wandb=not Config.running_offline
+        log_to_wandb=True
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
@@ -1295,7 +1295,7 @@ def test_cnn_with_thresholds(binary_classification=False):
         
 
     # Create model with appropriate number of classes
-    from cnn_model import PretrainedDualPathAudioClassifier
+    from .cnn_model import PretrainedDualPathAudioClassifier
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,

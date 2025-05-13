@@ -360,8 +360,8 @@ def createTrainer(model, optimizer, dataset):
 
     # Initialize callbacks list 
     callbacks = []
-    # Initialize wandb if not running offline
-    if not Config.running_offline and "wandb" in Config.training_args.report_to:
+    # Initialize wandb if enabled
+    if "wandb" in Config.training_args.report_to:
         import wandb
         wandb.init(
             project=Config.wandb_project,

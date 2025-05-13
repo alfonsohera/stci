@@ -404,7 +404,7 @@ def visualize_cam(audio, model, target_class=None, true_class=None, save_path=No
     if audio_id is not None:
         try:
             # Import the necessary function to fetch original audio
-            from cnn_rnn_data import get_original_audio_by_id
+            from cnn_data import get_original_audio_by_id
             
             # Use the audio_id to fetch original file path
             original_audio_id = str(audio_id)

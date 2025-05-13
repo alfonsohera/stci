@@ -1,14 +1,20 @@
-import os
-import torch
 import numpy as np
 import pandas as pd
+import os
 import librosa
+import matplotlib.pyplot as plt
+import seaborn as sns
 from tqdm import tqdm
+import torch
+import json
 import csv
+from datasets import Dataset, DatasetDict
+import sys
+sys.path.append('..')
+from Common import Config
 
 # Local imports
-import myConfig
-from cnn_rnn_data import chunk_audio, load_cached_pytorch_dataset
+from cnn_data import chunk_audio, load_cached_pytorch_dataset
 
 def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=16000):
     """
@@ -20,11 +26,11 @@ def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=1
         sample_rate: Sample rate of the audio
     """
     # Configure paths
-    myConfig.configure_paths()
+    Config.configure_paths()
     
     # Load cached PyTorch dataset
     if dataset_path is None:
-        pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+        pytorch_dataset_path = os.path.join(Config.DATA_DIR, "pytorch_dataset")
     else:
         pytorch_dataset_path = dataset_path
         
@@ -32,7 +38,7 @@ def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=1
     dataset = load_cached_pytorch_dataset(pytorch_dataset_path)
     
     # Create output directory
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "chunking_analysis")
+    output_dir = os.path.join(Config.OUTPUT_PATH, "chunking_analysis")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create a unique name for the CSV file based on the path

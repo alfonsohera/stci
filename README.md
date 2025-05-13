@@ -4,22 +4,21 @@ A deep learning system for detecting cognitive impairment stages (Healthy, MCI, 
 
 ## Project Structure
 
-The project is organized into a component-based architecture:
 
 ```
 Repo/
 ├── src/
 │   ├── Common/             # Common utilities and shared code
-│   │   ├── Config.py       # Configuration settings (formerly myConfig.py)
-│   │   ├── Data.py         # Data loading and preparation (formerly myData.py)
-│   │   ├── Functions.py    # Shared utility functions (formerly myFunctions.py)
+│   │   ├── Config.py       # Configuration settings 
+│   │   ├── Data.py         # Data loading and preparation 
+│   │   ├── Functions.py    # Shared utility functions 
 │   │   ├── ThresholdOptimization.py  # Threshold optimization utilities
-│   │   ├── Audio.py        # Audio processing utilities (formerly myAudio.py)
-│   │   ├── Plots.py        # Visualization utilities (formerly myPlots.py)
-│   │   ├── FeatureAnalysis.py # Feature analysis utilities (formerly myFeatureAnalysis.py)
-│   │   └── Speech2text.py  # Speech-to-text conversion utilities (formerly my_Speech2text.py)
+│   │   ├── Audio.py        # Audio processing utilities 
+│   │   ├── Plots.py        # Visualization utilities 
+│   │   ├── FeatureAnalysis.py # Feature analysis utilities 
+│   │   └── Speech2text.py  # Speech-to-text conversion utilities 
 │   ├── Wav2Vec2/           # Wav2Vec2 transformer model pipeline
-│   │   └── Model.py        # Wav2Vec2 model and training utilities (formerly myModel.py)
+│   │   └── Model.py        # Wav2Vec2 model and training utilities 
 │   └── Cnn/                # CNN model pipeline
 │       ├── cnn_data.py     # CNN-specific data preparation
 │       ├── cnn_model.py    # CNN model architecture
@@ -63,7 +62,7 @@ The system provides a command-line interface with different operation modes and 
 ### Basic Command Structure
 
 ```bash
-python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
+python main.py <mode> [--pipeline <pipeline>] [--no_prosodic] [--multi_class]
 ```
 
 ### Arguments
@@ -81,12 +80,13 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
   - `wav2vec2`: Transformer-based pipeline
   - `cnn`: CNN dual-path architecture (default)
 
-- **--online**: Run with online services enabled (WandB logging)
-  - If not specified, runs in offline mode
-
-- **--no_manual**: Disable manual features for cnn pipeline
+- **--no_prosodic**: Disable prosodic features for CNN pipeline
   - Only applicable to the CNN pipeline
-  - If not specified, manual prosodic features are used
+  - If not specified, prosodic features are used
+
+- **--multi_class**: Use multi-class classification (Healthy vs MCI vs AD)
+  - By default, binary classification (Healthy vs Non-Healthy) is used
+  - Especially useful for the CNN pipeline
 
 - **--folds**: Number of folds for cross-validation (default: 5)
   - Only applicable with the `cv` mode
@@ -101,14 +101,14 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
 
 #### Wav2Vec2 Pipeline
 
-1. **Train a model from scratch (offline)**
+1. **Train a model from scratch**
    ```bash
    python main.py train --pipeline wav2vec2
    ```
 
-2. **Fine-tune an existing model with WandB logging**
+2. **Fine-tune an existing model**
    ```bash
-   python main.py finetune --pipeline wav2vec2 --online
+   python main.py finetune --pipeline wav2vec2
    ```
 
 3. **Evaluate a trained model**
@@ -128,19 +128,19 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
 
 #### CNN Pipeline (Default)
 
-1. **Train a CNN model with manual features**
+1. **Train a CNN model with prosodic features**
    ```bash
    python main.py train
    ```
 
-2. **Train a CNN model without manual features**
+2. **Train a CNN model without prosodic features**
    ```bash
-   python main.py train --no_manual
+   python main.py train --no_prosodic
    ```
 
-3. **Fine-tune CNN model with WandB logging**
+3. **Fine-tune CNN model**
    ```bash
-   python main.py finetune --online
+   python main.py finetune
    ```
 
 4. **Evaluate CNN model**
@@ -165,7 +165,22 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
 
 8. **Perform hyperparameter optimization**
    ```bash
-   python main.py hpo --trials 50 --online
+   python main.py hpo --trials 50
+   ```
+
+9. **Train a CNN model with multi-class classification**
+   ```bash
+   python main.py train --multi_class
+   ```
+
+10. **Test a CNN model with multi-class classification**
+   ```bash
+   python main.py test --multi_class
+   ```
+
+11. **Run cross-validation with multi-class classification**
+   ```bash
+   python main.py cv --folds 5 --multi_class
    ```
 
 ## Model Pipelines
@@ -241,7 +256,6 @@ The project implements automated hyperparameter optimization to find the most ef
 
 ```bash
 python main.py hpo --trials 50
-python main.py hpo --trials 50 --online
 ```
 
 ## Requirements

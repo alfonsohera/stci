@@ -7,7 +7,7 @@ from pyannote.audio import Pipeline
 import parselmouth
 from parselmouth.praat import call
 import torch
-import myPlots
+from . import Plots
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
 import torchaudio
@@ -288,7 +288,7 @@ if __name__ == "__main__":
     orig_file_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/" + file + ext
     proc_file_path = "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data/MCI/separated/" + file + suffix + ext
     separate_with_demucs(orig_file_path)
-    myPlots.visualize_audio_comparison(orig_file_path, proc_file_path)
+    Plots.visualize_audio_comparison(orig_file_path, proc_file_path)
 
 
     # diarization = pipeline("audio_normalized.wav")
