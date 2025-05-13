@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from transformers import logging
 # <local imports>
-import myConfig
-import myData
-import myModel
-import myFunctions
+from src.Common import Config
+from src.Common import Data
+from src.Wav2Vec2 import Model
+from src.Common import Functions
 # </local imports>
 from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
@@ -49,7 +49,7 @@ logging.set_verbosity_error()  # Set transformers logging to show only errors
 
 def collate_fn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    _, processor, _ = myModel.getModelDefinitions()
+    _, processor, _ = Model.getModelDefinitions()
     input_values = processor(
         [item['audio']['array'] for item in batch],  # Access the 'array' key
         sampling_rate=16000,
@@ -225,7 +225,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
         ax2.set_title(f'Threshold Confusion Matrix ({threshold_type})')
         
         # Save the plot
-        output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_comparison")
+        output_dir = os.path.join(Config.OUTPUT_PATH, "threshold_comparison")
         os.makedirs(output_dir, exist_ok=True)
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, f"confusion_matrix_comparison_{threshold_type}.png"))
@@ -258,16 +258,16 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
 
 def main_fn():
     # Ensure paths are configured correctly
-    path_config = myConfig.configure_paths()
+    path_config = Config.configure_paths()
     for key, path in path_config.items():
-        setattr(myConfig, key, path)
+        setattr(Config, key, path)
     
-    model_name, processor, base_model = myModel.getModelDefinitions()
+    model_name, processor, base_model = Model.getModelDefinitions()
     # Data extraction and feature engineering
-    myData.DownloadAndExtract()    
+    Data.DownloadAndExtract()    
     
     # Check if dataframe.csv exists in the Data directory
-    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
+    data_file_path = os.path.join(Config.DATA_DIR, "dataframe.csv")   
     if os.path.exists(data_file_path):
         # Load existing dataframe
         data_df = pd.read_csv(data_file_path)
@@ -276,13 +276,13 @@ def main_fn():
         # Check if paths are absolute and convert if needed
         if '/' in data_df['file_path'].iloc[0] and not data_df['file_path'].iloc[0].startswith(('Healthy', 'MCI', 'AD')):
             print("Converting absolute paths to relative paths...")
-            data_df = myFunctions.convert_absolute_to_relative_paths(data_df)
+            data_df = Functions.convert_absolute_to_relative_paths(data_df)
             # Save the updated dataframe
             data_df.to_csv(data_file_path, index=False)
     else:
         # Create dataframe and save it
-        data_df = myFunctions.createDataframe()        
-        data_df = myFunctions.featureEngineering(data_df)
+        data_df = Functions.createDataframe()        
+        data_df = Functions.featureEngineering(data_df)
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)        
         # Save dataframe
@@ -290,23 +290,23 @@ def main_fn():
         print(f"Created and saved dataframe to {data_file_path}")    
     # Feature engineering    
     
-    if not os.path.exists(myConfig.OUTPUT_PATH) or (os.path.exists(myConfig.OUTPUT_PATH) and len(os.listdir(myConfig.OUTPUT_PATH)) == 0):
+    if not os.path.exists(Config.OUTPUT_PATH) or (os.path.exists(Config.OUTPUT_PATH) and len(os.listdir(Config.OUTPUT_PATH)) == 0):
         # Data splits
-        train_df, val_df, test_df = myData.datasetSplit(data_df)
+        train_df, val_df, test_df = Data.datasetSplit(data_df)
         # Apply standard scaling to the splits
-        train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+        train_df, val_df, test_df = Data.ScaleDatasets(train_df, val_df, test_df)
         # Create HF's dataset
-        myData.createHFDatasets(train_df, val_df, test_df)    
+        Data.createHFDatasets(train_df, val_df, test_df)    
     # Load HF's dataset
-    dataset = myData.loadHFDataset()
+    dataset = Data.loadHFDataset()
     # Load model
-    model, optimizer = myModel.loadModel(model_name)
+    model, optimizer = Model.loadModel(model_name)
     # Create trainer
-    trainer = myModel.createTrainer(model, optimizer, dataset)
+    trainer = Model.createTrainer(model, optimizer, dataset)
     trainer.train()
     
     # Save model and processor
-    output_dir = os.path.join(myConfig.training_args.output_dir, "final-model")
+    output_dir = os.path.join(Config.training_args.output_dir, "final-model")
     os.makedirs(output_dir, exist_ok=True)
     
     # Save model state dict
@@ -320,13 +320,13 @@ def main_fn():
     processor.save_pretrained(output_dir)
     
     # Save config
-    if myConfig.training_from_scratch:
-        model.config.save_pretrained(myConfig.checkpoint_dir)
+    if Config.training_from_scratch:
+        model.config.save_pretrained(Config.checkpoint_dir)
     
     # Log final model to wandb if enabled
-    if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
+    if not Config.running_offline and "wandb" in Config.training_args.report_to:
         import wandb
-        if wandb.run and myConfig.wandb_log_model:
+        if wandb.run and Config.wandb_log_model:
             artifact = wandb.Artifact(
                 f"final-model-{wandb.run.id}", 
                 type="model",
@@ -344,28 +344,28 @@ def main_fn():
 
 
 def test():
-    model_name, _, _ = myModel.getModelDefinitions()
-    model, _ = myModel.loadModel(model_name)
-    dataset = myData.loadHFDataset()
+    model_name, _, _ = Model.getModelDefinitions()
+    model, _ = Model.loadModel(model_name)
+    dataset = Data.loadHFDataset()
     testModel(model, dataset)
 
 
 def test_with_thresholds():
     """Test model using the optimized thresholds"""
     # Configure paths
-    path_config = myConfig.configure_paths()
+    path_config = Config.configure_paths()
     for key, path in path_config.items():
-        setattr(myConfig, key, path)
+        setattr(Config, key, path)
     
     # Load model
-    model_name, _, _ = myModel.getModelDefinitions()
-    model, _ = myModel.loadModel(model_name)
+    model_name, _, _ = Model.getModelDefinitions()
+    model, _ = Model.loadModel(model_name)
     
     # Load dataset
-    dataset = myData.loadHFDataset()
+    dataset = Data.loadHFDataset()
     
     # Try to load threshold values from the optimization results
-    threshold_results_path = os.path.join(myConfig.OUTPUT_PATH, "threshold_optimization", 
+    threshold_results_path = os.path.join(Config.OUTPUT_PATH, "threshold_optimization", 
                                           "threshold_optimization_results.json")
     
     if os.path.exists(threshold_results_path):
@@ -399,36 +399,36 @@ def test_with_thresholds():
 
 def optimize():
     """Function to run threshold optimization"""
-    from myThresholdOptimization import optimize_thresholds_for_model
+    from src.Common import ThresholdOptimization
     
     # Configure paths
-    path_config = myConfig.configure_paths()
+    path_config = Config.configure_paths()
     for key, path in path_config.items():
-        setattr(myConfig, key, path)
+        setattr(Config, key, path)
     
     # Get model and load it
-    model_name, _, _ = myModel.getModelDefinitions()
-    model, _ = myModel.loadModel(model_name)
+    model_name, _, _ = Model.getModelDefinitions()
+    model, _ = Model.loadModel(model_name)
     
     # Load dataset
-    dataset = myData.loadHFDataset()
+    dataset = Data.loadHFDataset()
     
     # Create validation dataloader
     val_loader = DataLoader(dataset["validation"], batch_size=8, collate_fn=collate_fn)
     
     # Set output directory
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_optimization")
+    output_dir = os.path.join(Config.OUTPUT_PATH, "threshold_optimization")
     
     # Run threshold optimization
     class_names = ["Healthy", "MCI", "AD"]
-    optimize_thresholds_for_model(
+    ThresholdOptimization.optimize_thresholds_for_model(
         model=model,
         dataloader=val_loader,
         class_names=class_names,
         output_dir=output_dir,
         use_prosodic_features=False,
         is_cnn_rnn=False,
-        log_to_wandb=not myConfig.running_offline
+        log_to_wandb=not Config.running_offline
     )
 
 
@@ -440,12 +440,12 @@ if __name__ == "__main__":
                              "test (evaluate model), optimize (threshold optimization), "
                              "test_thresholds (evaluate with optimized thresholds), "
                              "cv (cross-validation), or hpo (hyperparameter optimization)")
-    parser.add_argument("--pipeline", choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
-                        help="Specify the pipeline to use: wav2vec2 (transformer-based) or cnn_rnn")
+    parser.add_argument("--pipeline", choices=["wav2vec2", "cnn"], default="cnn",
+                        help="Specify the pipeline to use: wav2vec2 (transformer-based) or cnn")
     parser.add_argument("--online", action="store_true", 
                         help="Run with online services (WandB logging)")
     parser.add_argument("--no_manual", action="store_true",
-                        help="Disable manual features for cnn_rnn pipeline")
+                        help="Disable manual features for cnn pipeline")
     # Add new arguments for cross-validation and hyperparameter optimization
     parser.add_argument("--folds", type=int, default=5,
                         help="Number of folds for cross-validation (default: 5)")
@@ -457,38 +457,38 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Configure offline/online mode
-    myConfig.running_offline = not args.online
+    Config.running_offline = not args.online
     
     # Set up the selected pipeline
     if args.pipeline == "wav2vec2":
         # Set training mode and call appropriate function for wav2vec2 pipeline
         if args.mode == "train":
-            myConfig.training_from_scratch = True
+            Config.training_from_scratch = True
             print("Starting training from scratch (Wav2Vec2 pipeline)...")
             main_fn()
         elif args.mode == "finetune":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             print("Starting fine-tuning of existing model (Wav2Vec2 pipeline)...")
             main_fn()
         elif args.mode == "test":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             print("Running model evaluation (Wav2Vec2 pipeline)...")
             test()
         elif args.mode == "optimize":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             print("Running threshold optimization (Wav2Vec2 pipeline)...")
             optimize()
         elif args.mode == "test_thresholds":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             print("Testing model with optimized thresholds (Wav2Vec2 pipeline)...")
             test_with_thresholds()
-    elif args.pipeline == "cnn_rnn":
-        # Import CNN+RNN functions only when needed
-        from cnn_rnn_train import main_cnn_rnn, test_cnn_rnn
-        # Import CNN+RNN threshold optimization if it exists
+    elif args.pipeline == "cnn":
+        # Import CNN functions only when needed
+        from src.Cnn.cnn_train import main_cnn, test_cnn
+        # Import CNN threshold optimization if it exists
         try:
-            from cnn_rnn_train import optimize_cnn_rnn, test_cnn_rnn_with_thresholds
-            from cnn_rnn_train import run_bayesian_optimization
+            from src.Cnn.cnn_train import optimize_cnn, test_cnn_with_thresholds
+            from src.Cnn.cnn_train import run_bayesian_optimization
             has_threshold_functions = True
         except ImportError:
             has_threshold_functions = False
@@ -498,39 +498,39 @@ if __name__ == "__main__":
         feature_text = "without" if args.no_manual else "with"
         
         if args.mode == "train":
-            myConfig.training_from_scratch = True
-            print(f"Starting training from scratch (CNN+RNN pipeline {feature_text} manual features)...")
-            main_cnn_rnn(use_prosodic_features=use_manual, binary_classification=True)
+            Config.training_from_scratch = True
+            print(f"Starting training from scratch (CNN pipeline {feature_text} manual features)...")
+            main_cnn(use_prosodic_features=use_manual, binary_classification=True)
         elif args.mode == "finetune":
-            myConfig.training_from_scratch = False
-            print(f"Starting fine-tuning (CNN+RNN pipeline {feature_text} manual features)...")
-            main_cnn_rnn(use_prosodic_features=use_manual, binary_classification=True)
+            Config.training_from_scratch = False
+            print(f"Starting fine-tuning (CNN pipeline {feature_text} manual features)...")
+            main_cnn(use_prosodic_features=use_manual, binary_classification=True)
         elif args.mode == "test":
-            myConfig.training_from_scratch = False
-            print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn(binary_classification=True, use_cam=True, max_cam_samples=50)
+            Config.training_from_scratch = False
+            print(f"Running model evaluation (CNN pipeline {feature_text} manual features)...")
+            test_cnn(binary_classification=True, use_cam=True, max_cam_samples=50)
         elif args.mode == "optimize":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             if has_threshold_functions:
-                print(f"Running threshold optimization (CNN+RNN pipeline {feature_text} manual features)...")
-                optimize_cnn_rnn(binary_classification=True)
+                print(f"Running threshold optimization (CNN pipeline {feature_text} manual features)...")
+                optimize_cnn(binary_classification=True)
             else:
-                print("Threshold optimization not implemented for CNN+RNN pipeline.")
+                print("Threshold optimization not implemented for CNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold optimization.")
         elif args.mode == "test_thresholds":
-            myConfig.training_from_scratch = False
+            Config.training_from_scratch = False
             if has_threshold_functions:
-                print(f"Testing with optimized thresholds (CNN+RNN pipeline {feature_text} manual features)...")
-                test_cnn_rnn_with_thresholds(binary_classification=True)
+                print(f"Testing with optimized thresholds (CNN pipeline {feature_text} manual features)...")
+                test_cnn_with_thresholds(binary_classification=True)
             else:
-                print("Testing with thresholds not implemented for CNN+RNN pipeline.")
+                print("Testing with thresholds not implemented for CNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
         elif args.mode == "cv":
-            myConfig.training_from_scratch = False
-            print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
+            Config.training_from_scratch = False
+            print(f"Running {args.folds}-fold cross-validation (CNN pipeline {feature_text} manual features)...")
             if has_threshold_functions:
                 # Import cross-validation function
-                from cnn_rnn_train import cross_validate
+                from src.Cnn.cnn_train import cross_validate
                 # Run cross-validation with specified number of folds
                 cross_validate(
                     n_folds=args.folds,
@@ -539,12 +539,12 @@ if __name__ == "__main__":
                     num_epochs=10
                 )
             else:
-                print("Cross-validation not implemented or available for CNN+RNN pipeline.")
+                print("Cross-validation not implemented or available for CNN pipeline.")
                 print("Please check your installation and make sure the cross_validate function exists.")
         elif args.mode == "hpo":
             if has_threshold_functions:
-                myConfig.training_from_scratch = True
-                print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
+                Config.training_from_scratch = True
+                print(f"Running hyperparameter optimization with {args.trials} trials (CNN pipeline {feature_text} manual features)...")
                 run_bayesian_optimization(                     
                     n_trials=args.trials,
                     binary_classification=True,

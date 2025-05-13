@@ -7,7 +7,9 @@ def configure_paths():
     """Set up all path variables based on current environment"""
     # Find the root directory (repository root)
     current_file_path = os.path.abspath(__file__)
-    ROOT_DIR = os.path.dirname(current_file_path)
+    # Common directory is one level down from the ROOT_DIR
+    COMMON_DIR = os.path.dirname(current_file_path)
+    ROOT_DIR = os.path.dirname(COMMON_DIR)
     
     # Define consistent data paths relative to ROOT_DIR
     DATA_DIR = os.path.join(ROOT_DIR, "Data")
@@ -68,6 +70,26 @@ selected_features = [
 num_extracted_features = len(selected_features)
 
 
+
+# CNN model hyperparameters - default pipeline
+cnn_hyperparams = {
+    # Core training hyperparameters
+    "max_lr": 0.0007701929128195916,
+    "focal_loss_gamma": 1.6403510582650866,
+    "label_smoothing": 0.12434400610343388,
+    "weight_scaling_factor": 0.5622340614373624,
+    "weight_decay": 5.158226584045704e-05,
+    "pct_start": 0.1398795425157636,
+    "div_factor": 25.921562187648835,
+    "final_div_factor": 235.94713285006821,
+    
+    # Model-specific hyperparameters
+    "attention_dropout":0.3066950753717451,
+    "fusion_dropout": 0.15979022646422386,
+    "prosodic_weight": 1.789349449205332,
+    "learning_rate_cnn": 0.0008128821383735566,
+    "weight_decay_cnn": 0.0008987524750721325
+}
 
 # CNN-RNN model hyperparameters  - enabled when training from scratch
 cnn_rnn_hyperparams = {

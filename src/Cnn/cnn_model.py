@@ -231,9 +231,9 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         
         # Use values from centralized config if not explicitly provided
         import myConfig
-        self.attention_dropout = attention_dropout if attention_dropout is not None else myConfig.cnn_rnn_hyperparams["attention_dropout"]
-        self.fusion_dropout = fusion_dropout if fusion_dropout is not None else myConfig.cnn_rnn_hyperparams["fusion_dropout"] 
-        self.prosodic_weight = prosodic_weight if prosodic_weight is not None else myConfig.cnn_rnn_hyperparams["prosodic_weight"]
+        self.attention_dropout = attention_dropout if attention_dropout is not None else myConfig.cnn_hyperparams["attention_dropout"]
+        self.fusion_dropout = fusion_dropout if fusion_dropout is not None else myConfig.cnn_hyperparams["fusion_dropout"] 
+        self.prosodic_weight = prosodic_weight if prosodic_weight is not None else myConfig.cnn_hyperparams["prosodic_weight"]
                 
         # SpecAugment for data augmentation during training
         if apply_specaugment:

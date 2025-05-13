@@ -1,34 +1,60 @@
-## Screening Tool for Cognitive Impairment
+# Screening Tool for Cognitive Impairment
 
-A deep learning system for detecting cognitive impairment stages (Healthy, MCI, AD) from speech audio samples using two different approaches: Wav2Vec2-based transformers and a CNN+RNN dual-path architecture.
+A deep learning system for detecting cognitive impairment stages (Healthy, MCI, AD) from speech audio samples using two different approaches: Wav2Vec2-based transformers and a CNN dual-path architecture.
 
 ## Project Structure
 
+The project is organized into a component-based architecture:
+
 ```
-Repository/
-├── main.py                      # Main entry point with CLI interface and wav2vec2 pipeline
-├── myConfig.py                  # Configuration and settings
-├── myData.py                    # Data loading and processing utilities
-├── myModel.py                   # Wav2Vec2 model definition and training utilities
-├── myFunctions.py               # General utility functions
-├── myAudio.py                   # Audio processing and feature extraction
-├── myPlots.py                   # Visualization and analysis tools
-├── myThresholdOptimization.py   # Threshold optimization for classification
-├── feature_analysis.py          # Feature analysis utilities
-├── cnn_rnn_model.py             # CNN+RNN model architecture
-├── cnn_rnn_train.py             # CNN+RNN training and evaluation functions
-├── cnn_rnn_data.py              # Data utilities specific to CNN+RNN
-└── environment.yml              # Conda environment definition
+Repo/
+├── src/
+│   ├── Common/             # Common utilities and shared code
+│   │   ├── Config.py       # Configuration settings (formerly myConfig.py)
+│   │   ├── Data.py         # Data loading and preparation (formerly myData.py)
+│   │   ├── Functions.py    # Shared utility functions (formerly myFunctions.py)
+│   │   ├── ThresholdOptimization.py  # Threshold optimization utilities
+│   │   ├── Audio.py        # Audio processing utilities (formerly myAudio.py)
+│   │   ├── Plots.py        # Visualization utilities (formerly myPlots.py)
+│   │   ├── FeatureAnalysis.py # Feature analysis utilities (formerly myFeatureAnalysis.py)
+│   │   └── Speech2text.py  # Speech-to-text conversion utilities (formerly my_Speech2text.py)
+│   ├── Wav2Vec2/           # Wav2Vec2 transformer model pipeline
+│   │   └── Model.py        # Wav2Vec2 model and training utilities (formerly myModel.py)
+│   └── Cnn/                # CNN model pipeline
+│       ├── cnn_data.py     # CNN-specific data preparation
+│       ├── cnn_model.py    # CNN model architecture
+│       └── cnn_train.py    # CNN training and evaluation
+├── main.py                 # Main script for running training and evaluation
+├── cam_utils.py            # Class Activation Mapping visualization utilities
+├── analyze_chunking.py     # Audio chunking analysis tools
+├── compare_models.py       # Model comparison utilities
+├── feature_analysis.py     # Feature analysis utilities
+├── environment.yml         # Conda environment definition
+└── README.md               # This file
 ```
 
-### Key Components
+## Components
 
-- **main.py**: Entry point with argument parsing, training/testing pipelines
-- **myModel.py**: Wav2Vec2-based model, training, and evaluation
-- **myData.py**: Data loading, preprocessing, and feature extraction
-- **cnn_rnn_model.py**: CNN+RNN model architecture for audio classification
-- **cnn_rnn_train.py**: Training and evaluation functions for CNN+RNN models
-- **myThresholdOptimization.py**: Optimizing decision thresholds for better classification
+### Common
+Contains shared utilities and code used across different model pipelines:
+- **Config.py**: Configuration settings and hyperparameters
+- **Data.py**: Data loading, preprocessing, and dataset creation
+- **Functions.py**: Shared utility functions
+- **ThresholdOptimization.py**: Threshold optimization for model predictions
+- **Audio.py**: Audio processing and feature extraction
+- **Plots.py**: Visualization and analysis tools
+- **FeatureAnalysis.py**: Extended feature analysis utilities
+- **Speech2text.py**: Speech-to-text conversion utilities
+
+### Wav2Vec2
+Contains the transformer-based audio classification pipeline:
+- **Model.py**: Wav2Vec2 model definition, fine-tuning and evaluation
+
+### CNN
+Contains the CNN-based audio classification pipeline:
+- **cnn_data.py**: CNN-specific data preparation
+- **cnn_model.py**: CNN model architecture definitions
+- **cnn_train.py**: Training and evaluation functions
 
 ## CLI Command Reference
 
@@ -48,21 +74,28 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
   - `test`: Evaluate a trained model
   - `optimize`: Perform threshold optimization
   - `test_thresholds`: Evaluate with optimized thresholds
-  - `optimize_hpo`: Perform hyperparameter optimization
+  - `cv`: Run cross-validation
+  - `hpo`: Perform hyperparameter optimization
 
 - **--pipeline**: Model pipeline to use
-  - `wav2vec2`: Transformer-based pipeline (default)
-  - `cnn_rnn`: CNN+RNN dual-path architecture
+  - `wav2vec2`: Transformer-based pipeline
+  - `cnn`: CNN dual-path architecture (default)
 
 - **--online**: Run with online services enabled (WandB logging)
   - If not specified, runs in offline mode
 
-- **--no_manual**: Disable manual features for cnn_rnn pipeline
-  - Only applicable to the CNN+RNN pipeline
+- **--no_manual**: Disable manual features for cnn pipeline
+  - Only applicable to the CNN pipeline
   - If not specified, manual prosodic features are used
 
-- **--trials**: Number of trials for hyperparameter optimization
-  - Only applicable with the `optimize_hpo` mode
+- **--folds**: Number of folds for cross-validation (default: 5)
+  - Only applicable with the `cv` mode
+
+- **--trials**: Number of trials for hyperparameter optimization (default: 50)
+  - Only applicable with the `hpo` mode
+
+- **--resume**: Resume previous hyperparameter optimization study
+  - Only applicable with the `hpo` mode
 
 ### Example Commands
 
@@ -93,44 +126,58 @@ python main.py <mode> [--pipeline <pipeline>] [--online] [--no_manual]
    python main.py test_thresholds --pipeline wav2vec2
    ```
 
-6. **Perform hyperparameter optimization**
+#### CNN Pipeline (Default)
+
+1. **Train a CNN model with manual features**
    ```bash
-   python main.py optimize_hpo --pipeline wav2vec2 --trials 50 --online
+   python main.py train
    ```
 
-#### CNN+RNN Pipeline
-
-1. **Train a CNN+RNN model with manual features**
+2. **Train a CNN model without manual features**
    ```bash
-   python main.py train --pipeline cnn_rnn
+   python main.py train --no_manual
    ```
 
-2. **Train a CNN+RNN model without manual features**
+3. **Fine-tune CNN model with WandB logging**
    ```bash
-   python main.py train --pipeline cnn_rnn --no_manual
+   python main.py finetune --online
    ```
 
-3. **Fine-tune CNN+RNN model with WandB logging**
+4. **Evaluate CNN model**
    ```bash
-   python main.py finetune --pipeline cnn_rnn --online
+   python main.py test
    ```
 
-4. **Evaluate CNN+RNN model**
+5. **Optimize thresholds for CNN model**
    ```bash
-   python main.py test --pipeline cnn_rnn
+   python main.py optimize
    ```
 
-5. **Optimize thresholds for CNN+RNN model**
+6. **Test CNN model with optimized thresholds**
    ```bash
-   python main.py optimize --pipeline cnn_rnn
+   python main.py test_thresholds
    ```
 
-6. **Test CNN+RNN model with optimized thresholds**
+7. **Run cross-validation with CNN model**
    ```bash
-   python main.py test_thresholds --pipeline cnn_rnn
+   python main.py cv --folds 5
+   ```
+
+8. **Perform hyperparameter optimization**
+   ```bash
+   python main.py hpo --trials 50 --online
    ```
 
 ## Model Pipelines
+
+### Classification Modes
+
+The project supports two classification approaches:
+
+- **Multiclass Classification**: The default mode with three classes (Healthy, MCI, AD)
+- **Binary Classification**: Simplified mode with two classes (Healthy vs. Non-Healthy), where MCI and AD samples are combined into a single "Non-Healthy" class
+
+Both classification modes are available for all model pipelines. Binary classification can be useful when the goal is to screen for any cognitive impairment rather than distinguishing between different impairment stages.
 
 ### Wav2Vec2 Pipeline
 
@@ -142,15 +189,17 @@ Key characteristics:
 - Fine-tuned for cognitive impairment classification
 - Takes raw audio as input
 
-### CNN+RNN Pipeline
+### CNN Pipeline (Default)
 
-The CNN+RNN pipeline uses a dual-path architecture combining convolutional layers for feature extraction and recurrent layers for temporal processing. It can optionally incorporate manual prosodic features.
+The CNN pipeline uses a dual-path architecture combining convolutional layers for feature extraction and recurrent layers for temporal processing. It can optionally incorporate manual prosodic features.
 
 Key characteristics:
 - Convolutional layers process spectral features
 - Recurrent layers capture temporal patterns
 - Optional manual features pathway
 - Balanced augmented dataset for training
+- Chunking approach for handling variable-length inputs
+- Class Activation Mapping (CAM) visualization
 
 ## Data Augmentation
 
@@ -158,10 +207,9 @@ The system uses data augmentation via SpecAugment to improve model generalizatio
 
 ### Augmentation Techniques
 
-- **SpecAugment**: For spectrograms in the CNN+RNN pipeline
+- **SpecAugment**: For spectrograms in the CNN pipeline
   - Time masking
   - Frequency masking
-
 
 ### Augmentation Strategy
 
@@ -189,12 +237,11 @@ The project implements automated hyperparameter optimization to find the most ef
 - **Objective Function**: Maximizes validation set performance (macro F1-score)
 - **Cross-Validation**: Employs stratified k-fold cross-validation for robust parameter selection
 
-
 ### Running HPO
 
 ```bash
-python main.py optimize_hpo --pipeline wav2vec2 --trials 50
-python main.py optimize_hpo --pipeline cnn_rnn --trials 50
+python main.py hpo --trials 50
+python main.py hpo --trials 50 --online
 ```
 
 ## Requirements
@@ -206,7 +253,7 @@ conda env create -f environment.yml
 conda activate stci
 ```
 
-The models have been train using an NVIDIA A40 GPU with 48GB of RAM, comparable HW is recommended to avoid running out of memory.
+The models have been trained using an NVIDIA A40 GPU with 48GB of RAM, comparable hardware is recommended to avoid running out of memory.
 
 ## Data Structure
 
@@ -237,10 +284,10 @@ The system evaluates models using multiple metrics:
 
 ### Visualization
 
-Performance visualization tools are available in myPlots.py:
+Performance visualization tools are available in Common/Plots.py:
 - Confusion matrices
 - ROC curves
 - PR curves
 - Feature importance plots
-- Attention weight visualization (for Wav2Vec2)
+
 

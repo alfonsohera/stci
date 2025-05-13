@@ -158,8 +158,8 @@ def debug_chunk_audio(audio_id="3", sample_rate=16000):
         return None
 
 
-class CNNRNNDataset(Dataset):
-    """Dataset wrapper specifically for CNN+RNN model with fixed chunk size
+class CNNDataset(Dataset):
+    """Dataset wrapper specifically for CNN model with fixed chunk size
     that works with standard PyTorch datasets."""
     def __init__(self, dataset, chunk_size_seconds=10, sample_rate=16000):
         self.dataset = dataset        
@@ -232,7 +232,7 @@ class CNNRNNDataset(Dataset):
         return result
 
 
-def collate_fn_cnn_rnn(batch):
+def collate_fn_cnn(batch):
     """Collate function that handles chunked audio with prosodic features."""
     audio = torch.stack([item["audio"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
@@ -270,7 +270,7 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
+def get_cnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     """
     Creates dataloaders using the PyTorch dataset approach instead of HuggingFace.
     
@@ -283,17 +283,17 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
         Dictionary with train, validation, and test dataloaders
     """
     # Wrap the datasets in the chunking dataset class
-    train_dataset = CNNRNNDataset(
+    train_dataset = CNNDataset(
         dataset_dict["train"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
-    val_dataset = CNNRNNDataset(
+    val_dataset = CNNDataset(
         dataset_dict["validation"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
-    test_dataset = CNNRNNDataset(
+    test_dataset = CNNDataset(
         dataset_dict["test"],         
         chunk_size_seconds=chunk_size_seconds
     )
@@ -302,7 +302,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=True,
         num_workers=4,  
         pin_memory=True  
@@ -311,7 +311,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=False,
         num_workers=4,  
         pin_memory=True 
@@ -320,7 +320,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     test_loader = DataLoader(
         test_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=False,
         num_workers=4,  
         pin_memory=True 
@@ -477,8 +477,8 @@ def load_cached_pytorch_dataset(cache_path):
     return datasets
 
 
-def prepare_cnn_rnn_dataset(binary_classification=True):
-    """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF,
+def prepare_cnn_dataset(binary_classification=True):
+    """Prepare data for CNN model training using PyTorch datasets instead of HF,
     excluding files specified in exclude_list.csv.
     
     Args:
