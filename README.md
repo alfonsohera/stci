@@ -304,4 +304,46 @@ Performance visualization tools are available in Common/Plots.py:
 - PR curves
 - Feature importance plots
 
+## Third-Party Libraries and Credits
+
+This project relies on several open-source libraries and pre-trained models. I'd like to acknowledge and thank the developers and researchers behind these tools:
+
+### Core Audio Processing
+
+- **[Pyannote Audio](https://github.com/pyannote/pyannote-audio)** - Used for voice activity detection and speaker diarization. Developed by Hervé Bredin and the pyannote team.
+
+- **[Demucs](https://github.com/facebookresearch/demucs)** - Used for high-quality voice separation from background noise. Developed by Facebook Research.
+
+- **[PANN (CNN14)](https://github.com/qiuqiangkong/audioset_tagging_cnn)** - Pre-trained audio neural network used as a feature extractor. Developed by Qiuqiang Kong et al.
+
+- **[Librosa](https://librosa.org/)** - Core audio processing library used for feature extraction and audio manipulation.
+
+- **[Praat Parselmouth](https://github.com/YannickJadoul/Parselmouth)** - Python interface to the Praat software used for extracting prosodic features.
+
+### Data Sources
+
+- **Original Speech Corpus**: The audio dataset used in this project is from the research paper ["Discriminating speech traits of Alzheimer's disease assessed through a corpus of reading task for Spanish language"](https://doi.org/10.1016/j.specom.2021.12.002) by Ivanova et al. (2021), published in Speech Communication. The corpus contains Spanish language speech recordings of elderly adults with varying degrees of cognitive impairment.
+
+### Machine Learning and Deep Learning
+
+- **[PyTorch](https://pytorch.org/)** and **[TorchAudio](https://pytorch.org/audio)** - Core deep learning frameworks used for model development.
+
+- **[Hugging Face Transformers](https://github.com/huggingface/transformers)** - Used for the Wav2Vec2 transformer models and processing.
+
+- **[Scikit-learn](https://scikit-learn.org/)** - Used for machine learning algorithms, metrics, and data preprocessing.
+
+### Visualization and Analysis
+
+- **[Matplotlib](https://matplotlib.org/)** and **[Seaborn](https://seaborn.pydata.org/)** - Used for data visualization and result plotting.
+
+- **[Plotly](https://plotly.com/)** - Used for interactive visualizations.
+
+- **[Weights & Biases](https://wandb.ai/)** - Used for experiment tracking and visualization.
+
+Please make sure to respect the licenses of these libraries when using this code.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
+
 
