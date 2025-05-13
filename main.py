@@ -500,20 +500,20 @@ if __name__ == "__main__":
         if args.mode == "train":
             myConfig.training_from_scratch = True
             print(f"Starting training from scratch (CNN+RNN pipeline {feature_text} manual features)...")
-            main_cnn_rnn(use_prosodic_features=use_manual)
+            main_cnn_rnn(use_prosodic_features=use_manual, binary_classification=True)
         elif args.mode == "finetune":
             myConfig.training_from_scratch = False
             print(f"Starting fine-tuning (CNN+RNN pipeline {feature_text} manual features)...")
-            main_cnn_rnn(use_prosodic_features=use_manual)
+            main_cnn_rnn(use_prosodic_features=use_manual, binary_classification=True)
         elif args.mode == "test":
             myConfig.training_from_scratch = False
             print(f"Running model evaluation (CNN+RNN pipeline {feature_text} manual features)...")
-            test_cnn_rnn()
+            test_cnn_rnn(binary_classification=True, use_cam=True, max_cam_samples=50)
         elif args.mode == "optimize":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Running threshold optimization (CNN+RNN pipeline {feature_text} manual features)...")
-                optimize_cnn_rnn()
+                optimize_cnn_rnn(binary_classification=True)
             else:
                 print("Threshold optimization not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold optimization.")
@@ -521,15 +521,33 @@ if __name__ == "__main__":
             myConfig.training_from_scratch = False
             if has_threshold_functions:
                 print(f"Testing with optimized thresholds (CNN+RNN pipeline {feature_text} manual features)...")
-                test_cnn_rnn_with_thresholds()
+                test_cnn_rnn_with_thresholds(binary_classification=True)
             else:
                 print("Testing with thresholds not implemented for CNN+RNN pipeline.")
                 print("Please use the wav2vec2 pipeline for threshold testing.")
+        elif args.mode == "cv":
+            myConfig.training_from_scratch = False
+            print(f"Running {args.folds}-fold cross-validation (CNN+RNN pipeline {feature_text} manual features)...")
+            if has_threshold_functions:
+                # Import cross-validation function
+                from cnn_rnn_train import cross_validate
+                # Run cross-validation with specified number of folds
+                cross_validate(
+                    n_folds=args.folds,
+                    binary_classification=True,
+                    use_prosodic_features=use_manual,
+                    num_epochs=10
+                )
+            else:
+                print("Cross-validation not implemented or available for CNN+RNN pipeline.")
+                print("Please check your installation and make sure the cross_validate function exists.")
         elif args.mode == "hpo":
             if has_threshold_functions:
+                myConfig.training_from_scratch = True
                 print(f"Running hyperparameter optimization with {args.trials} trials (CNN+RNN pipeline {feature_text} manual features)...")
                 run_bayesian_optimization(                     
                     n_trials=args.trials,
+                    binary_classification=True,
                     resume_study=args.resume  # Pass the resume flag
                 )
             else:

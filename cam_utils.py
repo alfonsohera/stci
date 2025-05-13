@@ -238,14 +238,13 @@ def get_model_target_layers(model):
     model_name = model.__class__.__name__
     
     if model_name == "CNN14Classifier":
-        # For CNN14, we need to access the conv layer inside the conv_block6
-        # Conv blocks in PANNs use 'conv1' as the attribute name
-        return model.feature_extractor.conv_block6.conv1
+        # For CNN14, we need to access the last conv layer inside the conv_block6        
+        return model.feature_extractor.conv_block6.conv2
     
     elif model_name == "PretrainedDualPathAudioClassifier":
-        # For PretrainedDualPathAudioClassifier, access the conv layer in conv_block6
-        # Conv blocks in PANNs use 'conv1' as the attribute name
-        return model.cnn_extractor.conv_block6.conv1
+        # For PretrainedDualPathAudioClassifier, access the last conv layer in conv_block6
+        
+        return model.cnn_extractor.conv_block6.conv2
     
     elif model_name == "DualPathAudioClassifier":
         # For DualPathAudioClassifier, use the last convolutional layer in CNN path
@@ -354,15 +353,16 @@ def generate_spectrogram(audio, model, sr=16000):
     return log_mel_spec.numpy()
 
 
-def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
-                  audio_chunks=None, chunk_outputs=None, show_time_domain=False):
+def visualize_cam(audio, model, target_class=None, true_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
+                  audio_chunks=None, chunk_outputs=None, show_time_domain=False, file_path=None):
     """
     Visualize CAM for an audio input, with support for chunked processing
     
     Args:
         audio: Audio tensor or a single chunk of audio 
         model: Model to analyze
-        target_class: Target class for CAM
+        target_class: Target class for CAM generation (typically the predicted class)
+        true_class: True class label for the audio (ground truth)
         save_path: Directory to save visualizations
         audio_id: ID of the audio sample
         correct: Whether prediction is correct
@@ -371,6 +371,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         audio_chunks: Optional list of already chunked audio or audio_id to fetch original audio
         chunk_outputs: Optional list of chunk outputs (logits) from model
         show_time_domain: Whether to display the time-domain representation (waveform) with CAM overlay
+        file_path: Original audio file path (if available)
     """
     # Get model's device
     device = next(model.parameters()).device
@@ -390,52 +391,37 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Get target layer for CAM
     target_layer = get_model_target_layers(model)
     
-    # Check if audio_chunks is just an ID - if so, we need to fetch the complete original audio
-    if isinstance(audio_chunks, str) or isinstance(audio_chunks, int):
+    # Extract a clean display name from file_path or audio_id - do this early so we can use it everywhere
+    display_filename = "Unknown"
+    if file_path:
+        # Extract just the filename without the path
+        display_filename = os.path.basename(file_path)
+    elif audio_id and isinstance(audio_id, str):
+        display_filename = audio_id
+    
+    # Always try to fetch original file path from audio_id if provided
+    # This ensures we get the file path even when audio_chunks is a list
+    if audio_id is not None:
         try:
             # Import the necessary function to fetch original audio
-            from cnn_rnn_data import get_original_audio_by_id, chunk_audio
+            from cnn_rnn_data import get_original_audio_by_id
             
-            print(f"Fetching original audio for ID: {audio_chunks}")
-            full_audio = get_original_audio_by_id(audio_chunks)
+            # Use the audio_id to fetch original file path
+            original_audio_id = str(audio_id)
+            print(f"Fetching original file path for ID: {original_audio_id}")
+            _, original_file_path = get_original_audio_by_id(original_audio_id)
             
-            if full_audio is not None:
-                # Convert to tensor if needed
-                if not isinstance(full_audio, torch.Tensor):
-                    full_audio = torch.tensor(full_audio).float()
-                
-                # Ensure it has batch dimension [1, T] or [1, 1, T]
-                if len(full_audio.shape) == 1:
-                    full_audio = full_audio.unsqueeze(0)
-                    
-                # Move to device
-                full_audio = full_audio.to(device)
-                
-                # Chunk the full audio into 10-second segments
-                chunk_size_seconds = 10
-                sample_rate = 16000
-                
-                # Ensure audio is on CPU before chunking (to avoid device mismatch)
-                full_audio_cpu = full_audio.cpu()
-                
-                # Create chunks from full audio
-                audio_chunks_list = chunk_audio(full_audio_cpu, chunk_size_seconds=chunk_size_seconds, sample_rate=sample_rate)
-                print(f"Created {len(audio_chunks_list)} chunks from original full audio")
-                
-                # Move chunks back to device
-                audio_chunks_list = [chunk.to(device) for chunk in audio_chunks_list]
-            else:
-                # Fallback to the provided audio if we couldn't get the original
-                print(f"Could not fetch original audio for ID: {audio_chunks}, using provided audio chunk")
-                audio_chunks_list = [audio_clone]
-        except ImportError:
-            print("Could not import get_original_audio_by_id, using provided audio chunk")
-            audio_chunks_list = [audio_clone]
-        except Exception as e:
-            print(f"Error fetching original audio: {str(e)}, using provided audio chunk")
-            audio_chunks_list = [audio_clone]
-    # If audio_chunks is already a dictionary with a list for the audio_id key
-    elif isinstance(audio_chunks, dict) and audio_id in audio_chunks and isinstance(audio_chunks[audio_id], list):
+            # If we found an original file path, use it
+            if original_file_path is not None:
+                # Update display_filename and file_path
+                file_path = original_file_path
+                display_filename = os.path.basename(original_file_path)
+                print(f"Found original file: {file_path}")
+        except (ImportError, Exception) as e:
+            print(f"Couldn't fetch original file path for ID {audio_id}: {str(e)}")
+    
+    # Process audio chunks based on their type
+    if isinstance(audio_chunks, dict) and audio_id in audio_chunks and isinstance(audio_chunks[audio_id], list):
         audio_chunks_list = audio_chunks[audio_id]
     # If audio_chunks is already a list of audio chunks
     elif isinstance(audio_chunks, list):
@@ -574,12 +560,23 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Concatenate waveforms
     full_waveform = np.concatenate(all_waveforms)
 
-    # Map class indices to human-readable labels - DEFINE ONLY ONCE
-    class_names = ["Healthy", "MCI", "AD"]
+    # Map class indices to human-readable labels based on model's number of classes
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from the model
+        num_classes = 3
+    
+    if num_classes == 2:
+        # Binary classification
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        # 3-class classification
+        class_names = ["Healthy", "MCI", "AD"]
 
     # Extract the prediction and true class indices from the audio_id if available
     pred_class_idx = actual_pred_class  # Default to actual prediction
-    true_class_idx = target_class if target_class is not None else None  # Default to provided target class
+    true_class_idx = true_class if true_class is not None else None  # Default to provided true class
 
     # If audio_id contains pred and true info (e.g., "11_pred2_true2"), extract them
     if audio_id is not None and 'pred' in audio_id and 'true' in audio_id:
@@ -603,8 +600,10 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         file_id = audio_id  
     else:
         file_id = audio_id if audio_id is not None else f"sample_{actual_pred_class}"
-        if target_class is not None:
-            file_id += f"_pred{actual_pred_class}_true{target_class}"
+        # Use true_class parameter if available, otherwise fall back to target_class
+        actual_true_class = true_class if true_class is not None else target_class
+        if actual_pred_class is not None and actual_true_class is not None:
+            file_id += f"_pred{actual_pred_class}_true{actual_true_class}"
 
     # Handle single-channel vs multi-channel spectrogram
     if len(spectrogram.shape) == 3:
@@ -652,21 +651,28 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     time_labels = [f"{time_sec[i]:.1f}" for i in time_ticks]
     
     # For debugging
-    print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
-    print(f"Time labels: {time_labels}")
-
-    # CHANGE: Create two separate figures instead of one combined figure
+    #print(f"Total chunks: {total_chunks}, Time frames: {time_frames}, Full duration: {total_chunks * chunk_size_seconds}s")
+    #print(f"Time labels: {time_labels}")
     
+    # Extract filename from file_path for display in titles
+    display_filename = "Unknown"
+    if file_path:
+        # Extract just the filename without the path
+        display_filename = os.path.basename(file_path)
+    else:
+        # Try to extract filename from audio_id if possible
+        if audio_id and isinstance(audio_id, str):
+            # Remove any prediction/true label info that might be in audio_id
+            base_id = audio_id.split('_')[0] if '_' in audio_id else audio_id
+            display_filename = f"ID: {base_id}"
+
     # Figure 1: Spectrogram and CAM visualization
     plt.figure(figsize=(12, 9))
     
     # Plot 1: Spectrogram
     plt.subplot(2, 1, 1)
     plt.imshow(spec_for_plot, origin='lower', aspect='auto', cmap='viridis')
-    title = f"Log-Mel Spectrogram\nPred: {pred_label}, True: {true_label}"
-    if target_class is not None:
-        result = "✓" if actual_pred_class == target_class else "✗"
-        title += f" {result}"
+    title = f"Log-Mel Spectrogram - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.ylabel('Frequency (Hz)')
@@ -713,10 +719,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         cam_1d = cam.reshape(-1)
         cam_for_waveform = cam_1d
 
-    title = f"Class Activation Map\nPred: {pred_label}, True: {true_label}" 
-    if target_class is not None:
-        result = "✓" if actual_pred_class == target_class else "✗"
-        title += f" {result}"
+    title = f"Class Activation Map - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}"
     plt.title(title)
     plt.colorbar(format='%+2.0f dB')
     plt.xlabel('Time (seconds)')
@@ -730,23 +733,27 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
     # Define the paths for saving
     spec_cam_path = None
     waveform_cam_path = None
+    html_cam_path = None
     
     # Save spectrogram/CAM visualization if save_path is provided
     if save_path:
         # Initialize base subdirectories
         spec_cam_subdir = 'SpectrogramCAMs'
         waveform_subdir = 'WaveformCAMs'
+        html_subdir = 'InteractiveCAMs'  # New directory for HTML visualizations
         
         # Add epoch to path if provided
         if epoch is not None:
             spec_cam_subdir = os.path.join(f"epoch_{epoch}", spec_cam_subdir)
             waveform_subdir = os.path.join(f"epoch_{epoch}", waveform_subdir)
+            html_subdir = os.path.join(f"epoch_{epoch}", html_subdir)
         
         # Then add correct/incorrect status
         if correct is not None:
             status = "correct" if correct else "incorrect" 
             spec_cam_subdir = os.path.join(spec_cam_subdir, status)
             waveform_subdir = os.path.join(waveform_subdir, status)
+            html_subdir = os.path.join(html_subdir, status)
 
         # Create directories if they don't exist
         os.makedirs(os.path.join(save_path, spec_cam_subdir), exist_ok=True)
@@ -829,7 +836,7 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         # Redraw the waveform on top for better visibility
         plt.plot(waveform_time, waveform_downsampled, color='blue', linewidth=1, zorder=2)
         
-        plt.title(f"Audio Waveform with CAM Overlay\nPred: {pred_label}, True: {true_label}")
+        plt.title(f"Audio Waveform with CAM Overlay - {display_filename}\nPred: {pred_label} ({actual_pred_prob:.4f}), True: {true_label}")
         plt.ylabel('Amplitude')
         plt.xlabel('Time (seconds)')
         plt.grid(alpha=0.3)
@@ -865,6 +872,28 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         # Close the waveform/CAM figure to free memory
         plt.close()
+
+        # Create interactive HTML visualization
+        if save_path:
+            # Create directory for HTML files if it doesn't exist
+            os.makedirs(os.path.join(save_path, html_subdir), exist_ok=True)
+            
+            # Create HTML file path
+            html_cam_path = os.path.join(save_path, html_subdir, f"{file_id}_interactive.html")
+            
+            # Create interactive HTML visualization
+            create_interactive_cam_html(
+                file_id=file_id,
+                waveform=full_waveform,
+                cam=cam_for_waveform,
+                sample_rate=sr,
+                output_path=html_cam_path,
+                pred_label=pred_label,
+                true_label=true_label,
+                pred_prob=actual_pred_prob
+            )
+            
+            print(f"Interactive HTML visualization saved to {html_cam_path}")
     
     # Write to log file - ONLY ONCE
     if save_path and audio_paths_dir:
@@ -874,8 +903,17 @@ def visualize_cam(audio, model, target_class=None, save_path=None, audio_id=None
         
         os.makedirs(audio_paths_dir, exist_ok=True)
         paths_filename = "correct_samples.txt" if correct else "incorrect_samples.txt"
+        
+        # Add the actual file path to the log if available
+        # Use display_filename instead of file_id for more readable logs
+        path_entry = f"{display_filename}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks"
+        # Still include the file_id for reference
+        path_entry += f"\t{file_id}"
+        if file_path:
+            path_entry += f"\t{file_path}"
+            
         with open(os.path.join(audio_paths_dir, paths_filename), 'a') as f:
-            f.write(f"{file_id}\t{pred_label}\t{true_label}\t{actual_pred_prob:.4f}\t{total_chunks}chunks\n")
+            f.write(f"{path_entry}\n")
     
     # Clean up GradCAM
     grad_cam.remove_hooks()
@@ -939,8 +977,8 @@ def debug_model_gradients(model, input_tensor, target_class=0):
             # Create dummy prosodic features if needed
             if hasattr(model, "prosodic_encoder"):
                 # Determine prosodic feature dimension from model
-                if hasattr(model, "prosodic_encoder") and isinstance(self.model.prosodic_encoder, torch.nn.Sequential):
-                    first_layer = next(iter(self.model.prosodic_encoder.children()))
+                if hasattr(model, "prosodic_encoder") and isinstance(model.prosodic_encoder, torch.nn.Sequential):
+                    first_layer = next(iter(model.prosodic_encoder.children()))
                     prosodic_dim = first_layer.in_features if hasattr(first_layer, "in_features") else 4
                 else:
                     prosodic_dim = 4
@@ -980,3 +1018,550 @@ def debug_model_gradients(model, input_tensor, target_class=0):
         print(f"  Mean absolute value: {info['mean']}")
     
     return layer_gradients
+
+
+def create_interactive_cam_html(file_id, waveform, cam, sample_rate=16000, output_path=None, 
+                           pred_label="Unknown", true_label="Unknown", pred_prob=0.0):
+    """
+    Create an interactive HTML visualization of the waveform with CAM overlay and audio playback controls.
+    
+    Args:
+        file_id: Identifier for this audio sample
+        waveform: Audio waveform as numpy array
+        cam: CAM values as numpy array
+        sample_rate: Audio sample rate (default: 16000)
+        output_path: Path to save the HTML file
+        pred_label: Predicted class label
+        true_label: True class label
+        pred_prob: Prediction probability
+        
+    Returns:
+        Path to the HTML file if saved, or None
+    """
+    import base64
+    import io
+    import scipy.io.wavfile
+    import numpy as np
+    import os
+    
+    # Clean up the file_id to get a more readable display name
+    display_name = file_id
+    if isinstance(file_id, str):
+        # Check if file_id is a path and extract just the filename
+        if "/" in file_id or "\\" in file_id:
+            display_name = os.path.basename(file_id)
+        # Remove prediction info from the ID if present
+        elif "_pred" in file_id:
+            display_name = file_id.split("_pred")[0]
+    
+    # Normalize waveform to avoid clipping in audio playback
+    waveform_norm = waveform.copy()
+    max_val = np.max(np.abs(waveform_norm))
+    if max_val > 0:
+        waveform_norm = waveform_norm / max_val * 0.9
+    
+    # Convert waveform to 16-bit PCM
+    waveform_16bit = (waveform_norm * 32767).astype(np.int16)
+    
+    # Create a WAV file in memory
+    wav_buffer = io.BytesIO()
+    scipy.io.wavfile.write(wav_buffer, sample_rate, waveform_16bit)
+    wav_buffer.seek(0)
+    
+    # Encode WAV file to base64
+    wav_base64 = base64.b64encode(wav_buffer.read()).decode('utf-8')
+    
+    # Prepare CAM data - resize to match audio duration for visualization
+    duration = len(waveform) / sample_rate
+    time_points = int(duration * 30)  # 30 points per second (reduced for performance)
+    
+    # Resize CAM to match time points
+    from skimage.transform import resize
+    cam_resized = resize(cam, (time_points,), anti_aliasing=True)
+    
+    # Normalize CAM values for visualization
+    cam_norm = (cam_resized - cam_resized.min()) / (cam_resized.max() - cam_resized.min() + 1e-8)
+    
+    # Convert CAM values to JSON-compatible array
+    cam_list = cam_norm.tolist()
+    
+    # Calculate time points for plotting waveform
+    downsample_factor = max(1, len(waveform) // (time_points * 10))
+    waveform_downsampled = waveform[::downsample_factor]
+    
+    # Generate timestamps
+    time_sec = np.linspace(0, duration, len(waveform_downsampled))
+    
+    # Create data points for waveform
+    waveform_data = []
+    for i in range(len(waveform_downsampled)):
+        waveform_data.append({"time": float(time_sec[i]), "amplitude": float(waveform_downsampled[i])})
+    
+    # HTML template with embedded JavaScript for interactive visualization
+    html_template = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Interactive WaveformCAM - {display_name}</title>
+        <meta charset="UTF-8">
+        <script src="https://d3js.org/d3.v6.min.js"></script>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                background-color: #f8f9fa;
+                color: #333;
+            }}
+            .container {{
+                max-width: 1000px;
+                margin: 0 auto;
+                background-color: white;
+                padding: 20px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                border-radius: 5px;
+            }}
+            h1 {{
+                color: #2c3e50;
+                font-size: 24px;
+                margin-bottom: 5px;
+            }}
+            h2 {{
+                color: #3498db;
+                font-size: 18px;
+                margin-bottom: 20px;
+            }}
+            .info-panel {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                grid-gap: 10px;
+                margin-bottom: 20px;
+            }}
+            .info-item {{
+                background-color: #f0f3f6;
+                padding: 10px;
+                border-radius: 4px;
+            }}
+            .info-label {{
+                font-weight: bold;
+                color: #7f8c8d;
+            }}
+            .controls {{
+                margin: 15px 0;
+                display: flex;
+                align-items: center;
+            }}
+            .play-btn {{
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                width: 40px;
+                height: 40px;
+                font-size: 18px;
+                cursor: pointer;
+                margin-right: 10px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            .play-btn:hover {{
+                background-color: #2980b9;
+            }}
+            .time-display {{
+                margin: 0 10px;
+                font-family: monospace;
+                min-width: 80px;
+            }}
+            .progress-container {{
+                flex-grow: 1;
+                background-color: #ecf0f1;
+                height: 10px;
+                border-radius: 5px;
+                position: relative;
+                cursor: pointer;
+            }}
+            .progress-bar {{
+                height: 100%;
+                background-color: #3498db;
+                border-radius: 5px;
+                width: 0%;
+            }}
+            .progress-marker {{
+                position: absolute;
+                top: -5px;
+                width: 20px;
+                height: 20px;
+                background-color: #3498db;
+                border-radius: 50%;
+                transform: translateX(-50%);
+                display: none;
+            }}
+            .tooltip {{
+                position: absolute;
+                background-color: rgba(44, 62, 80, 0.9);
+                color: white;
+                padding: 5px;
+                border-radius: 3px;
+                font-size: 12px;
+                pointer-events: none;
+                display: none;
+            }}
+            #waveform-container {{
+                position: relative;
+                height: 300px;
+                margin-top: 20px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Interactive WaveformCAM Visualization</h1>
+            <h2>Sample: {display_name}</h2>
+            
+            <div class="info-panel">
+                <div class="info-item">
+                    <div class="info-label">Predicted Class:</div>
+                    <div>{pred_label} ({pred_prob:.4f})</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">True Class:</div>
+                    <div>{true_label}</div>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button id="play-btn" class="play-btn">▶</button>
+                <div class="time-display">0:00 / {duration:.2f}s</div>
+                <div class="progress-container" id="progress-container">
+                    <div class="progress-bar" id="progress-bar"></div>
+                    <div class="progress-marker" id="progress-marker"></div>
+                    <div class="tooltip" id="tooltip"></div>
+                </div>
+            </div>
+            
+            <div id="waveform-container"></div>
+            
+            <audio id="audio-element" style="display: none;">
+                <source src="data:audio/wav;base64,{wav_base64}" type="audio/wav">
+                Your browser does not support the audio element.
+            </audio>
+        </div>
+        
+        <script>
+            // Audio playback functionality
+            const audioElement = document.getElementById('audio-element');
+            const playBtn = document.getElementById('play-btn');
+            const progressBar = document.getElementById('progress-bar');
+            const progressMarker = document.getElementById('progress-marker');
+            const progressContainer = document.getElementById('progress-container');
+            const timeDisplay = document.querySelector('.time-display');
+            const tooltip = document.getElementById('tooltip');
+            
+            // CAM data
+            const camData = {cam_list};
+            
+            // Waveform data
+            const waveformData = {waveform_data};
+            
+            // Format time as mm:ss
+            function formatTime(seconds) {{
+                const mins = Math.floor(seconds / 60).toString().padStart(1, '0');
+                const secs = Math.floor(seconds % 60).toString().padStart(2, '0');
+                return `${{mins}}:${{secs}}`;
+            }}
+            
+            // Toggle play/pause
+            playBtn.addEventListener('click', () => {{
+                if (audioElement.paused) {{
+                    audioElement.play();
+                    playBtn.textContent = '⏸';
+                }} else {{
+                    audioElement.pause();
+                    playBtn.textContent = '▶';
+                }}
+            }});
+            
+            // Update progress bar during playback
+            audioElement.addEventListener('timeupdate', () => {{
+                const progress = (audioElement.currentTime / audioElement.duration) * 100;
+                progressBar.style.width = `${{progress}}%`;
+                progressMarker.style.left = `${{progress}}%`;
+                progressMarker.style.display = 'block';
+                timeDisplay.textContent = `${{formatTime(audioElement.currentTime)}} / ${{formatTime(audioElement.duration)}}`;
+            }});
+            
+            // Reset UI when playback ends
+            audioElement.addEventListener('ended', () => {{
+                playBtn.textContent = '▶';
+                progressMarker.style.display = 'none';
+            }});
+            
+            // Seek functionality when clicking on progress bar
+            progressContainer.addEventListener('click', (e) => {{
+                const rect = progressContainer.getBoundingClientRect();
+                const pos = (e.clientX - rect.left) / rect.width;
+                audioElement.currentTime = pos * audioElement.duration;
+            }});
+            
+            // Show tooltip with CAM value when hovering over progress bar
+            progressContainer.addEventListener('mousemove', (e) => {{
+                const rect = progressContainer.getBoundingClientRect();
+                const pos = (e.clientX - rect.left) / rect.width;
+                const timePos = pos * audioElement.duration;
+                
+                // Find closest CAM value
+                const camIndex = Math.floor(pos * camData.length);
+                const camValue = camData[Math.min(camIndex, camData.length - 1)];
+                
+                tooltip.textContent = `Time: ${{timePos.toFixed(2)}}s | CAM: ${{camValue.toFixed(2)}}`;
+                tooltip.style.left = `${{e.clientX - rect.left}}px`;
+                tooltip.style.top = '-25px';
+                tooltip.style.display = 'block';
+            }});
+            
+            progressContainer.addEventListener('mouseout', () => {{
+                tooltip.style.display = 'none';
+            }});
+            
+            // Draw the waveform with CAM overlay
+            function drawWaveform() {{
+                // Set up SVG container
+                const margin = {{top: 20, right: 20, bottom: 30, left: 40}};
+                const width = document.getElementById('waveform-container').offsetWidth - margin.left - margin.right;
+                const height = document.getElementById('waveform-container').offsetHeight - margin.top - margin.bottom;
+                
+                // Create SVG element
+                const svg = d3.select('#waveform-container')
+                    .append('svg')
+                    .attr('width', width + margin.left + margin.right)
+                    .attr('height', height + margin.top + margin.bottom)
+                    .append('g')
+                    .attr('transform', `translate(${{margin.left}},${{margin.top}})`);
+                
+                // Set up scales
+                const xScale = d3.scaleLinear()
+                    .domain([0, d3.max(waveformData, d => d.time)])
+                    .range([0, width]);
+                
+                const yScale = d3.scaleLinear()
+                    .domain([-1, 1])
+                    .range([height, 0]);
+                
+                // Create color scale for CAM values
+                const colorScale = d3.scaleSequential()
+                    .domain([0, 1])
+                    .interpolator(d3.interpolateInferno);
+                
+                // Draw x-axis
+                svg.append('g')
+                    .attr('transform', `translate(0,${{height/2}}`)
+                    .call(d3.axisBottom(xScale).ticks(10).tickFormat(d => d.toFixed(1) + 's'));
+                
+                // Group data points for visualization
+                const bins = Math.min(300, waveformData.length);
+                const binSize = waveformData.length / bins;
+                
+                // Prepare data for area path
+                const areaData = [];
+                for (let i = 0; i < bins; i++) {{
+                    const startIdx = Math.floor(i * binSize);
+                    const endIdx = Math.floor((i + 1) * binSize);
+                    const binData = waveformData.slice(startIdx, endIdx);
+                    
+                    if (binData.length > 0) {{
+                        const time = binData[0].time;
+                        const maxAmp = d3.max(binData, d => d.amplitude);
+                        const minAmp = d3.min(binData, d => d.amplitude);
+                        
+                        // Find CAM value for this time point
+                        const camIdx = Math.floor((time / d3.max(waveformData, d => d.time)) * camData.length);
+                        const camValue = camData[Math.min(camIdx, camData.length - 1)];
+                        
+                        areaData.push({{
+                            time: time,
+                            max: maxAmp,
+                            min: minAmp,
+                            cam: camValue
+                        }});
+                    }}
+                }}
+                
+                // Create a clip path for the waveform area
+                svg.append("defs").append("clipPath")
+                    .attr("id", "clip")
+                    .append("rect")
+                    .attr("width", width)
+                    .attr("height", height);
+                
+                // Define the line function that was missing
+                const line = d3.line()
+                    .x(d => xScale(d.time))
+                    .y(d => yScale(d.amplitude))
+                    .curve(d3.curveLinear);
+                
+                // Draw waveform with CAM coloring
+                // First draw a subtle background waveform
+                svg.append('path')
+                    .datum(waveformData)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#cccccc')
+                    .attr('stroke-width', 1.5)
+                    .attr('d', line)
+                    .attr('clip-path', 'url(#clip)');
+                
+                // Then draw the CAM overlay segments with higher opacity
+                for (let i = 0; i < areaData.length - 1; i++) {{
+                    const d1 = areaData[i];
+                    const d2 = areaData[i + 1];
+                    
+                    // Use CAM value to determine color
+                    const fillColor = colorScale(d1.cam);
+                    
+                    // Calculate y-positions considering amplitude
+                    const y1 = yScale(d1.min);
+                    const y2 = yScale(d1.max);
+                    const y3 = yScale(d2.max);
+                    const y4 = yScale(d2.min);
+                    
+                    // Create a polygon for this segment - now with higher opacity
+                    svg.append('polygon')
+                        .attr('points', `
+                            ${{xScale(d1.time)}},${{y1}}
+                            ${{xScale(d1.time)}},${{y2}}
+                            ${{xScale(d2.time)}},${{y3}}
+                            ${{xScale(d2.time)}},${{y4}}
+                        `)
+                        .attr('fill', fillColor)
+                        .attr('opacity', 0.5 + d1.cam * 0.5) // Higher opacity based on CAM value
+                        .attr('stroke', fillColor)
+                        .attr('stroke-opacity', 0.7)
+                        .attr('stroke-width', 0.5);
+                }}
+                
+                // Draw amplitude envelope (optional for better visualization)
+                const upperEnvelope = d3.line()
+                    .x(d => xScale(d.time))
+                    .y(d => yScale(d.max))
+                    .curve(d3.curveLinear);
+                
+                const lowerEnvelope = d3.line()
+                    .x(d => xScale(d.time))
+                    .y(d => yScale(d.min))
+                    .curve(d3.curveLinear);
+                
+                svg.append('path')
+                    .datum(areaData)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#0066cc')
+                    .attr('stroke-width', 0.7)
+                    .attr('stroke-opacity', 0.6)
+                    .attr('d', upperEnvelope);
+                
+                svg.append('path')
+                    .datum(areaData)
+                    .attr('fill', 'none')
+                    .attr('stroke', '#0066cc')
+                    .attr('stroke-width', 0.7)
+                    .attr('stroke-opacity', 0.6)
+                    .attr('d', lowerEnvelope);
+                
+                // Create a playback position indicator line
+                const playbackLine = svg.append('line')
+                    .attr('x1', 0)
+                    .attr('x2', 0)
+                    .attr('y1', 0)
+                    .attr('y2', height)
+                    .attr('stroke', 'red')
+                    .attr('stroke-width', 2)
+                    .attr('display', 'none');
+                
+                // Update playback line position during audio playback
+                audioElement.addEventListener('timeupdate', () => {{
+                    const position = xScale(audioElement.currentTime);
+                    playbackLine.attr('x1', position)
+                        .attr('x2', position)
+                        .attr('display', 'block');
+                }});
+                
+                // Hide playback line when audio ends
+                audioElement.addEventListener('ended', () => {{
+                    playbackLine.attr('display', 'none');
+                }});
+                
+                // Add color legend
+                const legendWidth = 200;
+                const legendHeight = 15;
+                
+                const legendX = width - legendWidth - margin.right;
+                const legendY = height - legendHeight - 10;
+                
+                // Create gradient
+                const defs = svg.append('defs');
+                const gradient = defs.append('linearGradient')
+                    .attr('id', 'cam-gradient')
+                    .attr('x1', '0%')
+                    .attr('x2', '100%')
+                    .attr('y1', '0%')
+                    .attr('y2', '0%');
+                
+                // Add color stops
+                const stops = 10;
+                for (let i = 0; i <= stops; i++) {{
+                    gradient.append('stop')
+                        .attr('offset', `${{i/stops * 100}}%`)
+                        .attr('stop-color', colorScale(i/stops));
+                }}
+                
+                // Draw legend rectangle
+                svg.append('rect')
+                    .attr('x', legendX)
+                    .attr('y', legendY)
+                    .attr('width', legendWidth)
+                    .attr('height', legendHeight)
+                    .style('fill', 'url(#cam-gradient)');
+                
+                // Add legend title
+                svg.append('text')
+                    .attr('x', legendX + legendWidth / 2)
+                    .attr('y', legendY - 5)
+                    .attr('text-anchor', 'middle')
+                    .style('font-size', '12px')
+                    .text('CAM Activation');
+                
+                // Add legend ticks
+                svg.append('text')
+                    .attr('x', legendX)
+                    .attr('y', legendY + legendHeight + 15)
+                    .attr('text-anchor', 'start')
+                    .style('font-size', '10px')
+                    .text('Low');
+                
+                svg.append('text')
+                    .attr('x', legendX + legendWidth)
+                    .attr('y', legendY + legendHeight + 15)
+                    .attr('text-anchor', 'end')
+                    .style('font-size', '10px')
+                    .text('High');
+            }}
+            
+            // Initialize the visualization when the page loads
+            window.addEventListener('load', drawWaveform);
+        </script>
+    </body>
+    </html>
+    """
+    
+    if output_path:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Save HTML file
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_template)
+        
+        return output_path
+    
+    return None

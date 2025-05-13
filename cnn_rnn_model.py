@@ -220,15 +220,20 @@ class CNN14Classifier(nn.Module):
 
 
 class PretrainedDualPathAudioClassifier(nn.Module):
-    def __init__(self, num_classes=3, sample_rate=16000, n_mels=128, 
+    def __init__(self, num_classes=2, sample_rate=16000, n_mels=128, 
                  apply_specaugment=False, use_prosodic_features=True, 
                  prosodic_feature_dim=4, pretrained_cnn14_path=None,
-                 attention_dropout=0.3, fusion_dropout=0.4, prosodic_weight=1.0):
+                 attention_dropout=None, fusion_dropout=None, prosodic_weight=None):
         super(PretrainedDualPathAudioClassifier, self).__init__()
         self.sample_rate = sample_rate
         self.n_mels = n_mels
         self.apply_specaugment = apply_specaugment
-        self.prosodic_weight = prosodic_weight
+        
+        # Use values from centralized config if not explicitly provided
+        import myConfig
+        self.attention_dropout = attention_dropout if attention_dropout is not None else myConfig.cnn_rnn_hyperparams["attention_dropout"]
+        self.fusion_dropout = fusion_dropout if fusion_dropout is not None else myConfig.cnn_rnn_hyperparams["fusion_dropout"] 
+        self.prosodic_weight = prosodic_weight if prosodic_weight is not None else myConfig.cnn_rnn_hyperparams["prosodic_weight"]
                 
         # SpecAugment for data augmentation during training
         if apply_specaugment:
@@ -250,11 +255,6 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         print(f"Trying to load CNN14 weights from {pretrained_cnn14_path}")
         checkpoint = torch.load(pretrained_cnn14_path, map_location='cpu')
         self.cnn_extractor.load_state_dict(checkpoint['model'])
-        
-        
-        # Freeze CNN14 weights for transfer learning
-        for param in self.cnn_extractor.parameters():
-            param.requires_grad = False
             
         # CNN feature dimension adapter (CNN14 outputs 2048-dim embeddings)
         self.cnn_adapter = nn.Sequential(
@@ -271,14 +271,16 @@ class PretrainedDualPathAudioClassifier(nn.Module):
         
         # Self-attention layers        
         self.attention_layers = nn.ModuleList([
-            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=attention_dropout)  
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=self.attention_dropout),
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=self.attention_dropout),
+            ImprovedSelfAttention(embed_dim=32, num_heads=4, dropout=self.attention_dropout)  
         ])
         
         # Attention output processing
         self.attention_pooling = nn.Sequential(
             nn.Linear(32, 256),
             nn.ReLU(),
-            nn.Dropout(attention_dropout)  
+            nn.Dropout(self.attention_dropout)  
         )
         
         # Add prosodic feature processing
@@ -303,28 +305,36 @@ class PretrainedDualPathAudioClassifier(nn.Module):
             # Modified fusion to include prosodic features
             # Fusion layers - increase dropout
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256 + 128 + 32, 384),
-                nn.LayerNorm(384),
+                nn.Linear(256 + 256 + 128 + 32, 512),  # Wider
+                nn.LayerNorm(512),
                 nn.ReLU(),
-                nn.Dropout(fusion_dropout),  # Use configurable dropout
-                nn.Linear(384, 128),
+                nn.Dropout(self.fusion_dropout),
+                nn.Linear(512, 256),  # Deeper
+                nn.LayerNorm(256),
                 nn.ReLU(),
-                nn.Dropout(fusion_dropout)   # Use configurable dropout
+                nn.Dropout(self.fusion_dropout),
+                nn.Linear(256, 128),
+                nn.ReLU(),
+                nn.Dropout(0.5)
             )
         else:
             # Fusion layer (CNN features + Attention features)
             self.fusion = nn.Sequential(
-                nn.Linear(256 + 256, 256),  # CNN (256) + Attention (256)
+                nn.Linear(256 + 256, 512),  # CNN (256) + Attention (256)
+                nn.LayerNorm(512),
+                nn.ReLU(),
+                nn.Dropout(self.fusion_dropout),
+                nn.Linear(512, 256),  # Deeper
                 nn.LayerNorm(256),
                 nn.ReLU(),
-                nn.Dropout(0.3),
+                nn.Dropout(self.fusion_dropout),
                 nn.Linear(256, 128),
                 nn.ReLU(),
-                nn.Dropout(0.4)
+                nn.Dropout(0.5)
             )
 
         # Separate classifier layer
-        self.classifier = nn.Linear(128, num_classes)
+        self.classifier = nn.utils.weight_norm(nn.Linear(128, num_classes))
         
         # Pre-initialize device tracking to avoid device checks at runtime
         self._device = None

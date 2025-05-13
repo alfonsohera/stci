@@ -66,12 +66,54 @@ selected_features = [
 "shimmer_local", "skewness", "centre_of_gravity", "wer"
 ]
 num_extracted_features = len(selected_features)
+
+
+
+# CNN-RNN model hyperparameters  - enabled when training from scratch
+cnn_rnn_hyperparams = {
+    # Core training hyperparameters
+    "max_lr": 0.0007701929128195916,
+    "focal_loss_gamma": 1.6403510582650866,
+    "label_smoothing": 0.12434400610343388,
+    "weight_scaling_factor": 0.5622340614373624,
+    "weight_decay": 5.158226584045704e-05,
+    "pct_start": 0.1398795425157636,
+    "div_factor": 25.921562187648835,
+    "final_div_factor": 235.94713285006821,
+    
+    # Model-specific hyperparameters
+    "attention_dropout":0.3066950753717451,
+    "fusion_dropout": 0.15979022646422386,
+    "prosodic_weight": 1.789349449205332,
+    "learning_rate_cnn": 0.0008128821383735566,
+    "weight_decay_cnn": 0.0008987524750721325
+}
+
+# fine tuning hyperparameters
+""" cnn_rnn_hyperparams = {
+    # Core training hyperparameters
+    "max_lr": 0.0008824227362416752 /5,
+    "focal_loss_gamma": 1.521142890255866,
+    "weight_scaling_factor": 0.4249448142616835,
+    "weight_decay": 0.0000498211421162107 *2,
+    "pct_start": 0.25,
+    "div_factor": 10,
+    "final_div_factor": 100,
+    
+    # Model-specific hyperparameters
+    "attention_dropout":min(0.25621088666940683 +0.05, 0.5),
+    "fusion_dropout": min(0.20308767414437037 +0.5, 0.5),
+    "prosodic_weight": 1.9759278817295955,
+    "learning_rate_cnn": 0.00005141766390109778 /5,
+    "weight_decay_cnn": 0.0003248192869770287 *1.5
+} """
+
 ## Definitions needed for the weighted cross entropy loss function
 #Sample weights calculations to compensate for imbalancedd dataset
 num_samples_per_class = {
-    0: 197,  # Healthy (HC)
-    1: 90,   # MCI
-    2: 74    # AD
+    0: 137,  # Healthy (HC)
+    1: 75,   # MCI
+    2: 64    # AD
 }
 
 # Color mapping for visualization

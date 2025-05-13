@@ -2,9 +2,11 @@ import os
 import torch
 import numpy as np
 import wandb
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, matthews_corrcoef, precision_score, recall_score, roc_curve, auc
 from tqdm import tqdm
 import gc
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Local imports
 import myConfig
@@ -42,14 +44,15 @@ class WandbCallback:
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, weight=None):
+    def __init__(self, gamma=2.0, weight=None, label_smoothing=0.0):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.weight = weight
+        self.label_smoothing = label_smoothing
         
     def forward(self, input, target):
         # Compute cross entropy with class weights if provided
-        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight)
+        ce_loss = F.cross_entropy(input, target, reduction='none', weight=self.weight, label_smoothing=self.label_smoothing)
         # Get prediction probabilities
         pt = torch.exp(-ce_loss)
         # Apply focal weighting
@@ -219,10 +222,17 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
     audio_labels = {}
     audio_tensors = {} # Store audio tensors for CAM visualization
     
-    # Counters for CAM visualization
+    # Dynamically determine number of classes for CAM visualization
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from model
+        num_classes = 3
+    
+    # Counters for CAM visualization - dynamically created based on number of classes
     cam_counters = {
-        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
-        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+        'correct': {i: 0 for i in range(num_classes)},    # Counts by class
+        'incorrect': {i: 0 for i in range(num_classes)}   # Counts by class
     }
     
     with torch.inference_mode():
@@ -313,29 +323,27 @@ def evaluate(model, val_loader, criterion, device, use_cam=False, cam_output_dir
                 # Check if prediction is correct
                 is_correct = pred_class == true_class
                 status = 'correct' if is_correct else 'incorrect'
-
-                # If we haven't reached the maximum samples for this class and outcome
+                
+                # If we haven't reached max samples for this class/outcome
                 if cam_counters[status][true_class] < max_cam_samples:
-                    # For incorrect predictions, use pred_class to visualize what the model actually saw
-                    target_for_cam = pred_class if not is_correct else true_class
-
-                    # Now we're passing all collected audio chunks for this ID
+                    # Now we're passing all collected audio chunks
                     print(f"Processing CAM for audio_id: {audio_id} with {len(chunk_outputs)} chunks")
                     print(f"Number of audio chunks collected: {len(audio_tensors[audio_id])}")
                     
                     # Get first chunk as reference, but pass all chunks
                     first_chunk = audio_tensors[audio_id][0]
                     
+                    # Generate CAM visualization - pass both pred_class and true_class
                     visualize_cam(
-                        audio=first_chunk,  # Pass the first chunk for reference
+                        audio=first_chunk,
                         model=model,
-                        target_class=target_for_cam,
+                        target_class=pred_class,  # Pass the predicted class for CAM generation
+                        true_class=true_class,    # Pass the true class separately
                         save_path=cam_output_dir,
-                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        audio_id=audio_id,  # Pass the original audio_id directly without formatting
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
-                        epoch=epoch,
-                        audio_chunks=audio_tensors[audio_id],  # Pass all collected chunks
+                        audio_chunks=audio_tensors[audio_id],
                         chunk_outputs=chunk_outputs,
                         show_time_domain=True  # Enable time-domain visualization
                     )
@@ -367,18 +375,39 @@ def process_batch_for_cam(model, batch, preds, cam_output_dir, cam_counters, max
             audio = batch["audio"][i:i+1]  # Keep batch dimension
             
             # Generate CAM
-            audio_id = f"eval_sample_{i}"
-            if "audio_id" in batch and batch["audio_id"] is not None:
-                audio_id = batch["audio_id"][i]
+            audio_id = batch["audio_id"][i] if "audio_id" in batch and batch["audio_id"] is not None else f"eval_sample_{i}"
+                
+            # Get file path if available - improved file path extraction
+            file_path = None
+            
+            # Try all possible locations where file path might be stored
+            if "file_path" in batch:
+                # Check if it's a list or a single value
+                if isinstance(batch["file_path"], list):
+                    if i < len(batch["file_path"]):
+                        file_path = batch["file_path"][i]
+                else:
+                    file_path = batch["file_path"]
+            
+            # Try plural version 'file_paths'
+            elif "file_paths" in batch:
+                if isinstance(batch["file_paths"], list):
+                    if i < len(batch["file_paths"]):
+                        file_path = batch["file_paths"][i]
+                else:
+                    file_path = batch["file_paths"]
+                    
+            print(f"Found file path for sample {i}: {file_path}")
             
             visualize_cam(
                 audio=audio,
                 model=model,
                 target_class=target_for_cam,  # Use prediction for incorrect samples
                 save_path=cam_output_dir,
-                audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",  # Clear filename
+                audio_id=audio_id,  # Pass the original audio_id directly
                 correct=is_correct,
                 audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
+                file_path=file_path,  # Pass the original file path
                 show_time_domain=True  # Enable time-domain visualization
             )
             
@@ -391,23 +420,29 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     from sklearn.utils.class_weight import compute_class_weight
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # From HPO:        
-    hpo_max_lr = 0.0010831279442946378
-    hpo_focal_loss_gamma = 1.2214471854780586
-    hpo_weight_scaling_factor = 0.42877749204715
-    hpo_weight_decay = 6.754417251186016e-05
-    hpo_pct_start = 0.24140038998213117
-    hpo_div_factor = 26.312388937073905
-    hpo_final_div_factor = 294.73021118648194
-
+    # From centralized hyperparameters in myConfig
+    hpo_max_lr = myConfig.cnn_rnn_hyperparams["max_lr"]
+    hpo_focal_loss_gamma = myConfig.cnn_rnn_hyperparams["focal_loss_gamma"]
+    hpo_weight_scaling_factor = myConfig.cnn_rnn_hyperparams["weight_scaling_factor"]
+    hpo_weight_decay = myConfig.cnn_rnn_hyperparams["weight_decay"]
+    hpo_pct_start = myConfig.cnn_rnn_hyperparams["pct_start"]
+    hpo_div_factor = myConfig.cnn_rnn_hyperparams["div_factor"]
+    hpo_final_div_factor = myConfig.cnn_rnn_hyperparams["final_div_factor"]
+    hpo_weight_decay_cnn = myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
+    hpo_learning_rate_cnn = myConfig.cnn_rnn_hyperparams["learning_rate_cnn"]
     # Initialize wandb
     if not wandb.run:
+        # Determine if we're doing binary or multi-class classification
+        num_classes = model.classifier.out_features if hasattr(model, 'classifier') else 3
+        model_type = "CNN+RNN-Binary" if num_classes == 2 else "CNN+RNN"
+        
         wandb.init(
             project=myConfig.wandb_project,
             entity=myConfig.wandb_entity,
             name="cnn_rnn",
             config={
-                "model_type": "CNN+RNN",
+                "model_type": model_type,
+                "num_classes": num_classes,
                 "learning_rate": hpo_max_lr,
                 "epochs": num_epochs,
                 "batch_size": 96,
@@ -419,9 +454,23 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         if myConfig.wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
 
+    # Determine number of classes from model
+    num_classes = model.classifier.out_features if hasattr(model, 'classifier') else 3
+    
     # Calculate class weights with scaling factor
-    classes = np.array([0, 1, 2])  
-    class_counts = myConfig.num_samples_per_class
+    if num_classes == 2:
+        # Binary classification (Healthy vs Non-Healthy)
+        classes = np.array([0, 1])
+        # Adapt class counts for binary classification
+        class_counts = {
+            0: myConfig.num_samples_per_class.get(0, 0),  # Healthy
+            1: myConfig.num_samples_per_class.get(1, 0) + myConfig.num_samples_per_class.get(2, 0)  # MCI + AD
+        }
+    else:
+        # Original 3-class classification
+        classes = np.array([0, 1, 2])  
+        class_counts = myConfig.num_samples_per_class
+    
     y = np.array([])
     # Create array with labels based on known counts
     for class_id, count in class_counts.items():
@@ -435,24 +484,36 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
     # Convert to tensor
     weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
     # Set up the loss function with class weighting
-    criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+    criterion = FocalLoss(gamma=0, weight=None, label_smoothing=0.12)
         
     model.to(device)
 
-    # Set up the optimizer with proper hyperparameters    
+    cnn_params = []
+    other_params = []
+
+    # Group parameters for different learning rates
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if "cnn_extractor" in name:
+                cnn_params.append(param)
+            else:
+                other_params.append(param)
+
+    # Set up the optimizer with parameter groups
     initial_lr = hpo_max_lr / hpo_div_factor
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=initial_lr,
-        weight_decay=hpo_weight_decay,  # L2 regularization
-    )
+    cnn_lr = hpo_learning_rate_cnn / hpo_div_factor 
+
+    optimizer = torch.optim.AdamW([
+        {'params': cnn_params, 'lr': cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
+        {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+    ])
 
     total_steps = len(dataloaders["train"]) * num_epochs
     
     # Create scheduler with optimized hyperparameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=hpo_max_lr,
+        max_lr=[cnn_lr, hpo_max_lr], # 10x lower for CNN14 layers
         total_steps=total_steps,
         pct_start=hpo_pct_start,
         div_factor=hpo_div_factor,
@@ -461,9 +522,12 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         three_phase=False
     )    
     
-   
     # Create output directory for CNN+RNN model
     cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn")
+    if num_classes == 2:
+        # For binary classification, use a different output directory
+        cnn_rnn_output_dir = os.path.join(myConfig.training_args.output_dir, "cnn_rnn_binary")
+    
     os.makedirs(cnn_rnn_output_dir, exist_ok=True)
     
     # Tracking variables
@@ -491,9 +555,9 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             dataloaders["validation"], 
             criterion, 
             device,
-            use_cam=True,                                      # Enable CAM visualization
-            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
-            max_cam_samples=10,                                 # Max samples per class/outcome
+            use_cam=False,  # Always disable CAM during training
+            cam_output_dir=None,  # Don't even pass output directory
+            max_cam_samples=0,  # No samples
             epoch=epoch
         )
                        
@@ -507,8 +571,11 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
         # Generate confusion matrix
         cm = confusion_matrix(all_labels, all_preds)
         
-        # Calculate class-specific metrics
-        class_names = ["healthy", "mci", "ad"]
+        # Set class names based on number of classes
+        if num_classes == 2:
+            class_names = ["healthy", "non-healthy"]
+        else:
+            class_names = ["healthy", "mci", "ad"]
         
         # Calculate per-class metrics
         log_dict = {
@@ -517,7 +584,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             "val_loss": avg_val_loss,
             "val_accuracy": val_accuracy,
             "val_f1_macro": val_f1_macro,
-            "learning_rate": scheduler.get_last_lr()[0]
+            "learning_rate": scheduler.get_last_lr()[1]
         }
         
         # Compute class-specific metrics
@@ -572,15 +639,6 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
             model_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.pt")
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
-            
-            """ # Also save in safetensors format if available
-            try:
-                from safetensors.torch import save_file
-                safetensors_path = os.path.join(cnn_rnn_output_dir, "cnn_rnn_best.safetensors")
-                save_file(model.state_dict(), safetensors_path)
-                print(f"  Also saved model in safetensors format to {safetensors_path}")
-            except ImportError:
-                print("  safetensors not available, skipping safetensors format") """
     
     # End of training, log best model if enabled    
     if wandb.run:
@@ -597,7 +655,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                     type="model",
                     description=f"Best CNN+RNN model with F1-macro={best_f1_macro:.4f}"
                 )
-                artifact.add_file(model_path, name="model.pt")
+                #artifact.add_file(model_path, name="model.pt")
                 
                 if os.path.exists(safetensors_path):
                     artifact.add_file(safetensors_path, name="model.safetensors")
@@ -605,7 +663,7 @@ def train_cnn_rnn_model(model, dataloaders, num_epochs=10):
                 wandb.log_artifact(artifact)
 
 
-def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=10):
+def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_cam_samples=20):
     """
     Test the CNN+RNN model on the test set with optional CAM visualization.
     
@@ -625,25 +683,29 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     
     all_preds = []
     all_labels = []
+    all_probs = []  # Store probabilities for ROC curves
     
     # Dictionary to track chunks by audio_id
     audio_chunks = {}
     audio_labels = {}
     audio_tensors = {}  # Store audio tensors for CAM visualization
     
-    # Counters for CAM visualization
+    # Dynamically determine number of classes for CAM visualization
+    if hasattr(model, 'classifier') and hasattr(model.classifier, 'out_features'):
+        num_classes = model.classifier.out_features
+    else:
+        # Default to 3 classes if we can't determine from model
+        num_classes = 3
+    
+    # Counters for CAM visualization - dynamically created based on number of classes
     cam_counters = {
-        'correct': {0: 0, 1: 0, 2: 0},  # Counts by class
-        'incorrect': {0: 0, 1: 0, 2: 0}  # Counts by class
+        'correct': {i: 0 for i in range(num_classes)},    # Counts by class
+        'incorrect': {i: 0 for i in range(num_classes)}   # Counts by class
     }
     
     # Create output directories if needed
     if use_cam and cam_output_dir:
         os.makedirs(cam_output_dir, exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'correct'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'LogMelSpecs', 'incorrect'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'correct'), exist_ok=True)
-        os.makedirs(os.path.join(cam_output_dir, 'CAMs', 'incorrect'), exist_ok=True)
         os.makedirs(os.path.join(cam_output_dir, 'audio_paths'), exist_ok=True)
     
     with torch.inference_mode():
@@ -662,6 +724,10 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                     prosodic_features=batch.get("prosodic_features", None),
                     chunk_context=batch.get("chunk_context", None)
                 )
+                
+                # Get class probabilities for ROC curve
+                probs = torch.softmax(logits, dim=-1)
+                all_probs.append(probs.cpu().numpy())
                 
                 preds = torch.argmax(logits, dim=-1)
                 all_preds.extend(preds.cpu().numpy())
@@ -713,6 +779,10 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
             all_preds.append(pred.cpu().numpy())
             all_labels.append(label.cpu().numpy())
             
+            # Get probabilities for ROC curve
+            probs = torch.softmax(aggregated_output, dim=-1)
+            all_probs.append(probs.cpu().numpy().reshape(1, -1))
+            
             # Process CAM for chunked audio
             if use_cam and cam_output_dir and audio_id in audio_tensors:
                 true_class = label.item()
@@ -721,7 +791,6 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                 # Check if prediction is correct
                 is_correct = pred_class == true_class
                 status = 'correct' if is_correct else 'incorrect'
-                target_for_cam = pred_class if not is_correct else true_class
                 
                 # If we haven't reached max samples for this class/outcome
                 if cam_counters[status][true_class] < max_cam_samples:
@@ -732,13 +801,14 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
                     # Get first chunk as reference, but pass all chunks
                     first_chunk = audio_tensors[audio_id][0]
                     
-                    # Generate CAM visualization
+                    # Generate CAM visualization - pass both pred_class and true_class
                     visualize_cam(
                         audio=first_chunk,
                         model=model,
-                        target_class=target_for_cam,
+                        target_class=pred_class,  # Pass the predicted class for CAM generation
+                        true_class=true_class,    # Pass the true class separately
                         save_path=cam_output_dir,
-                        audio_id=f"{audio_id}_pred{pred_class}_true{true_class}",
+                        audio_id=audio_id,  # Pass the original audio_id directly without formatting
                         correct=is_correct,
                         audio_paths_dir=os.path.join(cam_output_dir, "audio_paths"),
                         audio_chunks=audio_tensors[audio_id],
@@ -751,10 +821,12 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
     
     # Calculate metrics
     test_accuracy = accuracy_score(all_labels, all_preds)
+    if num_classes == 2:
+        class_names = ["Healthy", "Not Healthy"]
+    else:
+        class_names = ["Healthy", "MCI", "AD"]                
     report = classification_report(
-        all_labels, all_preds, target_names=["Healthy", "MCI", "AD"]
-    )
-    
+            all_labels, all_preds, target_names=class_names)
     print(f"Test Accuracy: {test_accuracy:.4f}")
     print("Classification Report:")
     print(report)
@@ -765,38 +837,146 @@ def test_cnn_rnn_model(model, test_loader, use_cam=False, cam_output_dir=None, m
         for status in ['correct', 'incorrect']:
             print(f"  {status.capitalize()} predictions:")
             for class_id, count in cam_counters[status].items():
-                class_name = ["Healthy", "MCI", "AD"][class_id]
+                class_name = class_names[class_id]
                 print(f"    Class {class_name}: {count} samples")
         print(f"\nVisualizations saved to {cam_output_dir}")
+    
+    # Generate ROC curves if we have probability data
+    if all_probs:
+        # Convert all_probs to numpy array
+        all_probs = np.vstack(all_probs)
+        
+        # Create output directory for visualizations
+        viz_output_dir = cam_output_dir if cam_output_dir else os.path.join(myConfig.OUTPUT_PATH, "test_visualizations")
+        os.makedirs(viz_output_dir, exist_ok=True)
+        
+        # Generate confusion matrix visualization
+        plt.figure(figsize=(10, 8))
+        cm = confusion_matrix(all_labels, all_preds)
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", 
+                  xticklabels=class_names, yticklabels=class_names)
+        plt.xlabel("Predicted labels")
+        plt.ylabel("True labels")
+        plt.title("Confusion Matrix (Test Set)")
+        plt.savefig(os.path.join(viz_output_dir, "test_confusion_matrix.png"))
+        plt.close()
+        
+        # Plot ROC curves for each class
+        plt.figure(figsize=(10, 8))
+        
+        # Colors for different classes
+        colors = ['blue', 'red', 'green', 'orange', 'purple']
+        
+        # For each class, compute ROC curve and AUC
+        for i, class_name in enumerate(class_names):
+            # Binarize the labels for current class (one-vs-rest)
+            bin_labels = (np.array(all_labels) == i).astype(int)
+            
+            # Get probability scores for current class
+            class_probs = all_probs[:, i]
+            
+            # Compute ROC curve and AUC
+            fpr, tpr, _ = roc_curve(bin_labels, class_probs)
+            roc_auc = auc(fpr, tpr)
+            
+            # Plot ROC curve
+            plt.plot(fpr, tpr, lw=2, color=colors[i % len(colors)],
+                     label=f'{class_name} (AUC = {roc_auc:.2f})')
+        
+        # Plot diagonal line (random classifier)
+        plt.plot([0, 1], [0, 1], 'k--', lw=2)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC) Curves')
+        plt.legend(loc="lower right")
+        plt.grid(True)
+        
+        # Save the plot
+        roc_curve_path = os.path.join(viz_output_dir, "roc_curves.png")
+        plt.savefig(roc_curve_path)
+        plt.close()
+        
+        print(f"\nROC curves saved to: {roc_curve_path}")
+        
+        # If multiclass (more than 2 classes), also create micro-average and macro-average ROC curves
+        if len(class_names) > 2:
+            plt.figure(figsize=(10, 8))
+            
+            # Compute micro-average ROC curve and AUC
+            # Flatten predictions and labels
+            all_labels_bin = []
+            all_probs_bin = []
+            
+            for i in range(len(class_names)):
+                bin_labels = (np.array(all_labels) == i).astype(int)
+                all_labels_bin.extend(bin_labels)
+                all_probs_bin.extend(all_probs[:, i])
+            
+            # Compute micro-average ROC curve and AUC
+            fpr_micro, tpr_micro, _ = roc_curve(all_labels_bin, all_probs_bin)
+            roc_auc_micro = auc(fpr_micro, tpr_micro)
+            plt.plot(fpr_micro, tpr_micro, 'b-', lw=2,
+                    label=f'Micro-average (AUC = {roc_auc_micro:.2f})')
+            
+            # Compute macro-average ROC curve and AUC
+            # First aggregate all false positive rates
+            all_fpr = np.unique(np.concatenate([fpr for i, (fpr, _, _) in 
+                                              enumerate([roc_curve((np.array(all_labels) == i).astype(int), 
+                                                                 all_probs[:, i]) for i in range(len(class_names))])]))
+            
+            # Then interpolate all ROC curves at these points
+            mean_tpr = np.zeros_like(all_fpr)
+            for i in range(len(class_names)):
+                bin_labels = (np.array(all_labels) == i).astype(int)
+                fpr, tpr, _ = roc_curve(bin_labels, all_probs[:, i])
+                mean_tpr += np.interp(all_fpr, fpr, tpr)
+            
+            # Average and compute AUC
+            mean_tpr /= len(class_names)
+            roc_auc_macro = auc(all_fpr, mean_tpr)
+            plt.plot(all_fpr, mean_tpr, 'r-', lw=2,
+                    label=f'Macro-average (AUC = {roc_auc_macro:.2f})')
+            
+            # Plot diagonal line
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Micro and Macro Average ROC Curves')
+            plt.legend(loc="lower right")
+            plt.grid(True)
+            
+            # Save the plot
+            avg_roc_curve_path = os.path.join(viz_output_dir, "average_roc_curves.png")
+            plt.savefig(avg_roc_curve_path)
+            plt.close()
+            
+            print(f"Average ROC curves saved to: {avg_roc_curve_path}")
     
     return test_accuracy, all_preds, all_labels
 
 
-def main_cnn_rnn(use_prosodic_features=False):
-    """Main function for the CNN+RNN pipeline."""
+def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
+    """Main function for the CNN+RNN pipeline.
+    
+    Args:
+        use_prosodic_features: Whether to use prosodic features
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """
     from cnn_rnn_model import AugmentedDataset, DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
     hpo_n_mels = 128
-    print("Running CNN+RNN model")
+    
+    if binary_classification:
+        print("Running CNN+RNN model with binary classification (Healthy vs. Non-Healthy)")
+    else:
+        print("Running CNN+RNN model with 3-class classification (Healthy vs. MCI vs. AD)")
     
     # Load and prepare dataset using the dedicated cnn_rnn_data module
-    dataset = prepare_cnn_rnn_dataset()
-    
-    """ # Create balanced training dataset with augmentations
-    print("Creating balanced training dataset with augmentations...")
-    augmented_train_dataset = AugmentedDataset(
-        original_dataset=dataset["train"],        
-        num_classes=3
-    )
-    
-    # Display class distribution
-    augmented_train_dataset.print_distribution_stats()
-    
-    # Update dataset with balanced training set
-    augmented_dataset = {
-        "train": augmented_train_dataset,
-        "validation": dataset["validation"],
-        "test": dataset["test"]
-    }  """
+    # Apply binary classification conversion if requested
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
     
     # Get dataloaders optimized for CNN+RNN training
     dataloaders = get_cnn_rnn_dataloaders(
@@ -804,35 +984,47 @@ def main_cnn_rnn(use_prosodic_features=False):
         batch_size=96
     )
     
-    # Create model
-    """ model = DualPathAudioClassifier(
-        num_classes=3,
-        sample_rate=16000,
-        n_mels=hpo_n_mels
-    ) """
-    """ hpo_dropout = 0.27059238539331787
-    model = CNN14Classifier(
-    num_classes=3,
-    sample_rate=16000,
-    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-    dropout_rate=hpo_dropout,  
-    freeze_extractor=True  
-    ) """
-    
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
 
+    # Create model with the appropriate number of classes
     model = PretrainedDualPathAudioClassifier(
-        num_classes=3,
+        num_classes=2 if binary_classification else 3,  # Binary or 3-class based on parameter
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                            
     )
 
-    print("Model created!")
+    
+    if not myConfig.training_from_scratch:       
+        model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+        model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+        
+        print(f"Fine-tuning: Loading pre-trained model from {model_path}")
+        try:
+            model.load_state_dict(torch.load(model_path))
+            print("Successfully loaded model for fine-tuning")
+            print("Selectively unfreezing CNN14 layers for fine-tuning...")
+            for name, param in model.cnn_extractor.named_parameters():
+                if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                    param.requires_grad = True
+                    print(f"Unfreezing {name}")
+                else:
+                    param.requires_grad = False             
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("This could be because the saved model has a different architecture.")
+            print("Proceeding with newly initialized model instead.")
+    else:
+        # Apply selective unfreezing directly
+        print("Training a new model from scratch as per configuration.")
+        print("Selectively unfreezing CNN14 layers...")
+        for name, param in model.cnn_extractor.named_parameters():
+            if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                param.requires_grad = True
+                print(f"Unfreezing {name}")
+            else:
+                param.requires_grad = False
+
+
+    print(f"Model created with {model.classifier.out_features} output classes!")
     
     # Train model
     print("Training model...")
@@ -844,12 +1036,22 @@ def main_cnn_rnn(use_prosodic_features=False):
     print("Training complete!")
 
 
-def test_cnn_rnn():
-    """Test function for the CNN+RNN pipeline."""
-    from cnn_rnn_model import DualPathAudioClassifier
+def test_cnn_rnn(binary_classification=False, use_cam=False, max_cam_samples=20):
+    """Test function for the CNN+RNN pipeline.
+    
+    Args:
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """
+    from cnn_rnn_model import PretrainedDualPathAudioClassifier
     hpo_n_mels = 128
-    # Prepare data
-    dataset = prepare_cnn_rnn_dataset()
+    
+    # Prepare data with appropriate classification mode
+    if binary_classification:
+        print("Testing CNN+RNN model with binary classification (Healthy vs. Non-Healthy)")
+    else:
+        print("Testing CNN+RNN model with 3-class classification (Healthy vs. MCI vs. AD)")
+        
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
     
     # Get dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
@@ -857,76 +1059,176 @@ def test_cnn_rnn():
         batch_size=96
     )
     
-    # Create model
-    model = DualPathAudioClassifier(
-        num_classes=3,
+    # Create model with appropriate number of classes
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        n_mels=hpo_n_mels
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
     
-    # Load the best model weights if available
-    model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
+    # Load the best model weights from the appropriate directory
+    model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+    model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+    
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
+        try:
+            model.load_state_dict(torch.load(model_path))
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("This could be because the saved model has a different number of classes.")
+            print("Training a new model might be required.")
+            return
     else:
-        print("No pre-trained model found. Using randomly initialized weights.")
+        print(f"No pre-trained model found at {model_path}. Using randomly initialized weights.")
     
-    # Run evaluation
-    test_cnn_rnn_model(
+    # Set up CAM output directory with timestamp for uniqueness
+    cam_output_dir = None
+    if use_cam:        
+        class_type = "Binary" if binary_classification else "ThreeClass"
+        cam_output_dir = os.path.join(myConfig.OUTPUT_PATH, f"CAM_Test_{class_type}")
+        os.makedirs(cam_output_dir, exist_ok=True)
+        print(f"CAM visualizations will be saved to: {cam_output_dir}")
+    
+    # Run evaluation on test set with optional CAM visualizations
+    print("Testing model on test set...")
+    test_accuracy, test_preds, test_labels = test_cnn_rnn_model(
         model,
         dataloaders["test"],
-        use_cam=True,                                  # Enable CAM visualization
-        cam_output_dir="/ProcessedFiles/CAM_Test",     # Output directory
-        max_cam_samples=10                             # Max samples per class/outcome
+        use_cam=use_cam,
+        cam_output_dir=cam_output_dir,
+        max_cam_samples=max_cam_samples
     )
+    
+    # Display more detailed metrics if available
+    if test_labels is not None and test_preds is not None:
+        target_names = ["Healthy", "Non-Healthy"] if binary_classification else ["Healthy", "MCI", "AD"]
+        test_f1_macro = f1_score(test_labels, test_preds, average='macro')
+        test_f1_weighted = f1_score(test_labels, test_preds, average='weighted')
+        test_f1_per_class = f1_score(test_labels, test_preds, average=None)
+        test_precision_macro = precision_score(test_labels, test_preds, average='macro')
+        test_precision_weighted = precision_score(test_labels, test_preds, average='weighted')
+        test_precision_per_class = precision_score(test_labels, test_preds, average=None)
+        test_recall_macro = recall_score(test_labels, test_preds, average='macro')
+        test_recall_weighted = recall_score(test_labels, test_preds, average='weighted')
+        test_recall_per_class = recall_score(test_labels, test_preds, average=None)
+        test_report = classification_report(test_labels, test_preds, target_names=target_names)
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(test_labels, test_preds)
+        
+        # Calculate specificity and NPV for each class
+        n_classes = len(target_names)
+        specificity_per_class = np.zeros(n_classes)
+        npv_per_class = np.zeros(n_classes)
+        
+        for i in range(n_classes):
+            # For each class, calculate TN, FP, FN
+            true_negative = np.sum(np.delete(np.delete(cm, i, axis=0), i, axis=1))
+            false_positive = np.sum(cm[:, i]) - cm[i, i]
+            false_negative = np.sum(cm[i, :]) - cm[i, i]
+            
+            # Calculate specificity (true negative rate): TN / (TN + FP)
+            specificity_per_class[i] = true_negative / (true_negative + false_positive) if (true_negative + false_positive) > 0 else 0
+            
+            # Calculate negative predictive value: TN / (TN + FN)
+            npv_per_class[i] = true_negative / (true_negative + false_negative) if (true_negative + false_negative) > 0 else 0
+        
+        # Print detailed metrics
+        print("\n" + "="*50)
+        print("DETAILED TEST RESULTS")
+        print("="*50)
+        print(f"Test Accuracy: {test_accuracy:.4f}")
+        
+        print("\nMACRO METRICS:")
+        print(f"F1-Score (Macro): {test_f1_macro:.4f}")
+        print(f"Precision (Macro): {test_precision_macro:.4f}")
+        print(f"Recall (Macro): {test_recall_macro:.4f}")
+        
+        print("\nWEIGHTED METRICS:")
+        print(f"F1-Score (Weighted): {test_f1_weighted:.4f}")
+        print(f"Precision (Weighted): {test_precision_weighted:.4f}")
+        print(f"Recall (Weighted): {test_recall_weighted:.4f}")
+        
+        print("\nPER-CLASS METRICS:")
+        for i, class_name in enumerate(target_names):
+            print(f"\n{class_name} Class:")
+            print(f"  Precision: {test_precision_per_class[i]:.4f}")
+            print(f"  Recall/Sensitivity: {test_recall_per_class[i]:.4f}")
+            print(f"  Specificity: {specificity_per_class[i]:.4f}")
+            print(f"  NPV: {npv_per_class[i]:.4f}")
+            print(f"  F1-Score: {test_f1_per_class[i]:.4f}")
+            
+            # Calculate and print additional class metrics from confusion matrix
+            tp = cm[i, i]  # True positives for this class
+            fp = np.sum(cm[:, i]) - tp  # False positives
+            fn = np.sum(cm[i, :]) - tp  # False negatives
+            tn = np.sum(cm) - tp - fp - fn  # True negatives
+            
+            accuracy_class = (tp + tn) / np.sum(cm) if np.sum(cm) > 0 else 0
+            balanced_accuracy = (test_recall_per_class[i] + specificity_per_class[i]) / 2
+            y_true_binary = np.array(test_labels) == i
+            y_pred_binary = np.array(test_preds) == i
+            mcc = matthews_corrcoef(y_true_binary, y_pred_binary)
+
+            print(f"  Balanced Accuracy: {balanced_accuracy:.4f}")
+            print(f"  Matthews Correlation Coefficient: {mcc:.4f}")
+            
+        # Calculate and print aggregate balanced accuracy
+        balanced_accuracy_score_all = balanced_accuracy_score(test_labels, test_preds)
+        print(f"\nBalanced Accuracy (All Classes): {balanced_accuracy_score_all:.4f}")
+        
+        print("\nConfusion Matrix:")
+        print(cm)
+        print("\nClassification Report:")
+        print(test_report)
+        print("="*50)
+    
+    return test_accuracy, test_preds, test_labels
 
 
-def optimize_cnn_rnn():
-    """Function to run threshold optimization for CNN+RNN model"""    
+def optimize_cnn_rnn(binary_classification=False):
+    """Function to run threshold optimization for CNN+RNN model
+    
+    Args:
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """    
     hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
         setattr(myConfig, key, path)
     
-    # Prepare the dataset
-    print("Loading dataset for threshold optimization...")
-    dataset = prepare_cnn_rnn_dataset()
+    if binary_classification:
+        print("Running threshold optimization for CNN+RNN model with binary classification (Healthy vs. Non-Healthy)")
+    else:
+        print("Running threshold optimization for CNN+RNN model with 3-class classification (Healthy vs. MCI vs. AD)")
+        
+    # Prepare the dataset with appropriate classification mode
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
     
-    # Create model
-    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
-    """ model = DualPathAudioClassifier(
-        num_classes=3,
-        sample_rate=16000,
-        n_mels=hpo_n_mels
-    )
-     """
-    """ hpo_dropout = 0.27059238539331787
-    model = CNN14Classifier(
-    num_classes=3,
-    sample_rate=16000,
-    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-    dropout_rate=hpo_dropout,  
-    freeze_extractor=True  
-    ) """
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
+    # Create model with appropriate number of classes
+    from cnn_rnn_model import PretrainedDualPathAudioClassifier
+    
 
     model = PretrainedDualPathAudioClassifier(
-        num_classes=3,
+        num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
-    # Load the best model weights if available
-    model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
+    
+    # Load the best model weights from the appropriate directory
+    model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+    model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+    
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
+        try:
+            model.load_state_dict(torch.load(model_path))
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("This could be because the saved model has a different number of classes.")
+            raise FileNotFoundError(f"Failed to load model from {model_path}. Please train the model first.")
     else:
         raise FileNotFoundError(f"No pre-trained model found at {model_path}. Please train the model first.")
     
@@ -936,77 +1238,77 @@ def optimize_cnn_rnn():
         batch_size=96
     )["validation"]
     
-    # Set output directory
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_optimization", "cnn_rnn")
+    # Set output directory with appropriate name for binary/multi-class
+    output_dir_name = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+    output_dir = os.path.join(myConfig.OUTPUT_PATH, "threshold_optimization", output_dir_name)
     os.makedirs(output_dir, exist_ok=True)
     
-    # Run threshold optimization
-    class_names = ["Healthy", "MCI", "AD"]
+    # Set class names based on binary/multi-class
+    if binary_classification:
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        class_names = ["Healthy", "MCI", "AD"]
     
     # Run optimization
-    print("Running threshold optimization for CNN+RNN model...")
+    print(f"Running threshold optimization for {len(class_names)} classes: {class_names}...")
     optimize_thresholds_for_model(
         model=model,
         dataloader=dataloader,
         class_names=class_names,
         output_dir=output_dir,
         is_cnn_rnn=True, 
-        log_to_wandb=not myConfig.running_offline        
+        log_to_wandb=not myConfig.running_offline
     )
     
     print(f"Threshold optimization completed. Results saved to {output_dir}")
 
 
-def test_cnn_rnn_with_thresholds():
-    """Test CNN+RNN model using the optimized thresholds"""
+def test_cnn_rnn_with_thresholds(binary_classification=False):
+    """Test CNN+RNN model using the optimized thresholds
+    
+    Args:
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """
     import os
     import json
     import matplotlib.pyplot as plt
     import seaborn as sns
     from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
     
-    hpo_n_mels = 128
     # Configure paths
     path_config = myConfig.configure_paths()
     for key, path in path_config.items():
         setattr(myConfig, key, path)
     
-    # Prepare dataset
-    print("Loading dataset for testing with thresholds...")
-    dataset = prepare_cnn_rnn_dataset()
-    
-    # Create model
-    from cnn_rnn_model import DualPathAudioClassifier, CNN14Classifier, PretrainedDualPathAudioClassifier
-    """ model = DualPathAudioClassifier(
-        num_classes=3,
-        sample_rate=16000,
-        n_mels=hpo_n_mels
-    ) """
-    """ hpo_dropout = 0.27059238539331787
-    model = CNN14Classifier(
-    num_classes=3,
-    sample_rate=16000,
-    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-    dropout_rate=hpo_dropout,  
-    freeze_extractor=True  
-    ) """
-    hpo_attention_dropout = 0.21790974595973722
-    hpo_fusion_dropout = 0.3668445892921854
-    hpo_prosodic_weight = 0.8587093661398519
+    # Prepare dataset with appropriate classification mode
+    if binary_classification:
+        print("Testing CNN+RNN model with binary classification (Healthy vs. Non-Healthy) using optimized thresholds")
+    else:
+        print("Testing CNN+RNN model with 3-class classification (Healthy vs. MCI vs. AD) using optimized thresholds")
+        
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
+        
 
+    # Create model with appropriate number of classes
+    from cnn_rnn_model import PretrainedDualPathAudioClassifier
     model = PretrainedDualPathAudioClassifier(
-        num_classes=3,
+        num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',    
-        attention_dropout=hpo_attention_dropout,
-        fusion_dropout=hpo_fusion_dropout,
-        prosodic_weight=hpo_prosodic_weight                
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                        
     )
-    # Load the best model weights
-    model_path = os.path.join(myConfig.training_args.output_dir, "cnn_rnn", "cnn_rnn_best.pt")
+    
+    # Load the best model weights from the appropriate directory
+    model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+    model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+    
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
+        try:
+            model.load_state_dict(torch.load(model_path))
+        except Exception as e:
+            print(f"Error loading model weights: {e}")
+            print("This could be because the saved model has a different number of classes.")
+            raise FileNotFoundError(f"Failed to load model from {model_path}.")
     else:
         raise FileNotFoundError(f"No pre-trained model found at {model_path}. Please train the model first.")
     
@@ -1020,9 +1322,17 @@ def test_cnn_rnn_with_thresholds():
     threshold_results_path = os.path.join(
         myConfig.OUTPUT_PATH, 
         "threshold_optimization", 
-        "cnn_rnn", 
+        model_dir, 
         "threshold_optimization_results.json"
     )
+    
+    # Set class names based on binary/multi-class
+    if binary_classification:
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        class_names = ["Healthy", "MCI", "AD"]
+        
+    print(f"Using {len(class_names)} classes: {class_names}")
     
     if os.path.exists(threshold_results_path):
         print(f"Loading thresholds from {threshold_results_path}")
@@ -1035,7 +1345,7 @@ def test_cnn_rnn_with_thresholds():
             
             # Extract thresholds from the JSON results
             thresholds = {}
-            for class_name in ["Healthy", "MCI", "AD"]:
+            for class_name in class_names:
                 if threshold_type == "youden":
                     thresholds[class_name] = threshold_results[class_name]["best_youden"]["threshold"]
                 else:  # f1
@@ -1118,7 +1428,6 @@ def test_cnn_rnn_with_thresholds():
             standard_preds = np.argmax(all_probs, axis=-1)
             
             # Calculate baseline metrics
-            class_names = ["Healthy", "MCI", "AD"]
             baseline_accuracy = accuracy_score(all_labels, standard_preds)
             baseline_report = classification_report(
                 all_labels, standard_preds, target_names=class_names, output_dict=True
@@ -1215,38 +1524,45 @@ def test_cnn_rnn_with_thresholds():
         print("Please run optimize_cnn_rnn() first to generate threshold values.")
 
 
-
-
-def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
-    """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation."""
-    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier,PretrainedDualPathAudioClassifier
+def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5, binary_classification=False):
+    """Run Bayesian hyperparameter optimization for the CNN+RNN model with k-fold cross-validation.
+    
+    Args:
+        n_trials: Number of trials for optimization
+        resume_study: Whether to resume a previous study
+        n_folds: Number of folds for cross-validation
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """
+    from cnn_rnn_model import DualPathAudioClassifier, AugmentedDataset, CNN14Classifier, PretrainedDualPathAudioClassifier
     from sklearn.utils.class_weight import compute_class_weight
     from sklearn.model_selection import StratifiedKFold
     import json
     import joblib
     
     # Initialize wandb if not already running
+    model_type = "CNN14-Binary" if binary_classification else "CNN14"
     if not wandb.run:
         wandb.init(
             project="CNN14-HPO",
             entity=myConfig.wandb_entity,
-            name=f"hpo_cnn14_{n_folds}fold",
+            name=f"hpo_{model_type}_{n_folds}fold",
             config={
-                "model_type": "CNN14 Classifier HPO with CV",
+                "model_type": f"{model_type} Classifier HPO with CV",
                 "n_trials": n_trials,
                 "optimization_type": "bayesian",
-                "n_folds": n_folds
+                "n_folds": n_folds,
+                "binary_classification": binary_classification
             },
-            tags=["hpo", "bayesian-optimization", "cnn14", "cross-validation"]
+            tags=["hpo", "bayesian-optimization", model_type.lower(), "cross-validation"]
         )
     
     # Create output directory for hyperparameter optimization    
     output_dir = os.path.join(myConfig.OUTPUT_PATH, "hyperparameter_optimization")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load and prepare dataset
-    print("Loading dataset for hyperparameter optimization with cross-validation...")
-    dataset = prepare_cnn_rnn_dataset()
+    # Load and prepare dataset with binary classification if requested
+    print(f"Loading dataset for hyperparameter optimization with cross-validation ({model_type})...")
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
     
     # Combine train and validation for cross-validation
     combined_data = []
@@ -1267,19 +1583,22 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             torch.cuda.empty_cache()
             gc.collect()
                         
-            # Core hyperparameters from previous optimization
-            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.2, 0.5)
-            focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 0.8, 2.0)
-            weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)                        
-            hpo_max_learning_rate = trial.suggest_float("learning_rate", 5e-4, 2e-3, log=True)
-            hpo_pct_start = trial.suggest_float("pct_start", 0.2, 0.4)  
-            hpo_div_factor = trial.suggest_float("div_factor", 20.0, 40.0)  
-            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 500.0)
+            # Core learning parameters - refined ranges based on previous HPO run
+            weight_scaling_factor = trial.suggest_float("weight_scaling_factor", 0.45, 0.65)  # Centered around 0.541
+            #focal_loss_gamma = trial.suggest_float("focal_loss_gamma", 1.4, 1.9)  # Centered around 1.64
+            hpo_label_smoothing = trial.suggest_float("label_smoothing", 0.05, 0.15)  # Centered around 0.1
+            hpo_weight_decay_cnn = trial.suggest_float("weight_decay_cnn", 4e-4, 9e-4, log=True)  # Centered around 6.59e-4
+            hpo_weight_decay = trial.suggest_float("weight_decay", 4e-5, 9e-5, log=True)  # Centered around 6.4e-5
+            hpo_max_learning_rate_cnn = trial.suggest_float("learning_rate_cnn", 6e-4, 1.1e-3, log=True)  # Centered around 8.47e-4, high importance
+            hpo_max_learning_rate = trial.suggest_float("learning_rate", 4e-4, 8e-4, log=True)  # Centered around 6.37e-4
+            hpo_pct_start = trial.suggest_float("pct_start", 0.09, 0.18)  # Centered around 0.117
+            hpo_div_factor = trial.suggest_float("div_factor", 18.0, 30.0)  # Centered around 24.3
+            hpo_final_div_factor = trial.suggest_float("final_div_factor", 200.0, 325.0)  # Centered around 262.8
 
-            #hyperparameters specific to the Dual Path model
-            attention_dropout = trial.suggest_float("attention_dropout", 0.1, 0.4)
-            fusion_dropout = trial.suggest_float("fusion_dropout", 0.2, 0.5)                        
-            prosodic_weight = trial.suggest_float("prosodic_weight", 0.5, 2.0)
+            # Model architecture parameters - refined for optimal performance
+            attention_dropout = trial.suggest_float("attention_dropout", 0.25, 0.38)  # Centered around 0.32
+            fusion_dropout = trial.suggest_float("fusion_dropout", 0.12, 0.24)  # Centered around 0.178, highest importance
+            prosodic_weight = trial.suggest_float("prosodic_weight", 1.7, 2.3)  # Centered around 2.0, high importance
             
             
             
@@ -1311,12 +1630,12 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 # Create balanced training dataset for this fold
                 fold_train_balanced = AugmentedDataset(
                     original_dataset=fold_train,            
-                    num_classes=3
+                    num_classes=2 if binary_classification else 3
                 )
 
                 # Create fold dataset dictionary
                 fold_dataset = {
-                    "train": fold_train_balanced,
+                    "train": fold_train,
                     "validation": fold_val,
                     "test": dataset["test"]
                 }
@@ -1328,32 +1647,59 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 )
                 fold_train_loader = fold_dataloaders["train"]
                 fold_val_loader = fold_dataloaders["validation"]                
-                """ fold_model = DualPathAudioClassifier(
-                    num_classes=3,
-                    sample_rate=16000,
-                    n_mels=n_mels,
-                    apply_specaugment=True,
-                ) """
-                """ fold_model = CNN14Classifier(
-                    num_classes=3,
-                    sample_rate=16000,
-                    pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
-                    dropout_rate=dropout_rate,  # Direct control of dropout in classifier head  
-                    freeze_extractor=True  # Always keep extractor frozen  
-                ) """
+                
+                # Create model with appropriate number of classes
                 fold_model = PretrainedDualPathAudioClassifier(
-                    num_classes=3,
+                    num_classes=2 if binary_classification else 3,
                     sample_rate=16000,
                     pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
                     attention_dropout=attention_dropout,
                     fusion_dropout=fusion_dropout,
                     prosodic_weight=prosodic_weight
                 )
+
+                if not myConfig.training_from_scratch:       
+                    model_dir = "cnn_rnn_binary" if binary_classification else "cnn_rnn"
+                    model_path = os.path.join(myConfig.training_args.output_dir, model_dir, "cnn_rnn_best.pt")
+                    
+                    print(f"Fine-tuning: Loading pre-trained model from {model_path}")
+                    try:
+                        fold_model.load_state_dict(torch.load(model_path))
+                        print("Successfully loaded model for fine-tuning")
+                        print("Selectively unfreezing CNN14 layers for fine-tuning...")
+                        for name, param in fold_model.cnn_extractor.named_parameters():
+                            if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                                param.requires_grad = True
+                                print(f"Unfreezing {name}")
+                            else:
+                                param.requires_grad = False             
+                    except Exception as e:
+                        print(f"Error loading model weights: {e}")
+                        print("This could be because the saved model has a different architecture.")
+                        print("Proceeding with newly initialized model instead.")
+                else:
+                    # Apply selective unfreezing directly
+                    print("Training a new model from scratch as per configuration.")
+                    print("Selectively unfreezing CNN14 layers...")
+                    for name, param in fold_model.cnn_extractor.named_parameters():
+                        if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
+                            param.requires_grad = True
+                            print(f"Unfreezing {name}")
+                        else:
+                            param.requires_grad = False
                 fold_model.to(device)
                 
                 # Calculate class weights with scaling factor
-                classes = np.array([0, 1, 2])  
-                class_counts = myConfig.num_samples_per_class
+                if binary_classification:
+                    classes = np.array([0, 1])  
+                    class_counts = {
+                        0: myConfig.num_samples_per_class.get(0, 0),  # Healthy
+                        1: myConfig.num_samples_per_class.get(1, 0) + myConfig.num_samples_per_class.get(2, 0)  # MCI + AD
+                    }
+                else:
+                    classes = np.array([0, 1, 2])  
+                    class_counts = myConfig.num_samples_per_class
+                
                 y = np.array([])
                 # Create array with labels based on known counts
                 for class_id, count in class_counts.items():
@@ -1367,29 +1713,42 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                 # Convert to tensor
                 weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
 
-                # Set up the loss function with class weighting
-                criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+                # Set up the loss function to work as CE with label smoothing
+                criterion = FocalLoss(gamma=0, weight=None, label_smoothing= hpo_label_smoothing)
                 
-                # Create optimizer with trial hyperparameters
-                
-                optimizer = torch.optim.Adam(
-                    fold_model.parameters(),
-                    lr=hpo_max_learning_rate/hpo_div_factor,
-                    weight_decay=weight_decay,
-                )
+                cnn_params = []
+                other_params = []
+
+                # Group parameters for different learning rates
+                for name, param in fold_model.named_parameters():
+                    if param.requires_grad:
+                        if "cnn_extractor" in name:
+                            cnn_params.append(param)
+                        else:
+                            other_params.append(param)
+
+                # Set up the optimizer with parameter groups
+                initial_lr = hpo_max_learning_rate / hpo_div_factor
+                initial_cnn_lr = hpo_max_learning_rate_cnn / hpo_div_factor
+
+                optimizer = torch.optim.AdamW([
+                    {'params': cnn_params, 'lr': initial_cnn_lr, 'weight_decay': hpo_weight_decay_cnn},  
+                    {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+                ])
+
                 total_steps = len(fold_dataloaders["train"]) * n_epochs
-    
+                
                 # Create scheduler with optimized hyperparameters
                 scheduler = torch.optim.lr_scheduler.OneCycleLR(
                     optimizer,
-                    max_lr=hpo_max_learning_rate,
+                    max_lr=[hpo_max_learning_rate_cnn, hpo_max_learning_rate], # 10x lower for CNN14 layers
                     total_steps=total_steps,
                     pct_start=hpo_pct_start,
                     div_factor=hpo_div_factor,
                     final_div_factor=hpo_final_div_factor,
                     anneal_strategy='cos',
                     three_phase=False
-                )
+                )  
                 # Train for specified epochs in each fold
                 fold_history = []
                 best_fold_f1 = 0.0
@@ -1410,9 +1769,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
                             fold_val_loader, 
                             criterion, 
                             device,
-                            use_cam=True,
-                            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
-                            max_cam_samples=10                                 # Max samples per class/outcome
+                            use_cam=False
                         )
 
                         val_f1_macro = f1_score(val_labels, val_preds, average='macro')
@@ -1539,15 +1896,16 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             return -1.0
     
     # Define study storage path
+    study_type = "binary" if binary_classification else "multiclass"
     study_storage_path = os.path.join(
         myConfig.OUTPUT_PATH, 
         "hyperparameter_optimization",
-        f"hpo_study_cnn_rnn_{n_folds}fold.pkl"
+        f"hpo_study_cnn_rnn_{study_type}_{n_folds}fold.pkl"
     )
     
     # Create study for maximizing F1-macro
     print(f"Running Bayesian optimization with {n_trials} trials using {n_folds}-fold cross-validation...")
-    study_name = f"cnn_rnn_{n_folds}fold"
+    study_name = f"cnn_rnn_{study_type}_{n_folds}fold"
     
     # Initialize or resume study
     if resume_study and os.path.exists(study_storage_path):
@@ -1578,16 +1936,19 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         # Best previous hyperparameters as a starting point
         previous_best = {
             # Core parameters from previous best run
-            "learning_rate": 0.0012349118136969503,  
-            "focal_loss_gamma": 1.2823995520334321, 
-            "weight_scaling_factor": 0.33101479502425385, 
-            "weight_decay": 3.564042168831547e-05,            
-            "pct_start": 0.3039854042370648,
-            "div_factor": 28.511116929054193,
-            "final_div_factor": 337.0803040420639,
-            "attention_dropout": 0.25,  
-            "fusion_dropout": 0.35,     
-            "prosodic_weight": 1.0      
+            "learning_rate": myConfig.cnn_rnn_hyperparams["max_lr"],  
+            #"focal_loss_gamma": myConfig.cnn_rnn_hyperparams["focal_loss_gamma"], 
+            "label_smoothing: 0.12"
+            "weight_scaling_factor": myConfig.cnn_rnn_hyperparams["weight_scaling_factor"], 
+            "weight_decay": myConfig.cnn_rnn_hyperparams["weight_decay"],            
+            "pct_start": myConfig.cnn_rnn_hyperparams["pct_start"],
+            "div_factor": myConfig.cnn_rnn_hyperparams["div_factor"],
+            "final_div_factor": myConfig.cnn_rnn_hyperparams["final_div_factor"],
+            "attention_dropout": myConfig.cnn_rnn_hyperparams["attention_dropout"],  
+            "fusion_dropout": myConfig.cnn_rnn_hyperparams["fusion_dropout"],     
+            "prosodic_weight": myConfig.cnn_rnn_hyperparams["prosodic_weight"],
+            "learning_rate_cnn": myConfig.cnn_rnn_hyperparams["learning_rate_cnn"],
+            "weight_decay_cnn": myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
         }
 
         study.enqueue_trial(previous_best)
@@ -1614,10 +1975,12 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     result = {
         "best_params": best_params,
         "best_value": best_value,
-        "n_folds": n_folds
+        "n_folds": n_folds,
+        "binary_classification": binary_classification
     }
     
-    with open(os.path.join(output_dir, f"best_hyperparams_cnn_rnn_{n_folds}fold.json"), "w") as f:
+    model_type_str = "binary" if binary_classification else "multiclass"
+    with open(os.path.join(output_dir, f"best_hyperparams_cnn_rnn_{model_type_str}_{n_folds}fold.json"), "w") as f:
         json.dump(result, f, indent=2)
     
     # Print importance of hyperparameters if optuna has enough trials
@@ -1635,11 +1998,11 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
             
             # History plot
             fig1 = plot_optimization_history(study)
-            fig1.write_image(os.path.join(output_dir, f"optimization_history_cnn_rnn_{n_folds}fold.png"))
+            fig1.write_image(os.path.join(output_dir, f"optimization_history_cnn_rnn_{model_type_str}_{n_folds}fold.png"))
             
             # Parameter importance plot
             fig2 = plot_param_importances(study)
-            fig2.write_image(os.path.join(output_dir, f"param_importances_cnn_rnn_{n_folds}fold.png"))
+            fig2.write_image(os.path.join(output_dir, f"param_importances_cnn_rnn_{model_type_str}_{n_folds}fold.png"))
             
             print(f"Optimization visualizations saved to {output_dir}")
         except Exception as e:
@@ -1652,6 +2015,7 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
         wandb.run.summary["best_combined_score"] = best_value
         wandb.run.summary["best_params"] = best_params
         wandb.run.summary["n_folds"] = n_folds
+        wandb.run.summary["binary_classification"] = binary_classification
     
     # Save study state for possible resumption
     os.makedirs(os.path.dirname(study_storage_path), exist_ok=True)
@@ -1664,23 +2028,31 @@ def run_bayesian_optimization(n_trials=100, resume_study=False, n_folds=5):
     # Optionally train final model with more epochs for better results
     if input(f"Train final model with best hyperparameters from {n_folds}-fold CV? (y/n): ").lower() == "y":
         print("Training final model with 20 epochs instead of the default...")
-        train_with_best_hyperparameters(dataset, best_params)
+        train_with_best_hyperparameters(dataset, best_params, binary_classification=binary_classification)
     
     return result
 
 
-def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=True):
-    """Train a final model using the best hyperparameters from Bayesian optimization."""
-    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset
+def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=True, binary_classification=False):
+    """Train a final model using the best hyperparameters from Bayesian optimization.
     
-    print("\n=== Training with Best Hyperparameters ===")
+    Args:
+        dataset: Dataset dictionary with train, validation, test splits
+        best_params: Dictionary of best hyperparameters from optimization
+        use_prosodic_features: Whether to use prosodic features
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+    """
+    from cnn_rnn_model import DualPathAudioClassifier, BalancedAugmentedDataset, PretrainedDualPathAudioClassifier
     
-    # Create balanced training dataset
+    classification_type = "Binary" if binary_classification else "3-class"
+    print(f"\n=== Training with Best Hyperparameters ({classification_type}) ===")
+    
+    # Create balanced training dataset with appropriate number of classes
     print("Creating balanced training dataset...")
     balanced_train_dataset = BalancedAugmentedDataset(
         original_dataset=dataset["train"],
         total_target_samples=1000,
-        num_classes=3
+        num_classes=2 if binary_classification else 3
     )
     balanced_train_dataset.print_distribution_stats()
     
@@ -1698,8 +2070,11 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     pct_start = best_params.get("pct_start", 0.3)
     gamma = best_params.get("focal_loss_gamma", 0.0)
     n_mels = best_params.get("n_mels", 128)
-    time_mask_param = best_params.get("time_mask_param", 50)
-    freq_mask_param = best_params.get("freq_mask_param", 50)
+    
+    # Parameters specific to PretrainedDualPathAudioClassifier
+    attention_dropout = best_params.get("attention_dropout", 0.25)
+    fusion_dropout = best_params.get("fusion_dropout", 0.35)
+    prosodic_weight = best_params.get("prosodic_weight", 1.0)
     
     # Create dataloaders
     dataloaders = get_cnn_rnn_dataloaders(
@@ -1708,34 +2083,58 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
         use_prosodic_features=use_prosodic_features
     )
     
-    # Create model with optimized hyperparameters
-    model = DualPathAudioClassifier(
-        num_classes=3,
+    # Create model with optimized hyperparameters (using PretrainedDualPathAudioClassifier)
+    model = PretrainedDualPathAudioClassifier(
+        num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        use_prosodic_features=use_prosodic_features,
-        prosodic_features_dim=len(myData.extracted_features) if use_prosodic_features else 0,
-        n_mels=n_mels,
-        apply_specaugment=True
+        pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        attention_dropout=attention_dropout,
+        fusion_dropout=fusion_dropout,
+        prosodic_weight=prosodic_weight
     )
-    
-    # Update SpecAugment parameters if the model has that module
-    if hasattr(model, 'spec_augment'):
-        model.spec_augment.time_mask_param = time_mask_param
-        model.spec_augment.freq_mask_param = freq_mask_param
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     
+    # Calculate class weights with scaling factor
+    weight_scaling_factor = best_params.get("weight_scaling_factor", 0.33)
+    focal_loss_gamma = best_params.get("focal_loss_gamma", 1.2)
+    
+    from sklearn.utils.class_weight import compute_class_weight
+    
+    if binary_classification:
+        classes = np.array([0, 1])
+        # Adapt class counts for binary classification
+        class_counts = {
+            0: myConfig.num_samples_per_class.get(0, 0),  # Healthy
+            1: myConfig.num_samples_per_class.get(1, 0) + myConfig.num_samples_per_class.get(2, 0)  # MCI + AD
+        }
+    else:
+        classes = np.array([0, 1, 2])  
+        class_counts = myConfig.num_samples_per_class
+    
+    y = np.array([])
+    # Create array with labels based on known counts
+    for class_id, count in class_counts.items():
+        y = np.append(y, [class_id] * count)
+    # Compute balanced weights
+    raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+    # Apply scaling factor to make weights less extreme
+    scaled_weights = np.power(raw_weights, weight_scaling_factor)
+    # Normalize to maintain sum proportionality
+    scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+    # Convert to tensor
+    weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+    
+    # Create focal loss with optimized gamma and class weights
+    criterion = FocalLoss(gamma=focal_loss_gamma, weight=weight_tensor)
+    
     # Create optimizer with optimized hyperparameters
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.Adam(
         model.parameters(),
         lr=lr,
-        weight_decay=weight_decay,
-        betas=(0.9, 0.999)
+        weight_decay=weight_decay
     )
-    
-    # Create focal loss with optimized gamma
-    criterion = FocalLoss(gamma=gamma)
     
     # Calculate total steps for full training (10 epochs)
     total_steps = len(dataloaders["train"]) * 10
@@ -1743,7 +2142,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
     # Create scheduler with optimized hyperparameters
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=max_lr,
+        max_lr=max_lr if max_lr else lr * 10,
         total_steps=total_steps,
         pct_start=pct_start,
         div_factor=25,
@@ -1752,8 +2151,9 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
         three_phase=False
     )
     
-    # Create output directory for optimized CNN+RNN model
-    optimized_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cnn_rnn_optimized")
+    # Create output directory for optimized CNN+RNN model - use different paths for binary/multiclass
+    model_type_str = "binary" if binary_classification else "multiclass"
+    optimized_output_dir = os.path.join(myConfig.OUTPUT_PATH, f"cnn_rnn_optimized_{model_type_str}")
     os.makedirs(optimized_output_dir, exist_ok=True)
     
     # Tracking variables
@@ -1772,8 +2172,7 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             optimizer, 
             criterion, 
             device, 
-            scheduler, 
-            use_prosodic_features
+            scheduler
         )
         
         # Validation phase
@@ -1782,13 +2181,12 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             dataloaders["validation"], 
             criterion, 
             device,
-            use_cam=True,                                      # Enable CAM visualization
-            cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Validation'  ,   # Output directory
-            max_cam_samples=10                                 # Max samples per class/outcome
+            use_cam=False  # Disable CAM for hyperparameter optimization
         )
         
         # Calculate metrics
-        avg_val_loss = val_loss / len(dataloaders["validation"])
+        total_val_recordings = len(all_labels)
+        avg_val_loss = val_loss / total_val_recordings
         val_accuracy = accuracy_score(all_labels, all_preds)
         val_f1_macro = f1_score(all_labels, all_preds, average='macro')
         val_f1_per_class = f1_score(all_labels, all_preds, average=None)
@@ -1806,39 +2204,36 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
             best_f1_macro = val_f1_macro
             
             # Save model to optimized directory
-            model_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")
+            model_path = os.path.join(optimized_output_dir, f"cnn_rnn_{model_type_str}_optimized.pt")
             torch.save(model.state_dict(), model_path)
             print(f"  Saved new best model with F1-macro: {best_f1_macro:.4f} to {model_path}!")
-            
-            """ # Save in safetensors format if available
-            try:
-                from safetensors.torch import save_file
-                safetensors_path = os.path.join(optimized_output_dir, "cnn_rnn_optimized.safetensors")
-                save_file(model.state_dict(), safetensors_path)
-                print(f"  Also saved model in safetensors format to {safetensors_path}")
-            except ImportError:
-                print("  safetensors not available, skipping safetensors format") """
     
     # Test the best model
     # Load the best model
-    model.load_state_dict(torch.load(os.path.join(optimized_output_dir, "cnn_rnn_optimized.pt")))
+    model.load_state_dict(torch.load(os.path.join(optimized_output_dir, f"cnn_rnn_{model_type_str}_optimized.pt")))
     
     # Test on test set
-    print("\nTesting optimized model on test set...")
+    print(f"\nTesting optimized {model_type_str} model on test set...")
     test_loss, test_labels, test_preds = evaluate(
         model, 
         dataloaders["test"], 
         criterion, 
-        device, 
-        use_prosodic_features,
-        cam_output_dir=myConfig.OUTPUT_PATH+'/CAM_Test'  ,   # Output directory
-        max_cam_samples=10  # Max samples per class/outcome
+        device,
+        use_cam=True,
+        cam_output_dir=os.path.join(myConfig.OUTPUT_PATH, f'CAM_Test_{model_type_str}_optimized'),
+        max_cam_samples=10
     )
+    
+    # Determine class names based on classification mode
+    if binary_classification:
+        target_names = ["Healthy", "Non-Healthy"]
+    else:
+        target_names = ["Healthy", "MCI", "AD"]
     
     # Calculate test metrics
     test_accuracy = accuracy_score(test_labels, test_preds)
     test_f1_macro = f1_score(test_labels, test_preds, average='macro')
-    test_report = classification_report(test_labels, test_preds, target_names=["Healthy", "MCI", "AD"])
+    test_report = classification_report(test_labels, test_preds, target_names=target_names)
     
     print(f"Test Accuracy: {test_accuracy:.4f}")
     print(f"Test F1-Macro: {test_f1_macro:.4f}")
@@ -1850,11 +2245,457 @@ def train_with_best_hyperparameters(dataset, best_params, use_prosodic_features=
         "hyperparameters": best_params,
         "test_accuracy": test_accuracy,
         "test_f1_macro": test_f1_macro,
-        "val_f1_macro": best_f1_macro
+        "val_f1_macro": best_f1_macro,
+        "binary_classification": binary_classification
     }
     
     with open(os.path.join(optimized_output_dir, "results.json"), "w") as f:
         import json
         json.dump(results, f, indent=2)
     
-    print(f"Optimized model and results saved to {optimized_output_dir}")
+    print(f"Optimized {model_type_str} model and results saved to {optimized_output_dir}")
+    
+    return model
+
+
+def cross_validate(n_folds=5, binary_classification=False, use_prosodic_features=False, num_epochs=10):
+    """Run cross-validation for CNN+RNN model using stratified k-fold.
+    
+    Args:
+        n_folds: Number of folds for cross-validation (default: 5)
+        binary_classification: Whether to use binary classification (Healthy vs Non-Healthy)
+        use_prosodic_features: Whether to use prosodic features
+        num_epochs: Number of epochs to train each fold
+    
+    Returns:
+        Dictionary with cross-validation results
+    """
+    import os
+    import torch
+    import gc
+    import json
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
+    from sklearn.utils.class_weight import compute_class_weight
+    from tqdm import tqdm
+    
+    # Try to import wandb if available
+    try:
+        import wandb
+        has_wandb = True
+    except ImportError:
+        has_wandb = False
+    
+    # Import required model and dataset classes
+    from cnn_rnn_model import PretrainedDualPathAudioClassifier
+    from cnn_rnn_data import prepare_cnn_rnn_dataset, get_cnn_rnn_dataloaders
+    
+    print(f"\n=== Running {n_folds}-fold Cross-Validation ===")
+    print(f"Model: CNN+RNN")
+    print(f"Classification: {'Binary (Healthy vs Non-Healthy)' if binary_classification else '3-class (Healthy, MCI, AD)'}")
+    print(f"Use prosodic features: {use_prosodic_features}")
+    print(f"Number of epochs: {num_epochs}")
+    
+    # Initialize wandb if not offline and not already running
+    if not myConfig.running_offline and has_wandb and not wandb.run:
+        model_type = "CNN-RNN-Binary" if binary_classification else "CNN-RNN-Multiclass"
+        wandb.init(
+            project=myConfig.wandb_project,
+            entity=myConfig.wandb_entity,
+            name=f"cv_{model_type}_{n_folds}fold",
+            config={
+                "model_type": model_type,
+                "n_folds": n_folds,
+                "binary_classification": binary_classification,
+                "use_prosodic_features": use_prosodic_features,
+                "num_epochs": num_epochs
+            },
+            tags=["cross-validation", "stratified-kfold", model_type.lower()]
+        )
+    
+    # Create output directory for cross-validation results
+    model_type = "binary" if binary_classification else "multiclass"
+    cv_output_dir = os.path.join(myConfig.OUTPUT_PATH, "cross_validation", f"cnn_rnn_{model_type}")
+    os.makedirs(cv_output_dir, exist_ok=True)
+    
+    # Load and prepare dataset
+    print("Loading dataset...")
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
+    
+    # Combine train and validation for cross-validation
+    combined_data = []
+    combined_labels = []
+    
+    print("Combining train and validation sets for cross-validation...")
+    for split in ["train", "validation"]:
+        for i in range(len(dataset[split])):
+            combined_data.append(dataset[split][i])
+            combined_labels.append(dataset[split][i]["label"])
+    
+    # Prepare indices for stratified k-fold splits to handle class imbalance
+    indices = np.arange(len(combined_data))
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    
+    # Set device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+    
+    # Create a list to store results from each fold
+    fold_results = []
+    
+    # Prepare variables for average metrics
+    all_fold_val_metrics = {
+        "accuracy": [],
+        "f1_macro": [],
+        "f1_per_class": []
+    }
+    
+    # Class names based on classification mode
+    if binary_classification:
+        class_names = ["Healthy", "Non-Healthy"]
+    else:
+        class_names = ["Healthy", "MCI", "AD"]
+    
+    # For confusion matrix aggregation
+    overall_confusion_matrix = None
+    
+    # Run cross-validation
+    print(f"\nStarting {n_folds}-fold cross-validation...")
+    
+    for fold_idx, (train_idx, val_idx) in enumerate(skf.split(indices, combined_labels)):
+        print(f"\n--- Fold {fold_idx+1}/{n_folds} ---")
+        
+        # Create fold-specific datasets
+        fold_train = [combined_data[i] for i in train_idx]
+        fold_val = [combined_data[i] for i in val_idx]
+        
+        print(f"Fold {fold_idx+1} train set size: {len(fold_train)}, validation set size: {len(fold_val)}")
+        
+        # Create balanced training dataset for this fold
+        from cnn_rnn_model import AugmentedDataset
+        fold_train_balanced = AugmentedDataset(
+            original_dataset=fold_train,
+            num_classes=2 if binary_classification else 3
+        )
+        
+        # Create fold dataset dictionary
+        fold_dataset = {
+            "train": fold_train_balanced,
+            "validation": fold_val,
+            "test": dataset["test"]  # Keep original test set untouched
+        }
+        
+        # Get dataloaders for this fold
+        fold_dataloaders = get_cnn_rnn_dataloaders(
+            fold_dataset,
+            batch_size=96
+        )
+        
+        # Create model with appropriate number of classes
+        fold_model = PretrainedDualPathAudioClassifier(
+            num_classes=2 if binary_classification else 3,
+            sample_rate=16000,
+            pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth',
+        )
+        fold_model.to(device)
+        
+        # Calculate class weights
+        if binary_classification:
+            classes = np.array([0, 1])
+            # Adapt class counts for binary classification
+            class_counts = {
+                0: myConfig.num_samples_per_class.get(0, 0),  # Healthy
+                1: myConfig.num_samples_per_class.get(1, 0) + myConfig.num_samples_per_class.get(2, 0)  # MCI + AD
+            }
+        else:
+            classes = np.array([0, 1, 2])
+            class_counts = myConfig.num_samples_per_class
+        
+        y = np.array([])
+        # Create array with labels based on known counts
+        for class_id, count in class_counts.items():
+            y = np.append(y, [class_id] * count)
+        
+        # From centralized hyperparameters in myConfig
+        hpo_weight_scaling_factor = myConfig.cnn_rnn_hyperparams["weight_scaling_factor"]
+        hpo_focal_loss_gamma = myConfig.cnn_rnn_hyperparams["focal_loss_gamma"]
+        hpo_max_lr = myConfig.cnn_rnn_hyperparams["max_lr"]
+        hpo_weight_decay = myConfig.cnn_rnn_hyperparams["weight_decay"]
+        hpo_weight_decay_cnn = myConfig.cnn_rnn_hyperparams["weight_decay_cnn"]
+        hpo_learning_rate_cnn = myConfig.cnn_rnn_hyperparams["learning_rate_cnn"]
+        hpo_pct_start = myConfig.cnn_rnn_hyperparams["pct_start"]
+        hpo_div_factor = myConfig.cnn_rnn_hyperparams["div_factor"]
+        hpo_final_div_factor = myConfig.cnn_rnn_hyperparams["final_div_factor"]
+        
+        # Compute balanced weights
+        raw_weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)  
+        # Apply scaling factor to make weights less extreme
+        scaled_weights = np.power(raw_weights, hpo_weight_scaling_factor)
+        # Normalize to maintain sum proportionality
+        scaled_weights = scaled_weights * (len(classes) / np.sum(scaled_weights))
+        # Convert to tensor
+        weight_tensor = torch.tensor(scaled_weights, device=device, dtype=torch.float32)
+        
+        # Set up the loss function with class weighting
+        criterion = FocalLoss(gamma=hpo_focal_loss_gamma, weight=weight_tensor)
+        
+        # Group parameters for different learning rates
+        cnn_params = []
+        other_params = []
+        for name, param in fold_model.named_parameters():
+            if param.requires_grad:
+                if "cnn_extractor" in name:
+                    cnn_params.append(param)
+                else:
+                    other_params.append(param)
+        
+        # Set up the optimizer with parameter groups
+        initial_lr = hpo_max_lr / hpo_div_factor
+        initial_cnn_lr = hpo_learning_rate_cnn / hpo_div_factor
+        
+        optimizer = torch.optim.AdamW([
+            {'params': cnn_params, 'lr': initial_cnn_lr, 'weight_decay': hpo_weight_decay_cnn},
+            {'params': other_params, 'lr': initial_lr, 'weight_decay': hpo_weight_decay}
+        ])
+        
+        total_steps = len(fold_dataloaders["train"]) * num_epochs
+        
+        # Create scheduler
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=[hpo_learning_rate_cnn, hpo_max_lr],
+            total_steps=total_steps,
+            pct_start=hpo_pct_start,
+            div_factor=hpo_div_factor,
+            final_div_factor=hpo_final_div_factor,
+            anneal_strategy='cos',
+            three_phase=False
+        )
+        
+        # Track best metrics for this fold
+        best_val_f1 = 0.0
+        best_epoch = 0
+        fold_history = []
+        
+        # Training loop for this fold
+        for epoch in range(num_epochs):
+            print(f"\nEpoch {epoch+1}/{num_epochs}")
+            
+            # Clean up memory
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            # Training phase
+            train_loss = train_epoch(
+                fold_model,
+                fold_dataloaders["train"],
+                optimizer,
+                criterion,
+                device,
+                scheduler=scheduler
+            )
+            
+            # Validation phase
+            val_loss, all_labels, all_preds = evaluate(
+                fold_model,
+                fold_dataloaders["validation"],
+                criterion,
+                device,
+                use_cam=False
+            )
+            
+            # Calculate metrics
+            val_accuracy = accuracy_score(all_labels, all_preds)
+            val_f1_macro = f1_score(all_labels, all_preds, average='macro')
+            val_f1_per_class = f1_score(all_labels, all_preds, average=None)
+            
+            # Generate confusion matrix
+            cm = confusion_matrix(all_labels, all_preds)
+            
+            # Calculate average validation loss
+            avg_val_loss = val_loss / len(all_labels) if len(all_labels) > 0 else float('inf')
+            
+            # Add metrics to history
+            epoch_metrics = {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "val_loss": avg_val_loss,
+                "val_accuracy": val_accuracy,
+                "val_f1_macro": val_f1_macro,
+                "val_f1_per_class": val_f1_per_class.tolist(),
+                "learning_rate": scheduler.get_last_lr()[1]
+            }
+            fold_history.append(epoch_metrics)
+            
+            # Log to wandb if available
+            if not myConfig.running_offline and has_wandb and wandb.run:
+                log_dict = {
+                    f"fold_{fold_idx+1}/epoch": epoch + 1,
+                    f"fold_{fold_idx+1}/train_loss": train_loss,
+                    f"fold_{fold_idx+1}/val_loss": avg_val_loss,
+                    f"fold_{fold_idx+1}/val_accuracy": val_accuracy,
+                    f"fold_{fold_idx+1}/val_f1_macro": val_f1_macro
+                }
+                
+                # Add per-class metrics
+                for i, class_name in enumerate(class_names):
+                    log_dict[f"fold_{fold_idx+1}/val_f1_{class_name}"] = val_f1_per_class[i]
+                
+                wandb.log(log_dict)
+            
+            # Print metrics
+            print(f"  Train Loss: {train_loss:.4f}")
+            print(f"  Val Loss: {avg_val_loss:.4f}")
+            print(f"  Val Accuracy: {val_accuracy:.4f}")
+            print(f"  Val F1-Macro: {val_f1_macro:.4f}")
+            print(f"  Val F1 per class: {val_f1_per_class}")
+            
+            # Update best model for this fold
+            if val_f1_macro > best_val_f1:
+                best_val_f1 = val_f1_macro
+                best_epoch = epoch + 1
+                
+                # Save best model for this fold
+                fold_model_path = os.path.join(cv_output_dir, f"fold_{fold_idx+1}_best.pt")
+                torch.save(fold_model.state_dict(), fold_model_path)
+                print(f"  Saved new best model for fold {fold_idx+1} with F1-macro: {best_val_f1:.4f}")
+        
+        # After training all epochs, evaluate the best model on validation set
+        print(f"\nLoading best model from epoch {best_epoch} for final evaluation")
+        fold_model_path = os.path.join(cv_output_dir, f"fold_{fold_idx+1}_best.pt")
+        fold_model.load_state_dict(torch.load(fold_model_path))
+        
+        # Final evaluation of the best model for this fold
+        _, final_val_labels, final_val_preds = evaluate(
+            fold_model,
+            fold_dataloaders["validation"],
+            criterion,
+            device,
+            use_cam=False
+        )
+        
+        # Calculate final metrics
+        final_val_accuracy = accuracy_score(final_val_labels, final_val_preds)
+        final_val_f1_macro = f1_score(final_val_labels, final_val_preds, average='macro')
+        final_val_f1_per_class = f1_score(final_val_labels, final_val_preds, average=None)
+        final_val_cm = confusion_matrix(final_val_labels, final_val_preds)
+        
+        # Store the fold results
+        fold_result = {
+            "fold": fold_idx + 1,
+            "best_epoch": best_epoch,
+            "val_accuracy": final_val_accuracy,
+            "val_f1_macro": final_val_f1_macro,
+            "val_f1_per_class": final_val_f1_per_class.tolist(),
+            "confusion_matrix": final_val_cm.tolist(),
+            "history": fold_history
+        }
+        fold_results.append(fold_result)
+        
+        # Update aggregate metrics
+        all_fold_val_metrics["accuracy"].append(final_val_accuracy)
+        all_fold_val_metrics["f1_macro"].append(final_val_f1_macro)
+        all_fold_val_metrics["f1_per_class"].append(final_val_f1_per_class)
+        
+        # Update overall confusion matrix
+        if overall_confusion_matrix is None:
+            overall_confusion_matrix = final_val_cm
+        else:
+            overall_confusion_matrix += final_val_cm
+            
+        # Plot and save confusion matrix for this fold
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(final_val_cm, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names, yticklabels=class_names)
+        plt.xlabel('Predicted labels')
+        plt.ylabel('True labels')
+        plt.title(f'Fold {fold_idx+1} Confusion Matrix')
+        plt.tight_layout()
+        plt.savefig(os.path.join(cv_output_dir, f"fold_{fold_idx+1}_confusion_matrix.png"))
+        plt.close()
+        
+        # Clean up for next fold
+        del fold_model, optimizer, criterion
+        del fold_dataloaders
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    # Calculate average metrics across all folds
+    avg_accuracy = np.mean(all_fold_val_metrics["accuracy"])
+    avg_f1_macro = np.mean(all_fold_val_metrics["f1_macro"])
+    avg_f1_per_class = np.mean(all_fold_val_metrics["f1_per_class"], axis=0)
+    
+    # Calculate standard deviation for reporting
+    std_accuracy = np.std(all_fold_val_metrics["accuracy"])
+    std_f1_macro = np.std(all_fold_val_metrics["f1_macro"])
+    std_f1_per_class = np.std(all_fold_val_metrics["f1_per_class"], axis=0)
+    
+    # Print final results
+    print("\n=== Cross-Validation Results ===")
+    print(f"Average Accuracy: {avg_accuracy:.4f} ± {std_accuracy:.4f}")
+    print(f"Average F1-Macro: {avg_f1_macro:.4f} ± {std_f1_macro:.4f}")
+    print("Average F1 per class:")
+    for i, class_name in enumerate(class_names):
+        print(f"  {class_name}: {avg_f1_per_class[i]:.4f} ± {std_f1_per_class[i]:.4f}")
+    
+    # Plot overall confusion matrix
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(overall_confusion_matrix, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names)
+    plt.xlabel('Predicted labels')
+    plt.ylabel('True labels')
+    plt.title('Overall Confusion Matrix Across All Folds')
+    plt.tight_layout()
+    plt.savefig(os.path.join(cv_output_dir, "overall_confusion_matrix.png"))
+    plt.close()
+    
+    # Create summary results
+    cv_summary = {
+        "model_type": "CNN+RNN",
+        "binary_classification": binary_classification,
+        "n_folds": n_folds,
+        "num_epochs": num_epochs,
+        "avg_accuracy": float(avg_accuracy),
+        "std_accuracy": float(std_accuracy),
+        "avg_f1_macro": float(avg_f1_macro),
+        "std_f1_macro": float(std_f1_macro),
+        "avg_f1_per_class": [float(f) for f in avg_f1_per_class],
+        "std_f1_per_class": [float(f) for f in std_f1_per_class],
+        "class_names": class_names,
+        "overall_confusion_matrix": overall_confusion_matrix.tolist(),
+        "fold_results": fold_results
+    }
+    
+    # Save final results
+    with open(os.path.join(cv_output_dir, "cv_summary.json"), "w") as f:
+        json.dump(cv_summary, f, indent=2)
+    
+    # Log final results to wandb if available
+    if not myConfig.running_offline and has_wandb and wandb.run:
+        wandb.run.summary.update({
+            "avg_accuracy": avg_accuracy,
+            "std_accuracy": std_accuracy,
+            "avg_f1_macro": avg_f1_macro,
+            "std_f1_macro": std_f1_macro,
+            "avg_f1_per_class": avg_f1_per_class.tolist(),
+            "std_f1_per_class": std_f1_per_class.tolist()
+        })
+        
+        # Log confusion matrix as a figure
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(overall_confusion_matrix, annot=True, fmt='d', cmap='Blues',
+                    xticklabels=class_names, yticklabels=class_names, ax=ax)
+        ax.set_xlabel('Predicted labels')
+        ax.set_ylabel('True labels')
+        ax.set_title('Overall Confusion Matrix Across All Folds')
+        wandb.log({"overall_confusion_matrix": wandb.Image(fig)})
+        plt.close(fig)
+        
+        # Finish wandb run
+        wandb.finish()
+    
+    print(f"\nCross-validation complete! Results saved to {cv_output_dir}")
+    return cv_summary
