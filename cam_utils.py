@@ -239,7 +239,7 @@ def get_model_target_layers(model):
     
     if model_name == "CNN14Classifier":
         # For CNN14, we need to access the last conv layer inside the conv_block6        
-        return model.feature_extractor.conv_block6.conv2
+        return model.cnn_extractor.conv_block6.conv2
     
     elif model_name == "PretrainedDualPathAudioClassifier":
         # For PretrainedDualPathAudioClassifier, access the last conv layer in conv_block6
@@ -351,6 +351,67 @@ def generate_spectrogram(audio, model, sr=16000):
                 log_mel_spec = torch.log10(torch.clamp(mel_spec, min=1e-10))
     
     return log_mel_spec.numpy()
+
+
+def combine_audio_chunks(audio_chunks_list, sample_rate=16000, chunk_size_seconds=10):
+    """
+    Combine audio chunks into a single waveform, properly handling padding in the last chunk.
+    
+    Args:
+        audio_chunks_list: List of audio chunks as tensors
+        sample_rate: Audio sample rate (default: 16000)
+        chunk_size_seconds: Size of each chunk in seconds (default: 10)
+        
+    Returns:
+        tuple: (numpy array of combined waveform, list of original lengths, actual duration in seconds)
+    """
+    if not audio_chunks_list:
+        return np.zeros(sample_rate), [0], 1.0  # Return 1 second of silence as fallback
+    
+    # Convert all chunks to numpy arrays in the same format
+    waveforms = []
+    for chunk in audio_chunks_list:
+        if len(chunk.shape) == 3:  # [batch, channel, time]
+            waveform = chunk.squeeze(0).squeeze(0).cpu().numpy()
+        elif len(chunk.shape) == 2:  # [batch, time]
+            waveform = chunk.squeeze(0).cpu().numpy()
+        else:  # [time]
+            waveform = chunk.cpu().numpy()
+        waveforms.append(waveform)
+    
+    # Check if the last chunk might have padding
+    chunk_size_samples = int(chunk_size_seconds * sample_rate)
+    original_lengths = [len(w) for w in waveforms]
+    
+    # Only try to detect padding in the last chunk
+    if len(waveforms) > 1 and len(waveforms[-1]) == chunk_size_samples:
+        last_chunk = waveforms[-1]
+        # Detect significant content vs. padding
+        threshold = 1e-5
+        non_zero_indices = np.where(np.abs(last_chunk) > threshold)[0]
+        
+        # If we found non-zero values and they end well before the end of the chunk
+        if len(non_zero_indices) > 0:
+            last_non_zero_idx = non_zero_indices[-1]
+            # Check if there's significant padding (at least 0.5 seconds of silence at the end)
+            padding_threshold_samples = int(0.5 * sample_rate)
+            
+            if last_non_zero_idx < len(last_chunk) - padding_threshold_samples:
+                # Estimate actual audio length (with a small buffer for decay)
+                actual_end = min(last_non_zero_idx + int(0.1 * sample_rate), len(last_chunk))
+                print(f"Detected padding in last chunk. Original length: {len(last_chunk)}, Trimmed length: {actual_end}")
+                
+                # Trim the last chunk
+                waveforms[-1] = last_chunk[:actual_end]
+                original_lengths[-1] = actual_end
+    
+    # Now combine all waveforms (some may have been trimmed)
+    combined_waveform = np.concatenate(waveforms)
+    
+    # Calculate actual duration in seconds
+    actual_duration = len(combined_waveform) / sample_rate
+    
+    return combined_waveform, original_lengths, actual_duration
 
 
 def visualize_cam(audio, model, target_class=None, true_class=None, save_path=None, audio_id=None, correct=None, audio_paths_dir=None, epoch=None,                   
@@ -518,6 +579,33 @@ def visualize_cam(audio, model, target_class=None, true_class=None, save_path=No
             waveform = chunk.squeeze(0).cpu().numpy()
         else:  # [time]
             waveform = chunk.cpu().numpy()
+            
+        # Check if this is the last chunk and potentially has padding
+        if i == len(audio_chunks_list) - 1:
+            # Try to detect and remove padding in the last chunk
+            # Padding is typically zeros at the end of the audio
+            # We use a threshold to determine where actual audio ends
+            threshold = 1e-5  # Adjust this threshold based on your audio characteristics
+            non_zero_indices = np.where(np.abs(waveform) > threshold)[0]
+            
+            sample_rate = 16000  # Assuming a sample rate of 16kHz
+            # If we found non-zero values and the last non-zero value is significantly before the end
+            if len(non_zero_indices) > 0 and non_zero_indices[-1] < len(waveform) - 100:  # At least 100 zeros at the end
+                # Add a small buffer to include decay
+                waveform_end = min(non_zero_indices[-1] + int(sample_rate * 0.1), len(waveform))
+                print(f"Detected padding in last chunk. Original length: {len(waveform)}, Trimmed length: {waveform_end}")
+                waveform = waveform[:waveform_end]
+                
+                # Important: Also trim the CAM for this chunk to match the new waveform length
+                # We need to scale the CAM to match the new length
+                if len(chunk_cam.shape) == 1:  # 1D CAM
+                    cam_ratio = waveform_end / len(waveform)
+                    cam_end = int(len(chunk_cam) * cam_ratio)
+                    all_cams[-1] = chunk_cam[:cam_end]
+                    
+                # Update the spectrogram if needed
+                # Not updating spectrogram since this is more complex and may cause issues
+        
         all_waveforms.append(waveform)
         
         # Clean up GradCAM hooks for this chunk
@@ -775,8 +863,13 @@ def visualize_cam(audio, model, target_class=None, true_class=None, save_path=No
     if show_time_domain:
         plt.figure(figsize=(12, 6))
         
-        # Time axis for waveform (in seconds)
-        waveform_duration = len(full_waveform) / sr
+        # Use our new helper function to combine chunks properly
+        full_waveform, original_lengths, actual_duration = combine_audio_chunks(
+            audio_chunks_list, sample_rate=sr, chunk_size_seconds=10
+        )
+        
+        # Time axis now uses actual_duration from the combined waveform
+        waveform_duration = actual_duration
         
         # PERFORMANCE OPTIMIZATION: Downsample the waveform and CAM for plotting
         # This prevents hanging with very long audio files
@@ -789,7 +882,7 @@ def visualize_cam(audio, model, target_class=None, true_class=None, save_path=No
             # Downsample waveform
             waveform_downsampled = full_waveform[::downsample_factor]
             
-            # Create time axis for downsampled waveform
+            # Create time axis for downsampled waveform - using actual duration
             waveform_time = np.linspace(0, waveform_duration, len(waveform_downsampled))
             
             print(f"Downsampling waveform from {len(full_waveform)} to {len(waveform_downsampled)} points")

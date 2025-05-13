@@ -1001,13 +1001,9 @@ def main_cnn_rnn(use_prosodic_features=False, binary_classification=False):
         try:
             model.load_state_dict(torch.load(model_path))
             print("Successfully loaded model for fine-tuning")
-            print("Selectively unfreezing CNN14 layers for fine-tuning...")
+            print("Freezing CNN14 layers")
             for name, param in model.cnn_extractor.named_parameters():
-                if "conv_block5" in name or "conv_block6" in name or "fc1" in name:
-                    param.requires_grad = True
-                    print(f"Unfreezing {name}")
-                else:
-                    param.requires_grad = False             
+                param.requires_grad = False  
         except Exception as e:
             print(f"Error loading model weights: {e}")
             print("This could be because the saved model has a different architecture.")

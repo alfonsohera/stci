@@ -13,6 +13,7 @@ import plotly.graph_objs as go
 import plotly.io as pio
 from plotly.offline import plot
 import os
+from cnn_rnn_model import PretrainedDualPathAudioClassifier
 
 def plotAgeDistribution(data_df):
     plt.style.use("default")
@@ -961,7 +962,8 @@ def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold
     from datasets import load_from_disk
     import librosa
     from panns_inference.panns_inference.models import Cnn14
-    
+    from cnn_rnn_data import prepare_cnn_rnn_dataset
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
@@ -990,8 +992,7 @@ def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold
             excluded_files = set()
     
     # Load dataset from disk
-    print(f"Loading dataset from {dataset_path}")
-    dataset = load_from_disk(dataset_path)
+    dataset = prepare_cnn_rnn_dataset(binary_classification=binary_classification)
     
     # Verify dataset structure
     print(f"Dataset keys: {list(dataset.keys())}")
@@ -1015,14 +1016,43 @@ def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold
     # Load feature extraction model (CNN14)
     print("Using CNN14 as feature extractor")
 
-    def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
+    def load_cnn14(checkpoint_path="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/training_output/cnn_rnn_binary/cnn_rnn_best.pt"):
         model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64, hop_size=320, window_size=1024, fmin=50, fmax=8000)
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        model.load_state_dict(checkpoint['model'])
-        model.eval()
-        return model.to(device)
+        model_state = checkpoint
+        if 'model' in checkpoint:
+            model_state = checkpoint['model'] 
+        elif 'model_state_dict' in checkpoint:
+            model_state = checkpoint['model_state_dict']
+        elif 'state_dict' in checkpoint:
+            model_state = checkpoint['state_dict']
+        # Create the full model with your architecture
+        full_model = PretrainedDualPathAudioClassifier(
+            num_classes=2,  # Binary classification
+            pretrained_cnn14_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'
+        )
+        
+        # Load the fine-tuned weights
+        try:
+            full_model.load_state_dict(model_state)
+            print("Successfully loaded fine-tuned model!")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            # If that fails, attempt partial loading with strict=False
+            try:
+                full_model.load_state_dict(model_state, strict=False)
+                print("Loaded model with some mismatched keys (non-strict loading)")
+            except Exception as e:
+                print(f"Error with non-strict loading: {e}")
+        
+        # Extract just the CNN14 part
+        cnn14_model = full_model.cnn_extractor
+        cnn14_model.eval()
+        return cnn14_model
     
     feature_extractor = load_cnn14()
+    feature_extractor.to(device)
+    feature_extractor.eval()
     
     # Create feature extraction function
     def extract_features(audio_path, feature_extractor):
@@ -1844,7 +1874,7 @@ if __name__ == "__main__":
     data_df = pd.read_csv(data_file_path) 
 
     # To visualize one sample per class:
-    #visualize_spectrogram_augmentations(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
+    #visualize_spectrogram_augmentations(data_df, "/h   ome/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data")
 
     # To visualize multiple augmentations of a single sample:
     #visualize_augmentation_examples(data_df, "/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/Data", n_examples=3)
@@ -1861,12 +1891,12 @@ if __name__ == "__main__":
     ) """
 
     results_binary = analyze_class_similarity(
-    dataset_path=myConfig.OUTPUT_PATH,
+    dataset_path=os.path.join(myConfig.DATA_DIR, "pytorch_dataset"),
     audio_root_path=myConfig.DATA_DIR,
     similarity_threshold=0.95,
     binary_classification=True, 
     output_prefix="binary_analysis",
-    exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
+    #exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
 )    
 
     # Example usage of the new function:

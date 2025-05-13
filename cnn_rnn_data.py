@@ -10,7 +10,7 @@ import librosa
 import myConfig
 import myData
 import myFunctions
-import myAudio
+
 
 
 def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000, min_segment_length=5):
