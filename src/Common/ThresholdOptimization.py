@@ -606,7 +606,7 @@ def main():
     
     # Prepare collate function and dataset based on model type
     if args.model_type == "wav2vec2":
-        from src.main import collate_fn
+        from main import collate_fn
         split_dataset = dataset[args.dataset_split]
         dataloader = DataLoader(
             split_dataset, batch_size=args.batch_size, collate_fn=collate_fn
@@ -635,7 +635,7 @@ def main():
     elif args.model_type == "cnn_rnn":
         # Import here to avoid issues if the module doesn't exist
         try:
-            from src.main import collate_fn_cnn_rnn
+            from main import collate_fn_cnn
             from src.Cnn.cnn_model import DualPathAudioClassifier
         except ImportError:
             print("Error: Could not import CNN+RNN model. Make sure cnn_model.py exists and contains the DualPathAudioClassifier class.")
@@ -648,7 +648,7 @@ def main():
         # Create data loader
         split_dataset = dataset[args.dataset_split]
         dataloader = DataLoader(
-            split_dataset, batch_size=args.batch_size, collate_fn=collate_fn_cnn_rnn
+            split_dataset, batch_size=args.batch_size, collate_fn=collate_fn_cnn
         )
         
         # Create model
