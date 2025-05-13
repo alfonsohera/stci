@@ -4,7 +4,7 @@ import numpy as np
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from Common import Config
+from src.Common import Config
 from transformers import (
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Processor,

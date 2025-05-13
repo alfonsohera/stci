@@ -11,10 +11,10 @@ import csv
 from datasets import Dataset, DatasetDict
 import sys
 sys.path.append('..')
-from Common import Config
+from src.Common.Config import DATA_DIR, OUTPUT_PATH, configure_paths
 
 # Local imports
-from cnn_data import chunk_audio, load_cached_pytorch_dataset
+from src.Cnn.cnn_data import chunk_audio, load_cached_pytorch_dataset
 
 def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=16000):
     """
@@ -26,11 +26,11 @@ def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=1
         sample_rate: Sample rate of the audio
     """
     # Configure paths
-    Config.configure_paths()
+    configure_paths()
     
     # Load cached PyTorch dataset
     if dataset_path is None:
-        pytorch_dataset_path = os.path.join(Config.DATA_DIR, "pytorch_dataset")
+        pytorch_dataset_path = os.path.join(DATA_DIR, "pytorch_dataset")
     else:
         pytorch_dataset_path = dataset_path
         
@@ -38,7 +38,7 @@ def analyze_all_files(dataset_path=None, backup_dataset_path=None, sample_rate=1
     dataset = load_cached_pytorch_dataset(pytorch_dataset_path)
     
     # Create output directory
-    output_dir = os.path.join(Config.OUTPUT_PATH, "chunking_analysis")
+    output_dir = os.path.join(OUTPUT_PATH, "chunking_analysis")
     os.makedirs(output_dir, exist_ok=True)
     
     # Create a unique name for the CSV file based on the path

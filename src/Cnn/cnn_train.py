@@ -13,9 +13,13 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Local imports
-from src.Common import Config
-from src.Common import Data
+# Local imports - individual imports from Config
+from src.Common.Config import (
+    cnn_hyperparams, wandb_project, wandb_entity, checkpoint_dir, 
+    training_args, wandb_watch_model, wandb_log_model, num_samples_per_class,
+    OUTPUT_PATH, ROOT_DIR, DATA_DIR, MODEL_DIR, configure_paths, 
+    training_from_scratch  
+)
 from src.Common import ThresholdOptimization
 from main import log_memory_usage
 from .cnn_data import prepare_cnn_dataset, get_cnn_dataloaders
@@ -426,15 +430,15 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # From centralized hyperparameters in Config
-    hpo_max_lr = Config.cnn_hyperparams["max_lr"]
-    hpo_focal_loss_gamma = Config.cnn_hyperparams["focal_loss_gamma"]
-    hpo_weight_scaling_factor = Config.cnn_hyperparams["weight_scaling_factor"]
-    hpo_weight_decay = Config.cnn_hyperparams["weight_decay"]
-    hpo_pct_start = Config.cnn_hyperparams["pct_start"]
-    hpo_div_factor = Config.cnn_hyperparams["div_factor"]
-    hpo_final_div_factor = Config.cnn_hyperparams["final_div_factor"]
-    hpo_weight_decay_cnn = Config.cnn_hyperparams["weight_decay_cnn"]
-    hpo_learning_rate_cnn = Config.cnn_hyperparams["learning_rate_cnn"]
+    hpo_max_lr = cnn_hyperparams["max_lr"]
+    hpo_focal_loss_gamma = cnn_hyperparams["focal_loss_gamma"]
+    hpo_weight_scaling_factor = cnn_hyperparams["weight_scaling_factor"]
+    hpo_weight_decay = cnn_hyperparams["weight_decay"]
+    hpo_pct_start = cnn_hyperparams["pct_start"]
+    hpo_div_factor = cnn_hyperparams["div_factor"]
+    hpo_final_div_factor = cnn_hyperparams["final_div_factor"]
+    hpo_weight_decay_cnn = cnn_hyperparams["weight_decay_cnn"]
+    hpo_learning_rate_cnn = cnn_hyperparams["learning_rate_cnn"]
     # Initialize wandb
     if not wandb.run:
         # Determine if we're doing binary or multi-class classification
@@ -442,8 +446,8 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
         model_type = "CNN-Binary" if num_classes == 2 else "CNN"
         
         wandb.init(
-            project=Config.wandb_project,
-            entity=Config.wandb_entity,
+            project=wandb_project,
+            entity=wandb_entity,
             name="cnn",
             config={
                 "model_type": model_type,
@@ -456,7 +460,7 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
         )
         
         # Watch model parameters and gradients
-        if Config.wandb_watch_model:
+        if wandb_watch_model:
             wandb.watch(model, log="all", log_freq=100)
 
     # Determine number of classes from model
@@ -468,13 +472,13 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
         classes = np.array([0, 1])
         # Adapt class counts for binary classification
         class_counts = {
-            0: Config.num_samples_per_class.get(0, 0),  # Healthy
-            1: Config.num_samples_per_class.get(1, 0) + Config.num_samples_per_class.get(2, 0)  # MCI + AD
+            0: num_samples_per_class.get(0, 0),  # Healthy
+            1: num_samples_per_class.get(1, 0) + num_samples_per_class.get(2, 0)  # MCI + AD
         }
     else:
         # Original 3-class classification
         classes = np.array([0, 1, 2])  
-        class_counts = Config.num_samples_per_class
+        class_counts = num_samples_per_class
     
     y = np.array([])
     # Create array with labels based on known counts
@@ -528,10 +532,10 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
     )    
     
     # Create output directory for CNN model
-    cnn_output_dir = os.path.join(Config.training_args.output_dir, "cnn")
+    cnn_output_dir = os.path.join(training_args.output_dir, "cnn")
     if num_classes == 2:
         # For binary classification, use a different output directory
-        cnn_output_dir = os.path.join(Config.training_args.output_dir, "cnn_binary")
+        cnn_output_dir = os.path.join(training_args.output_dir, "cnn_binary")
     
     os.makedirs(cnn_output_dir, exist_ok=True)
     
@@ -650,7 +654,7 @@ def train_cnn_model(model, dataloaders, num_epochs=10):
         wandb.run.summary["best_f1_macro"] = best_f1_macro
         
         # Log final model if configured
-        if Config.wandb_log_model:
+        if wandb_log_model:
             model_path = os.path.join(cnn_output_dir, "cnn_best.pt")
             safetensors_path = os.path.join(cnn_output_dir, "cnn_best.safetensors")
             
@@ -852,7 +856,7 @@ def test_cnn_model(model, test_loader, use_cam=False, cam_output_dir=None, max_c
         all_probs = np.vstack(all_probs)
         
         # Create output directory for visualizations
-        viz_output_dir = cam_output_dir if cam_output_dir else os.path.join(Config.OUTPUT_PATH, "test_visualizations")
+        viz_output_dir = cam_output_dir if cam_output_dir else os.path.join(OUTPUT_PATH, "test_visualizations")
         os.makedirs(viz_output_dir, exist_ok=True)
         
         # Generate confusion matrix visualization
@@ -994,13 +998,13 @@ def main_cnn(use_prosodic_features=False, binary_classification=False):
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,  # Binary or 3-class based on parameter
         sample_rate=16000,
-        pretrained_cnn14_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                            
+        pretrained_cnn14_path=checkpoint_dir+'/Cnn14_mAP=0.431.pth',                            
     )
 
     
-    if not Config.training_from_scratch:       
+    if not training_from_scratch:       
         model_dir = "cnn_binary" if binary_classification else "cnn"
-        model_path = os.path.join(Config.training_args.output_dir, model_dir, "cnn_best.pt")
+        model_path = os.path.join(training_args.output_dir, model_dir, "cnn_best.pt")
         
         print(f"Fine-tuning: Loading pre-trained model from {model_path}")
         try:
@@ -1068,12 +1072,12 @@ def test_cnn(binary_classification=False, use_cam=False, max_cam_samples=20):
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
+        pretrained_cnn14_path=checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
     
     # Load the best model weights from the appropriate directory
     model_dir = "cnn_binary" if binary_classification else "cnn"
-    model_path = os.path.join(Config.training_args.output_dir, model_dir, "cnn_best.pt")
+    model_path = os.path.join(training_args.output_dir, model_dir, "cnn_best.pt")
     
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
@@ -1091,7 +1095,7 @@ def test_cnn(binary_classification=False, use_cam=False, max_cam_samples=20):
     cam_output_dir = None
     if use_cam:        
         class_type = "Binary" if binary_classification else "ThreeClass"
-        cam_output_dir = os.path.join(Config.OUTPUT_PATH, f"CAM_Test_{class_type}")
+        cam_output_dir = os.path.join(OUTPUT_PATH, f"CAM_Test_{class_type}")
         os.makedirs(cam_output_dir, exist_ok=True)
         print(f"CAM visualizations will be saved to: {cam_output_dir}")
     
@@ -1200,9 +1204,10 @@ def optimize_cnn(binary_classification=False):
     """    
     hpo_n_mels = 128
     # Configure paths
-    path_config = Config.configure_paths()
+    path_config = configure_paths()    
+    from src.Common import Config
     for key, path in path_config.items():
-        setattr(Config, key, path)
+        setattr(Config, key, path)        
     
     if binary_classification:
         print("Running threshold optimization for CNN model with binary classification (Healthy vs. Non-Healthy)")
@@ -1219,12 +1224,12 @@ def optimize_cnn(binary_classification=False):
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
+        pretrained_cnn14_path=checkpoint_dir+'/Cnn14_mAP=0.431.pth',            
     )
     
     # Load the best model weights from the appropriate directory
     model_dir = "cnn_binary" if binary_classification else "cnn"
-    model_path = os.path.join(Config.training_args.output_dir, model_dir, "cnn_best.pt")
+    model_path = os.path.join(training_args.output_dir, model_dir, "cnn_best.pt")
     
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
@@ -1245,7 +1250,7 @@ def optimize_cnn(binary_classification=False):
     
     # Set output directory with appropriate name for binary/multi-class
     output_dir_name = "cnn_binary" if binary_classification else "cnn"
-    output_dir = os.path.join(Config.OUTPUT_PATH, "threshold_optimization", output_dir_name)
+    output_dir = os.path.join(OUTPUT_PATH, "threshold_optimization", output_dir_name)
     os.makedirs(output_dir, exist_ok=True)
     
     # Set class names based on binary/multi-class
@@ -1281,9 +1286,10 @@ def test_cnn_with_thresholds(binary_classification=False):
     from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
     
     # Configure paths
-    path_config = Config.configure_paths()
+    path_config = configure_paths()    
+    from src.Common import Config
     for key, path in path_config.items():
-        setattr(Config, key, path)
+        setattr(Config, key, path)        
     
     # Prepare dataset with appropriate classification mode
     if binary_classification:
@@ -1299,12 +1305,12 @@ def test_cnn_with_thresholds(binary_classification=False):
     model = PretrainedDualPathAudioClassifier(
         num_classes=2 if binary_classification else 3,
         sample_rate=16000,
-        pretrained_cnn14_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth',                        
+        pretrained_cnn14_path=checkpoint_dir+'/Cnn14_mAP=0.431.pth',                        
     )
     
     # Load the best model weights from the appropriate directory
     model_dir = "cnn_binary" if binary_classification else "cnn"
-    model_path = os.path.join(Config.training_args.output_dir, model_dir, "cnn_best.pt")
+    model_path = os.path.join(training_args.output_dir, model_dir, "cnn_best.pt")
     
     if os.path.exists(model_path):
         print(f"Loading pre-trained model from {model_path}")
@@ -1325,7 +1331,7 @@ def test_cnn_with_thresholds(binary_classification=False):
     
     # Try to load threshold values from the optimization results
     threshold_results_path = os.path.join(
-        Config.OUTPUT_PATH, 
+        OUTPUT_PATH, 
         "threshold_optimization", 
         model_dir, 
         "threshold_optimization_results.json"
@@ -1517,7 +1523,7 @@ def test_cnn_with_thresholds(binary_classification=False):
             ax2.set_title(f'Threshold Confusion Matrix ({threshold_type})')
             
             # Save the plot
-            output_dir = os.path.join(Config.OUTPUT_PATH, "threshold_comparison", "cnn")
+            output_dir = os.path.join(OUTPUT_PATH, "threshold_comparison", "cnn")
             os.makedirs(output_dir, exist_ok=True)
             plt.tight_layout()
             plt.savefig(os.path.join(output_dir, f"confusion_matrix_comparison_{threshold_type}.png"))

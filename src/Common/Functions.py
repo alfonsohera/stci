@@ -3,8 +3,9 @@ import torch
 import pandas as pd
 import numpy as np
 from . import Config
-from . import Audio
-from . import Model
+from .Audio import Audio
+from .Audio import resolve_audio_path
+from src.Wav2Vec2 import Model
 from . import Speech2text
 import os
 from parselmouth.praat import call

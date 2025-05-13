@@ -16,7 +16,6 @@ import wandb
 import argparse
 from . import Config
 from . import Data
-from . import Model
 from torch.utils.data import DataLoader
 from safetensors.torch import load_file
 
@@ -607,7 +606,7 @@ def main():
     
     # Prepare collate function and dataset based on model type
     if args.model_type == "wav2vec2":
-        from main import collate_fn
+        from src.main import collate_fn
         split_dataset = dataset[args.dataset_split]
         dataloader = DataLoader(
             split_dataset, batch_size=args.batch_size, collate_fn=collate_fn
@@ -636,7 +635,7 @@ def main():
     elif args.model_type == "cnn_rnn":
         # Import here to avoid issues if the module doesn't exist
         try:
-            from main import collate_fn_cnn_rnn
+            from src.main import collate_fn_cnn_rnn
             from src.Cnn.cnn_model import DualPathAudioClassifier
         except ImportError:
             print("Error: Could not import CNN+RNN model. Make sure cnn_model.py exists and contains the DualPathAudioClassifier class.")
@@ -676,7 +675,7 @@ def main():
             log_to_wandb=args.log_wandb
         )
 if __name__ == "__main__":
-    import Model  # Import here to avoid circular imports
+    from src.Wav2Vec2 import Model  # Import here to avoid circular imports
     main()
 
 

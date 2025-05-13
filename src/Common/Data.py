@@ -1,8 +1,8 @@
 import os
 import requests
 import shutil
-from . import Config
-from . import Functions
+from .Config import ROOT_DIR, DATA_DIR, LABEL_MAP, SAMPLING_RATE, OUTPUT_PATH  
+from .Functions import resolve_audio_path, chunk_input_sample  
 from . import Audio
 import numpy as np
 import psutil
@@ -50,7 +50,7 @@ def log_memory_usage(label):
 
 def DownloadAndExtract():
     # Always use Data directory at script level
-    data_dir = Config.DATA_DIR
+    data_dir = DATA_DIR
     
     # Define paths for category folders within data_dir
     healthy_dir = os.path.join(data_dir, "Healthy")
@@ -184,7 +184,7 @@ def datasetSplit(data_df, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2):
 
 
 def loadHFDataset():
-    dataset = load_from_disk(Config.OUTPUT_PATH)
+    dataset = load_from_disk(OUTPUT_PATH)  
     return dataset
 
 
@@ -206,7 +206,7 @@ def process_data(df):
     data = []
     for row in tqdm(df.itertuples(), total=len(df)):
         audio_file = row.file_path
-        file_path = Functions.resolve_audio_path(audio_file)
+        file_path = resolve_audio_path(audio_file)  
         label = row.label
 
         # Load processed audio
@@ -258,7 +258,7 @@ def createHFDatasets(train_df, val_df, test_df):
     # Monitor chunking in batches to see where it fails
     try:
         dataset = dataset.map(
-            Functions.chunk_input_sample,
+            chunk_input_sample,
             desc="Chunking audio samples",
             batch_size=8  # Process in smaller batches
         )
@@ -269,9 +269,9 @@ def createHFDatasets(train_df, val_df, test_df):
         raise
 
     # Finally, save to disk    
-    dataset.save_to_disk(Config.OUTPUT_PATH)
+    dataset.save_to_disk(OUTPUT_PATH)
     log_memory_usage("After saving dataset")
-    print(f"Dataset saved to {Config.OUTPUT_PATH}")
+    print(f"Dataset saved to {OUTPUT_PATH}")
     
     return dataset
 
@@ -288,7 +288,7 @@ def prepare_for_cnn_rnn(example):
         audio = torch.tensor(audio, dtype=torch.float32)
     
     # Standardize audio length - 100 seconds at 16kHz
-    max_length = 16000 * 100  # 100 seconds max
+    max_length = SAMPLING_RATE * 100  # 100 seconds max
     
     # Handle as 1D tensor as in the original implementation
     if len(audio) > max_length:
