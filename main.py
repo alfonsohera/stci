@@ -11,15 +11,12 @@ from transformers import logging
 # <local imports>
 from src.Common import Config
 from src.Common import Data
-from src.Wav2Vec2 import Model
 from src.Common import Functions
 # </local imports>
 from tqdm import tqdm
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
 
-
-# Add this function to your main.py at the top level
 def log_memory_usage(label):
     import psutil
     import gc
@@ -49,6 +46,7 @@ logging.set_verbosity_error()  # Set transformers logging to show only errors
 
 def collate_fn(batch):
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    from src.Wav2Vec2 import Model
     _, processor, _ = Model.getModelDefinitions()
     input_values = processor(
         [item['audio']['array'] for item in batch],  # Access the 'array' key
@@ -245,8 +243,7 @@ def testModelWithThresholds(model, dataset, thresholds=None, threshold_type="you
                 "predictions": threshold_preds
             }
         }
-    
-    # If no thresholds provided, just return baseline results
+        
     return {
         "baseline": {
             "accuracy": baseline_accuracy,
@@ -262,6 +259,7 @@ def main_fn():
     for key, path in path_config.items():
         setattr(Config, key, path)
     
+    from src.Wav2Vec2 import Model
     model_name, processor, base_model = Model.getModelDefinitions()
     # Data extraction and feature engineering
     Data.DownloadAndExtract()    
@@ -344,6 +342,7 @@ def main_fn():
 
 
 def test():
+    from src.Wav2Vec2 import Model
     model_name, _, _ = Model.getModelDefinitions()
     model, _ = Model.loadModel(model_name)
     dataset = Data.loadHFDataset()
@@ -358,6 +357,7 @@ def test_with_thresholds():
         setattr(Config, key, path)
     
     # Load model
+    from src.Wav2Vec2 import Model
     model_name, _, _ = Model.getModelDefinitions()
     model, _ = Model.loadModel(model_name)
     
@@ -407,6 +407,7 @@ def optimize():
         setattr(Config, key, path)
     
     # Get model and load it
+    from src.Wav2Vec2 import Model
     model_name, _, _ = Model.getModelDefinitions()
     model, _ = Model.loadModel(model_name)
     
@@ -481,8 +482,7 @@ if __name__ == "__main__":
             Config.training_from_scratch = False
             print("Testing model with optimized thresholds (Wav2Vec2 pipeline)...")
             test_with_thresholds()
-    elif args.pipeline == "cnn":
-        # Import CNN functions only when needed
+    elif args.pipeline == "cnn":        
         from src.Cnn.cnn_train import main_cnn, test_cnn
         # Import CNN threshold optimization if it exists
         try:
@@ -547,7 +547,7 @@ if __name__ == "__main__":
                 run_bayesian_optimization(                     
                     n_trials=args.trials,
                     binary_classification=args.binary_classification,
-                    resume_study=args.resume  # Pass the resume flag
+                    resume_study=args.resume  
                 )
             else:
                 print("Hyperparameter optimization not implemented. Please check your installation.")

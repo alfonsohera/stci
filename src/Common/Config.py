@@ -6,10 +6,10 @@ from transformers import TrainingArguments
 def configure_paths():
     """Set up all path variables based on current environment"""
     # Find the root directory (repository root)
-    current_file_path = os.path.abspath(__file__)
-    # Common directory is one level down from the ROOT_DIR
-    COMMON_DIR = os.path.dirname(current_file_path)
-    ROOT_DIR = os.path.dirname(COMMON_DIR)
+    current_file_path = os.path.abspath(__file__)    
+    COMMON_DIR = os.path.dirname(current_file_path)    
+    SRC_DIR = os.path.dirname(COMMON_DIR)    
+    ROOT_DIR = os.path.dirname(SRC_DIR)
     
     # Define consistent data paths relative to ROOT_DIR
     DATA_DIR = os.path.join(ROOT_DIR, "Data")

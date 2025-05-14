@@ -3,8 +3,6 @@ import torch
 import pandas as pd
 import numpy as np
 from . import Config
-from .Audio import Audio
-from .Audio import resolve_audio_path
 from src.Wav2Vec2 import Model
 from . import Speech2text
 import os
@@ -293,10 +291,12 @@ def cpu_worker(file_info):
     idx, file_path = file_info
     result = {}
     # Resolve the audio path passed to the extraction functions
+    from .Audio import resolve_audio_path
     file_path = resolve_audio_path(file_path)
 
     try:
         # 1. Extract metadata features
+        from .Audio import Audio
         result['duration'] = Audio.compute_audio_length(file_path)
         result['class'] = extract_class(file_path)
         sex, age = extract_sex_age(file_path)
@@ -409,6 +409,7 @@ def extract_gpu_features(data_df):
     print("Extracting GPU-dependent features:")
     
     # 0. Load audio separation model
+    from .Audio import Audio
     model = Audio.load_demucs_model()
     print("Applying voice separation with Demucs...")
     
@@ -429,6 +430,7 @@ def extract_gpu_features(data_df):
         print(f"Processing Demucs batch {i//demucs_batch_size + 1}/{(total_files + demucs_batch_size - 1)//demucs_batch_size}")
         
         # Pre-resolve all paths at once
+        from .Audio import resolve_audio_path
         batch_paths = [resolve_audio_path(row['file_path']) for _, row in batch_files.iterrows()]
         
         # Process batch with Demucs
@@ -521,7 +523,9 @@ def resolve_audio_path(relative_path):
     Returns:
         str: Absolute path to the audio file
     """
-    data_dir = get_data_dir()
+    # Import locally to avoid circular imports
+    from . import Config
+    data_dir = Config.DATA_DIR
     return os.path.join(data_dir, relative_path)
 
 def convert_absolute_to_relative_paths(dataframe):

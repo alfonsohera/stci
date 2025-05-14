@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from src.Common.Config import (
     cnn_hyperparams, wandb_project, wandb_entity, checkpoint_dir, 
     training_args, wandb_watch_model, wandb_log_model, num_samples_per_class,
-    OUTPUT_PATH, ROOT_DIR, DATA_DIR, MODEL_DIR, configure_paths, 
+    OUTPUT_PATH, ROOT_DIR, DATA_DIR, configure_paths, 
     training_from_scratch  
 )
 from src.Common import ThresholdOptimization

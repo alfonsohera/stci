@@ -1,9 +1,8 @@
 import os
 import requests
 import shutil
-from .Config import ROOT_DIR, DATA_DIR, LABEL_MAP, SAMPLING_RATE, OUTPUT_PATH  
+from .Config import ROOT_DIR, DATA_DIR, LABEL_MAP, OUTPUT_PATH  
 from .Functions import resolve_audio_path, chunk_input_sample  
-from . import Audio
 import numpy as np
 import psutil
 import gc
@@ -203,6 +202,9 @@ def ScaleDatasets(train_df, val_df, test_df):
 
 
 def process_data(df):
+    # Import Audio module inside the function to avoid circular imports
+    from . import Audio
+    
     data = []
     for row in tqdm(df.itertuples(), total=len(df)):
         audio_file = row.file_path
@@ -288,7 +290,7 @@ def prepare_for_cnn_rnn(example):
         audio = torch.tensor(audio, dtype=torch.float32)
     
     # Standardize audio length - 100 seconds at 16kHz
-    max_length = SAMPLING_RATE * 100  # 100 seconds max
+    max_length = 16000 * 100  # 100 seconds max
     
     # Handle as 1D tensor as in the original implementation
     if len(audio) > max_length:

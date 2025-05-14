@@ -8,16 +8,16 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 from .Config import ROOT_DIR, LABEL_MAP
 from .Data import DownloadAndExtract, extracted_features
-from .Functions import get_data_dir, createDataframe, featureEngineering, plotProsodicFeatures, histogramProsodicFeatures
+from .Functions import get_data_dir, createDataframe, featureEngineering
+from .Plots import plotProsodicFeatures, histogramProsodicFeatures 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import torch
-from transformers import EfficientNetPreTrainedModel, SequenceClassifierOutput
 
 
 def check_data_exists():
     """Check if required data directories exist."""
-    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+    data_dir = get_data_dir()
     healthy_dir = os.path.join(data_dir, "Healthy")
     mci_dir = os.path.join(data_dir, "MCI")
     ad_dir = os.path.join(data_dir, "AD")
@@ -67,7 +67,7 @@ def extract_and_report_features():
     """
     DownloadAndExtract()    
     # Check if dataframe.csv exists in the Data directory
-    data_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data", "dataframe.csv")   
+    data_file_path = os.path.join(ROOT_DIR, "..", "Data", "dataframe.csv")
     if os.path.exists(data_file_path):
         # Load existing dataframe
         data_df = pd.read_csv(data_file_path)

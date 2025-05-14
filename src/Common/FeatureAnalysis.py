@@ -110,11 +110,9 @@ def recommend_features(importance_df, threshold=None, num_features=None):
         return importance_df[importance_df['RF_Importance'] > avg_importance]['Feature'].tolist()
     
 
-
-
 def analyze_features():
-    # Load the dataframe
-    data_file_path = os.path.join(Config.DATA_DIR, "dataframe.csv")
+    # Load the dataframe 
+    data_file_path = os.path.join(Config.ROOT_DIR, "Data", "dataframe.csv")
     df = pd.read_csv(data_file_path)
     
     # Get all features (combine all feature lists from config)
@@ -134,6 +132,5 @@ def analyze_features():
     
     return importance_results, recommended_features
 
-
-importance_results, recommended_features = analyze_features()
-# Optionally use only the recommended features
+if __name__ == "__main__":
+    importance_results, recommended_features = analyze_features()

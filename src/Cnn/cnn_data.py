@@ -10,10 +10,9 @@ import librosa
 import sys
 sys.path.append('..')
 
-# Fix imports to include all needed functions and variables
-from src.Common.Config import ROOT_DIR, DATA_DIR, OUTPUT_PATH, SAMPLING_RATE
-from src.Common.Data import loadHFDataset, datasetSplit, ScaleDatasets, DownloadAndExtract
-from src.Common.Audio import load_audio
+# Local imports
+from src.Common.Config import ROOT_DIR, DATA_DIR, OUTPUT_PATH
+from src.Common.Data import loadHFDataset, datasetSplit, ScaleDatasets, DownloadAndExtract  
 from src.Common.Functions import createDataframe, featureEngineering, resolve_audio_path, convert_absolute_to_relative_paths, get_data_dir
 
 
@@ -360,8 +359,8 @@ class PreloadedAudioDataset(Dataset):
             label = row["label"]
             
             try:
-                # Load audio directly with librosa, limiting duration
-                audio_path = resolve_audio_path(file_path)  # Use the imported function
+                # Resolve the full path to the audio file
+                audio_path = os.path.join(DATA_DIR, file_path)
                 audio, sr = self._load_audio_with_duration(audio_path)
                 
                 # Convert to tensor
