@@ -18,6 +18,13 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 from torch.utils.data import DataLoader
 
 def log_memory_usage(label):
+    """
+    Records and prints current memory usage information with a descriptive label.
+    Useful for tracking memory consumption during model training and inference.
+    
+    Args:
+        label (str): Descriptive label for the memory usage checkpoint
+    """
     import psutil
     import gc
     
