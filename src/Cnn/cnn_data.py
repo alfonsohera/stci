@@ -6,11 +6,14 @@ from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 import librosa
 
+# Path setup to access modules in parent directory
+import sys
+sys.path.append('..')
+
 # Local imports
-import myConfig
-import myData
-import myFunctions
-import myAudio
+from src.Common.Config import ROOT_DIR, DATA_DIR, OUTPUT_PATH
+from src.Common.Data import loadHFDataset, datasetSplit, ScaleDatasets, DownloadAndExtract  
+from src.Common.Functions import createDataframe, featureEngineering, resolve_audio_path, convert_absolute_to_relative_paths, get_data_dir
 
 
 def chunk_audio(audio, chunk_size_seconds=10, sample_rate=16000, min_segment_length=5):
@@ -75,7 +78,7 @@ def debug_chunk_audio(audio_id="3", sample_rate=16000):
     import numpy as np
     
     # Try to load the original audio file directly
-    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+    pytorch_dataset_path = os.path.join(DATA_DIR, "pytorch_dataset")
     
     # Search in test split first
     split_path = os.path.join(pytorch_dataset_path, "test.pt")
@@ -134,7 +137,7 @@ def debug_chunk_audio(audio_id="3", sample_rate=16000):
         # Check if there might be a different version in the raw data directory
         try:
             import torchaudio
-            data_dir = os.path.join(myConfig.ROOT_DIR, "Data")
+            data_dir = os.path.join(ROOT_DIR, "Data")
             for subdir in ["Healthy", "MCI", "AD"]:
                 for ext in ['.wav', '.flac']:
                     file_check_path = os.path.join(data_dir, subdir, f"{os.path.basename(file_path)}")
@@ -158,8 +161,8 @@ def debug_chunk_audio(audio_id="3", sample_rate=16000):
         return None
 
 
-class CNNRNNDataset(Dataset):
-    """Dataset wrapper specifically for CNN+RNN model with fixed chunk size
+class CNNDataset(Dataset):
+    """Dataset wrapper specifically for CNN model with fixed chunk size
     that works with standard PyTorch datasets."""
     def __init__(self, dataset, chunk_size_seconds=10, sample_rate=16000):
         self.dataset = dataset        
@@ -232,7 +235,7 @@ class CNNRNNDataset(Dataset):
         return result
 
 
-def collate_fn_cnn_rnn(batch):
+def collate_fn_cnn(batch):
     """Collate function that handles chunked audio with prosodic features."""
     audio = torch.stack([item["audio"] for item in batch])
     labels = torch.tensor([item["label"] for item in batch])
@@ -270,7 +273,7 @@ def collate_fn_cnn_rnn(batch):
     return result
 
 
-def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
+def get_cnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     """
     Creates dataloaders using the PyTorch dataset approach instead of HuggingFace.
     
@@ -283,17 +286,17 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
         Dictionary with train, validation, and test dataloaders
     """
     # Wrap the datasets in the chunking dataset class
-    train_dataset = CNNRNNDataset(
+    train_dataset = CNNDataset(
         dataset_dict["train"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
-    val_dataset = CNNRNNDataset(
+    val_dataset = CNNDataset(
         dataset_dict["validation"],         
         chunk_size_seconds=chunk_size_seconds
     )
     
-    test_dataset = CNNRNNDataset(
+    test_dataset = CNNDataset(
         dataset_dict["test"],         
         chunk_size_seconds=chunk_size_seconds
     )
@@ -302,7 +305,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=True,
         num_workers=4,  
         pin_memory=True  
@@ -311,7 +314,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     val_loader = DataLoader(
         val_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=False,
         num_workers=4,  
         pin_memory=True 
@@ -320,7 +323,7 @@ def get_cnn_rnn_dataloaders(dataset_dict, batch_size=64, chunk_size_seconds=10):
     test_loader = DataLoader(
         test_dataset, 
         batch_size=batch_size,
-        collate_fn=collate_fn_cnn_rnn,
+        collate_fn=collate_fn_cnn,
         shuffle=False,
         num_workers=4,  
         pin_memory=True 
@@ -356,8 +359,8 @@ class PreloadedAudioDataset(Dataset):
             label = row["label"]
             
             try:
-                # Load audio directly with librosa, limiting duration
-                audio_path = myFunctions.resolve_audio_path(file_path)
+                # Resolve the full path to the audio file
+                audio_path = os.path.join(DATA_DIR, file_path)
                 audio, sr = self._load_audio_with_duration(audio_path)
                 
                 # Convert to tensor
@@ -477,18 +480,18 @@ def load_cached_pytorch_dataset(cache_path):
     return datasets
 
 
-def prepare_cnn_rnn_dataset(binary_classification=True):
-    """Prepare data for CNN-RNN model training using PyTorch datasets instead of HF,
+def prepare_cnn_dataset(binary_classification=True):
+    """Prepare data for CNN model training using PyTorch datasets instead of HF,
     excluding files specified in exclude_list.csv.
     
     Args:
         binary_classification: If True, convert to binary classification 
                               (0=Healthy, 1=Non-Healthy (MCI+AD))
     """
-    myData.DownloadAndExtract()
+    DownloadAndExtract()  
     
     # Check if cached PyTorch dataset exists
-    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+    pytorch_dataset_path = os.path.join(DATA_DIR, "pytorch_dataset")
     if os.path.exists(pytorch_dataset_path) and len(os.listdir(pytorch_dataset_path)) > 0:
         print(f"Loading cached PyTorch dataset from {pytorch_dataset_path}")
         dataset = load_cached_pytorch_dataset(pytorch_dataset_path)
@@ -508,7 +511,7 @@ def prepare_cnn_rnn_dataset(binary_classification=True):
     print("No cached dataset found. Creating new dataset...")
     
     # Load exclude list
-    exclude_list_path = os.path.join(myConfig.ROOT_DIR, "exclude_list.csv")
+    exclude_list_path = os.path.join(ROOT_DIR, "exclude_list.csv")
     if os.path.exists(exclude_list_path):
         exclude_df = pd.read_csv(exclude_list_path)
         exclude_filenames = set(exclude_df['filename'].tolist())
@@ -518,7 +521,7 @@ def prepare_cnn_rnn_dataset(binary_classification=True):
         exclude_filenames = set()
     
     # Check if dataframe.csv exists
-    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")
+    data_file_path = os.path.join(DATA_DIR, "dataframe.csv")
     if os.path.exists(data_file_path):
         data_df = pd.read_csv(data_file_path)
         print(f"Loaded existing dataframe from {data_file_path}")
@@ -526,13 +529,13 @@ def prepare_cnn_rnn_dataset(binary_classification=True):
         # Check if paths are absolute and convert if needed
         if '/' in data_df['file_path'].iloc[0] and not data_df['file_path'].iloc[0].startswith(('Healthy', 'MCI', 'AD')):
             print("Converting absolute paths to relative paths...")
-            data_df = myFunctions.convert_absolute_to_relative_paths(data_df)
+            data_df = convert_absolute_to_relative_paths(data_df)
             # Save the updated dataframe
             data_df.to_csv(data_file_path, index=False)
     else:
         # Create new dataframe with features
-        data_df = myFunctions.createDataframe()
-        data_df = myFunctions.featureEngineering(data_df)
+        data_df = createDataframe()
+        data_df = featureEngineering(data_df)
         os.makedirs(os.path.dirname(data_file_path), exist_ok=True)
         data_df.to_csv(data_file_path, index=False)
         print(f"Created and saved dataframe to {data_file_path}")
@@ -559,8 +562,8 @@ def prepare_cnn_rnn_dataset(binary_classification=True):
     
     # Perform dataset splits directly on the filtered dataframe
     print("Creating dataset splits...")
-    train_df, val_df, test_df = myData.datasetSplit(filtered_df)
-    train_df, val_df, test_df = myData.ScaleDatasets(train_df, val_df, test_df)
+    train_df, val_df, test_df = datasetSplit(filtered_df)
+    train_df, val_df, test_df = ScaleDatasets(train_df, val_df, test_df)
     
     # Convert to binary classification if requested
     if binary_classification:
@@ -605,7 +608,7 @@ def get_original_audio_by_id(audio_id):
     import torch
     import torchaudio
         
-    pytorch_dataset_path = os.path.join(myConfig.DATA_DIR, "pytorch_dataset")
+    pytorch_dataset_path = os.path.join(DATA_DIR, "pytorch_dataset")
     
     # Define the order to search splits - prioritize test split since CAM is typically used during testing
     splits_to_search = ["test", "validation", "train"]
@@ -668,7 +671,7 @@ def get_original_audio_by_id(audio_id):
     except Exception as e:
         print(f"Error searching in pytorch dataset: {str(e)}")
         
-    data_dir = os.path.join(myConfig.ROOT_DIR, "Data")
+    data_dir = os.path.join(ROOT_DIR, "Data")
     print(f"Searching for audio ID: {audio_id} in Data directory: {data_dir}")
     
     try:
@@ -770,14 +773,14 @@ def analyze_dataset_chunking(dataset_dict, sample_rate=16000, trim_silence=True)
             if trim_silence:
                 # Try to load original audio file to avoid double-trimming
                 try:
-                    data_dir = os.path.join(myConfig.DATA_DIR, "Data")
+                    data_dir = os.path.join(DATA_DIR, "Data")
                     audio_path = None
                     
                     # Try to resolve path relative to the data directory
                     potential_paths = [
-                        os.path.join(myConfig.ROOT_DIR, file_path),
-                        os.path.join(myConfig.ROOT_DIR, "Data", file_path),
-                        os.path.join(myConfig.ROOT_DIR, "Data", os.path.basename(file_path))
+                        os.path.join(ROOT_DIR, file_path),
+                        os.path.join(ROOT_DIR, "Data", file_path),
+                        os.path.join(ROOT_DIR, "Data", os.path.basename(file_path))
                     ]
                     
                     for path in potential_paths:
@@ -788,7 +791,7 @@ def analyze_dataset_chunking(dataset_dict, sample_rate=16000, trim_silence=True)
                     if audio_path is None:
                         # Try to find in Healthy/MCI/AD subdirectories
                         for subdir in ["Healthy", "MCI", "AD"]:
-                            path = os.path.join(myConfig.ROOT_DIR, "Data", subdir, os.path.basename(file_path))
+                            path = os.path.join(ROOT_DIR, "Data", subdir, os.path.basename(file_path))
                             if os.path.exists(path):
                                 audio_path = path
                                 break
@@ -902,7 +905,7 @@ def analyze_dataset_chunking(dataset_dict, sample_rate=16000, trim_silence=True)
     plt.tight_layout()
     
     # Create output directory
-    output_dir = os.path.join(myConfig.OUTPUT_PATH, "chunking_analysis")
+    output_dir = os.path.join(OUTPUT_PATH, "chunking_analysis")
     os.makedirs(output_dir, exist_ok=True)
     plot_path = os.path.join(output_dir, "chunking_analysis.png")
     plt.savefig(plot_path)

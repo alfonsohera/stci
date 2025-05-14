@@ -1,16 +1,14 @@
 import os
 import requests
 import shutil
-import myConfig
-import myFunctions
-import myAudio
+from .Config import ROOT_DIR, DATA_DIR, LABEL_MAP, OUTPUT_PATH  
+from .Functions import resolve_audio_path, chunk_input_sample  
 import numpy as np
 import psutil
 import gc
 import torch
 
 from zipfile import ZipFile
-#from google.colab import drive
 from pydub import AudioSegment
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -51,7 +49,7 @@ def log_memory_usage(label):
 
 def DownloadAndExtract():
     # Always use Data directory at script level
-    data_dir = myConfig.DATA_DIR
+    data_dir = DATA_DIR
     
     # Define paths for category folders within data_dir
     healthy_dir = os.path.join(data_dir, "Healthy")
@@ -64,10 +62,10 @@ def DownloadAndExtract():
     os.makedirs(mci_dir, exist_ok=True)
     os.makedirs(ad_dir, exist_ok=True)
     
-    # Skip download if files already exist in offline mode
-    if myConfig.running_offline and all(os.path.exists(folder) and os.listdir(folder) 
-                                     for folder in [healthy_dir, mci_dir, ad_dir]):
-        print("Running offline and target folders already exist with files. Skipping download and extraction.")
+    # Skip download if files already exist
+    if all(os.path.exists(folder) and os.listdir(folder) 
+           for folder in [healthy_dir, mci_dir, ad_dir]):
+        print("Target folders already exist with files. Skipping download and extraction.")
         return
     
     urls = [
@@ -185,7 +183,7 @@ def datasetSplit(data_df, train_ratio=0.6, val_ratio=0.2, test_ratio=0.2):
 
 
 def loadHFDataset():
-    dataset = load_from_disk(myConfig.OUTPUT_PATH)
+    dataset = load_from_disk(OUTPUT_PATH)  
     return dataset
 
 
@@ -204,14 +202,17 @@ def ScaleDatasets(train_df, val_df, test_df):
 
 
 def process_data(df):
+    # Import Audio module inside the function to avoid circular imports
+    from . import Audio
+    
     data = []
     for row in tqdm(df.itertuples(), total=len(df)):
         audio_file = row.file_path
-        file_path = myFunctions.resolve_audio_path(audio_file)
+        file_path = resolve_audio_path(audio_file)  
         label = row.label
 
         # Load processed audio
-        audio, sr = myAudio.load_audio(file_path)
+        audio, sr = Audio.load_audio(file_path)
 
         # Build a dictionary with everything you need
         # -> the audio array, sampling rate, path, label, plus numeric features
@@ -259,7 +260,7 @@ def createHFDatasets(train_df, val_df, test_df):
     # Monitor chunking in batches to see where it fails
     try:
         dataset = dataset.map(
-            myFunctions.chunk_input_sample,
+            chunk_input_sample,
             desc="Chunking audio samples",
             batch_size=8  # Process in smaller batches
         )
@@ -270,9 +271,9 @@ def createHFDatasets(train_df, val_df, test_df):
         raise
 
     # Finally, save to disk    
-    dataset.save_to_disk(myConfig.OUTPUT_PATH)
+    dataset.save_to_disk(OUTPUT_PATH)
     log_memory_usage("After saving dataset")
-    print(f"Dataset saved to {myConfig.OUTPUT_PATH}")
+    print(f"Dataset saved to {OUTPUT_PATH}")
     
     return dataset
 

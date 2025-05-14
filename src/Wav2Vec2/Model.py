@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import numpy as np
-import myConfig
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.Common import Config
 from transformers import (
     Wav2Vec2ForSequenceClassification,
     Wav2Vec2Processor,
@@ -43,12 +46,12 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
             base_model,
             num_labels=num_labels
         )
-        if myConfig.training_from_scratch:
+        if Config.training_from_scratch:
             self.config = self.wav2vec2.config  # base model config
         else:
             self.config = config or self.wav2vec2.config
         if prosodic_dim is None:
-            prosodic_dim = myConfig.num_extracted_features
+            prosodic_dim = Config.num_extracted_features
         self.prosody_mlp = nn.Sequential(
             nn.Linear(prosodic_dim, 32),
             nn.ReLU(),
@@ -123,7 +126,7 @@ class Wav2Vec2ProsodicClassifier(nn.Module):
 
 
 def getModelDefinitions():
-    if myConfig.training_from_scratch:
+    if Config.training_from_scratch:
         model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
         processor = Wav2Vec2Processor.from_pretrained(model_name)
         base_model = Wav2Vec2ForSequenceClassification.from_pretrained(
@@ -132,7 +135,7 @@ def getModelDefinitions():
         )
     else:
         model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
-        processor = Wav2Vec2Processor.from_pretrained(myConfig.checkpoint_dir)
+        processor = Wav2Vec2Processor.from_pretrained(Config.checkpoint_dir)
         base_model = Wav2Vec2ForSequenceClassification.from_pretrained(
             model_name,
             num_labels=3
@@ -164,24 +167,24 @@ def data_collator_fn(features):
 
 
 def loadModel(model_name):
-    if myConfig.training_from_scratch:
+    if Config.training_from_scratch:
         model = Wav2Vec2ProsodicClassifier(model_name, num_labels=3)
     else:
-        model_config = AutoConfig.from_pretrained(myConfig.checkpoint_dir)
+        model_config = AutoConfig.from_pretrained(Config.checkpoint_dir)
         model = Wav2Vec2ProsodicClassifier(model_name, num_labels=3, config=model_config)                
         # Load trained weights from .safetensors
-        state_dict = load_file(f"{myConfig.checkpoint_dir}/model.safetensors")
+        state_dict = load_file(f"{Config.checkpoint_dir}/model.safetensors")
         model.load_state_dict(state_dict)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    if myConfig.training_from_scratch:
-        lr = myConfig.training_args.learning_rate
+    if Config.training_from_scratch:
+        lr = Config.training_args.learning_rate
     else:
         model.freeze_feature_extractor()
         model.freeze_encoder_layers(12) 
-        lr = myConfig.training_args.learning_rate * 0.5
+        lr = Config.training_args.learning_rate * 0.5
     model.gradient_checkpointing_enable()    
-    weight_decay = myConfig.training_args.weight_decay
+    weight_decay = Config.training_args.weight_decay
     optimizer = Adam8bit(model.parameters(), lr=lr,weight_decay=weight_decay)
     # Clear CUDA cache
     if torch.cuda.is_available():
@@ -327,15 +330,15 @@ def createTrainer(model, optimizer, dataset):
     # Create weights tensor for class balancing
     weights_tensor = setClassWeights(dataset["train"])
     # Number of batches per epoch
-    num_batches = len(dataset["train"]) // myConfig.training_args.per_device_train_batch_size
-    if len(dataset["train"]) % myConfig.training_args.per_device_train_batch_size:
+    num_batches = len(dataset["train"]) // Config.training_args.per_device_train_batch_size
+    if len(dataset["train"]) % Config.training_args.per_device_train_batch_size:
         num_batches += 1
     
     from math import ceil
 
-    num_epochs = myConfig.training_args.num_train_epochs
-    batch_size = myConfig.training_args.per_device_train_batch_size
-    grad_accum = myConfig.training_args.gradient_accumulation_steps
+    num_epochs = Config.training_args.num_train_epochs
+    batch_size = Config.training_args.per_device_train_batch_size
+    grad_accum = Config.training_args.gradient_accumulation_steps
     train_samples = len(dataset["train"])
 
     # Exact calculation used by Hugging Face internally:
@@ -357,19 +360,19 @@ def createTrainer(model, optimizer, dataset):
 
     # Initialize callbacks list 
     callbacks = []
-    # Initialize wandb if not running offline
-    if not myConfig.running_offline and "wandb" in myConfig.training_args.report_to:
+    # Initialize wandb if enabled
+    if "wandb" in Config.training_args.report_to:
         import wandb
         wandb.init(
-            project=myConfig.wandb_project,
-            entity=myConfig.wandb_entity,
-            name=myConfig.wandb_run_name,
+            project=Config.wandb_project,
+            entity=Config.wandb_entity,
+            name=Config.wandb_run_name,
             config={
                 "model_name": model.__class__.__name__,
                 "total_params": sum(p.numel() for p in model.parameters()),
                 "trainable_params": sum(p.numel() for p in model.parameters() if p.requires_grad),
-                "batch_size": myConfig.training_args.per_device_train_batch_size * myConfig.training_args.gradient_accumulation_steps,
-                "num_epochs": myConfig.training_args.num_train_epochs,
+                "batch_size": Config.training_args.per_device_train_batch_size * Config.training_args.gradient_accumulation_steps,
+                "num_epochs": Config.training_args.num_train_epochs,
                 "lr_scheduler": "OneCycleLR",  # Add this to track scheduler type
                 "max_lr": max_lr,
                 "pct_start": 0.3,
@@ -384,7 +387,7 @@ def createTrainer(model, optimizer, dataset):
     # Update Trainer initialization - KEEP both optimizer and scheduler
     trainer = CustomTrainer(
         model=model,
-        args=myConfig.training_args,
+        args=Config.training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
         compute_metrics=compute_metrics,
@@ -409,7 +412,7 @@ class CustomWandbCallback(WandbCallback):
             self._init_wandb(args, state, model)
             
         # Watch model architecture and gradients
-        if myConfig.wandb_watch_model and model is not None:
+        if Config.wandb_watch_model and model is not None:
             wandb.watch(model, log="all", log_freq=100)
             
         # Log hyperparameters
@@ -433,7 +436,7 @@ class CustomWandbCallback(WandbCallback):
     
     def _log_best_model(self, checkpoint_dir):
         """Log the best model as a wandb artifact"""
-        if not myConfig.wandb_log_model:
+        if not Config.wandb_log_model:
             return
             
         # Create model artifact
@@ -441,7 +444,7 @@ class CustomWandbCallback(WandbCallback):
         artifact = wandb.Artifact(
             artifact_name, 
             type="model", 
-            description=f"Best model checkpoint with {myConfig.training_args.metric_for_best_model}={wandb.run.summary.get(f'eval/{myConfig.training_args.metric_for_best_model}', 0):.4f}"
+            description=f"Best model checkpoint with {Config.training_args.metric_for_best_model}={wandb.run.summary.get(f'eval/{Config.training_args.metric_for_best_model}', 0):.4f}"
         )
             
         # Add files to artifact

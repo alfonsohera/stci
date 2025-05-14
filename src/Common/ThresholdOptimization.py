@@ -14,9 +14,8 @@ import seaborn as sns
 from typing import Dict, Tuple, List, Any, Optional, Union
 import wandb
 import argparse
-import myConfig
-import myData
-import myModel
+from . import Config
+from . import Data
 from torch.utils.data import DataLoader
 from safetensors.torch import load_file
 
@@ -563,8 +562,8 @@ def main():
                         help="Path to the trained model (.pth or .safetensors)")
     parser.add_argument("--model_type", type=str, choices=["wav2vec2", "cnn_rnn"], default="wav2vec2",
                         help="Type of model architecture")
-    parser.add_argument("--use_manual", action="store_true", 
-                        help="Use manual features (for CNN+RNN model)")
+    parser.add_argument("--use_prosodic", action="store_true", 
+                        help="Use prosodic features in addition to spectrograms")
     parser.add_argument("--dataset_split", type=str, choices=["validation", "test"], default="validation",
                         help="Dataset split to optimize thresholds on")
     parser.add_argument("--batch_size", type=int, default=8, 
@@ -577,16 +576,16 @@ def main():
     args = parser.parse_args()
     
     # Ensure config paths are set up
-    path_config = myConfig.configure_paths()
+    path_config = Config.configure_paths()
     for key, path in path_config.items():
-        setattr(myConfig, key, path)
+        setattr(Config, key, path)
     
     # Define class names
     class_names = ["Healthy", "MCI", "AD"]
     
     # Load dataset
     print("Loading dataset...")
-    dataset = myData.loadHFDataset()
+    dataset = Data.loadHFDataset()
     
     # Safe loading function that handles both .pth and .safetensors formats
     def safe_load_model_weights(model, path):
@@ -615,8 +614,8 @@ def main():
         
         # Load model
         print(f"Loading Wav2Vec2 model from {args.model_path}...")
-        model_name, processor, base_model = myModel.getModelDefinitions()
-        model, _ = myModel.loadModel(model_name)
+        model_name, processor, base_model = Model.getModelDefinitions()
+        model, _ = Model.loadModel(model_name)
         
         # Load model weights if specified
         if args.model_path:
@@ -628,7 +627,7 @@ def main():
             dataloader=dataloader,
             class_names=class_names,
             output_dir=args.output_dir,
-            use_prosodic_features=False,
+            use_prosodic_features=args.use_prosodic,
             is_cnn_rnn=False,
             log_to_wandb=args.log_wandb
         )
@@ -636,20 +635,20 @@ def main():
     elif args.model_type == "cnn_rnn":
         # Import here to avoid issues if the module doesn't exist
         try:
-            from main import collate_fn_cnn_rnn
-            from cnn_rnn_model import DualPathAudioClassifier
+            from main import collate_fn_cnn
+            from src.Cnn.cnn_model import DualPathAudioClassifier
         except ImportError:
-            print("Error: Could not import CNN+RNN model. Make sure cnn_rnn_model.py exists and contains the DualPathAudioClassifier class.")
+            print("Error: Could not import CNN+RNN model. Make sure cnn_model.py exists and contains the DualPathAudioClassifier class.")
             return
         
         # Prepare dataset for CNN+RNN model
         print("Preparing dataset for CNN+RNN model...")
-        dataset = dataset.map(myData.prepare_for_cnn_rnn)
+        dataset = dataset.map(Data.prepare_for_cnn_rnn)
         
         # Create data loader
         split_dataset = dataset[args.dataset_split]
         dataloader = DataLoader(
-            split_dataset, batch_size=args.batch_size, collate_fn=collate_fn_cnn_rnn
+            split_dataset, batch_size=args.batch_size, collate_fn=collate_fn_cnn
         )
         
         # Create model
@@ -657,8 +656,8 @@ def main():
         model = DualPathAudioClassifier(
             num_classes=3,
             sample_rate=16000,
-            use_prosodic_features=args.use_manual,
-            manual_features_dim=len(myData.extracted_features)
+            use_prosodic_features=args.use_prosodic,
+            manual_features_dim=len(Data.extracted_features)
         )
         
         # Load model weights if specified
@@ -671,12 +670,12 @@ def main():
             dataloader=dataloader,
             class_names=class_names,
             output_dir=args.output_dir,
-            use_prosodic_features=False,
+            use_prosodic_features=args.use_prosodic,
             is_cnn_rnn=True,
             log_to_wandb=args.log_wandb
         )
 if __name__ == "__main__":
-    import myModel  # Import here to avoid circular imports
+    from src.Wav2Vec2 import Model  # Import here to avoid circular imports
     main()
 
 

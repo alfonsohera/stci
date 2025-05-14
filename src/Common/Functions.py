@@ -2,10 +2,9 @@ import parselmouth
 import torch
 import pandas as pd
 import numpy as np
-import myConfig
-import myAudio
-import myModel
-import my_Speech2text
+from . import Config
+from src.Wav2Vec2 import Model
+from . import Speech2text
 import os
 from parselmouth.praat import call
 from sklearn.metrics import classification_report, confusion_matrix
@@ -15,10 +14,10 @@ import gc
 
 def preprocess_function(example):
     # Wav2Vec2 processing
-    _, processor, _  = myModel.getModelDefinitions()
+    _, processor, _  = Model.getModelDefinitions()
     inputs = processor(example["audio"]["array"], sampling_rate=example["audio"]["sampling_rate"], return_tensors="pt")
     
-    extracted_features = myConfig.selected_features
+    extracted_features = Config.selected_features
     feats = [example[col] for col in extracted_features]
     inputs["prosodic_features"] = torch.tensor(feats, dtype=torch.float32)
     inputs["label"] = example["label"]
@@ -217,7 +216,7 @@ def extract_prosodic_features(audio_path):
 
 def get_data_dir():
     """Helper function to get the consistent data directory path"""
-    return myConfig.DATA_DIR
+    return Config.DATA_DIR
 
 
 def createDataframe():
@@ -225,10 +224,10 @@ def createDataframe():
     labels = []
     relative_paths = []  # Store relative paths
     
-    # Always use the Data directory from myConfig
+    # Always use the Data directory from Config
     data_dir = get_data_dir()
     
-    for category in myConfig.LABEL_MAP.keys():
+    for category in Config.LABEL_MAP.keys():
         category_path = os.path.join(data_dir, category)
         if not os.path.exists(category_path):
             print(f"Warning: Category directory '{category_path}' not found")
@@ -239,7 +238,7 @@ def createDataframe():
                 audio_files.append(os.path.join(category_path, file))
                 # Store only the relative path (category/filename)
                 relative_paths.append(os.path.join(category, file))
-                labels.append(myConfig.LABEL_MAP[category])
+                labels.append(Config.LABEL_MAP[category])
 
     if not audio_files:
         print(f"Warning: No audio files found in the data directory")
@@ -266,8 +265,8 @@ def extract_sex_age(file_path):
 def featureEngineering(data_df):
     """Feature engineering with proper CPU/GPU separation"""
     # Initialize feature columns
-    for feature_list in [myConfig.features, myConfig.jitter_shimmer_features, 
-                         myConfig.spectral_features, myConfig.speech2text_features]:
+    for feature_list in [Config.features, Config.jitter_shimmer_features, 
+                         Config.spectral_features, Config.speech2text_features]:
         for feature in feature_list:
             data_df[feature] = None
     
@@ -279,7 +278,7 @@ def featureEngineering(data_df):
     
     # Post-processing
     # Fill NaN values with the mean for jitter/shimmer features
-    for col in myConfig.jitter_shimmer_features:
+    for col in Config.jitter_shimmer_features:
         if data_df[col].isna().any():
             mean_val = data_df[col].mean()
             data_df[col].fillna(mean_val, inplace=True)
@@ -292,11 +291,13 @@ def cpu_worker(file_info):
     idx, file_path = file_info
     result = {}
     # Resolve the audio path passed to the extraction functions
+    from .Audio import resolve_audio_path
     file_path = resolve_audio_path(file_path)
 
     try:
         # 1. Extract metadata features
-        result['duration'] = myAudio.compute_audio_length(file_path)
+        from .Audio import Audio
+        result['duration'] = Audio.compute_audio_length(file_path)
         result['class'] = extract_class(file_path)
         sex, age = extract_sex_age(file_path)
         result['Sex'] = sex
@@ -306,19 +307,19 @@ def cpu_worker(file_info):
         base_file_path = file_path.replace("_original", "")
         marker_file = f"{base_file_path}.processed"
         if not os.path.exists(marker_file):
-            myAudio.process_audio(file_path)        
+            Audio.process_audio(file_path)        
         
         # 3. Create sound object once and use for both feature extractions
         sound = parselmouth.Sound(file_path)
         
         # Extract jitter and shimmer 
         jitter_shimmer = extract_jitter_shimmer(sound, file_path)
-        for i, feature in enumerate(myConfig.jitter_shimmer_features):
+        for i, feature in enumerate(Config.jitter_shimmer_features):
             result[feature] = jitter_shimmer[i]
         
         # Extract spectral features using the same sound object
         spectral = extract_spectral_features(sound)
-        for i, feature in enumerate(myConfig.spectral_features):
+        for i, feature in enumerate(Config.spectral_features):
             result[feature] = spectral[i]
             
         # Explicitly delete sound object to free memory
@@ -327,7 +328,7 @@ def cpu_worker(file_info):
     except Exception as e:
         print(f"Error processing CPU features for {file_path}: {str(e)}")
         # Set default values for failed features
-        for feature_list in [myConfig.jitter_shimmer_features, myConfig.spectral_features]:
+        for feature_list in [Config.jitter_shimmer_features, Config.spectral_features]:
             for feature in feature_list:
                 result[feature] = np.nan
         
@@ -408,7 +409,8 @@ def extract_gpu_features(data_df):
     print("Extracting GPU-dependent features:")
     
     # 0. Load audio separation model
-    model = myAudio.load_demucs_model()
+    from .Audio import Audio
+    model = Audio.load_demucs_model()
     print("Applying voice separation with Demucs...")
     
     # Optimize batch size based on GPU memory - smaller batches might be faster
@@ -428,10 +430,11 @@ def extract_gpu_features(data_df):
         print(f"Processing Demucs batch {i//demucs_batch_size + 1}/{(total_files + demucs_batch_size - 1)//demucs_batch_size}")
         
         # Pre-resolve all paths at once
+        from .Audio import resolve_audio_path
         batch_paths = [resolve_audio_path(row['file_path']) for _, row in batch_files.iterrows()]
         
         # Process batch with Demucs
-        myAudio.process_batch_with_demucs(batch_paths, model, device)
+        Audio.process_batch_with_demucs(batch_paths, model, device)
         
         # Update progress and timing information
         batch_time = time.time() - batch_start_time
@@ -454,18 +457,18 @@ def extract_gpu_features(data_df):
         # Resolve the audio path passed to the extraction functions
         file_path = resolve_audio_path(file_path)
         try:
-            prosodic = myAudio.extract_prosodic_features_vad(file_path)
-            for i, feature in enumerate(myConfig.features):
+            prosodic = Audio.extract_prosodic_features_vad(file_path)
+            for i, feature in enumerate(Config.features):
                 data_df.at[idx, feature] = prosodic[i]
         except Exception as e:
             print(f"Error extracting prosodic features for {file_path}: {str(e)}")
-            for feature in myConfig.features:
+            for feature in Config.features:
                 data_df.at[idx, feature] = np.nan
     
     # 2. Load ASR model for speech-to-text
     print("Loading ASR model...")    
     model_name = "jonatasgrosman/wav2vec2-large-xlsr-53-spanish"
-    asr_model, processor = my_Speech2text.load_asr_model(model_name, device)
+    asr_model, processor = Speech2text.load_asr_model(model_name, device)
     
     # Set model to evaluation mode
     asr_model.eval()
@@ -485,7 +488,7 @@ def extract_gpu_features(data_df):
                 # Resolve the audio path passed to the extraction functions
                 file_path = resolve_audio_path(file_path)
                 try:
-                    wer, transcript = my_Speech2text.extract_speechFromtext(file_path, asr_model, processor)
+                    wer, transcript = Speech2text.extract_speechFromtext(file_path, asr_model, processor)
                     data_df.at[idx, 'wer'] = wer
                     data_df.at[idx, 'transcript'] = transcript
                 except Exception as e:
@@ -520,7 +523,9 @@ def resolve_audio_path(relative_path):
     Returns:
         str: Absolute path to the audio file
     """
-    data_dir = get_data_dir()
+    # Import locally to avoid circular imports
+    from . import Config
+    data_dir = Config.DATA_DIR
     return os.path.join(data_dir, relative_path)
 
 def convert_absolute_to_relative_paths(dataframe):

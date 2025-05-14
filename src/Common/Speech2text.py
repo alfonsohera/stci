@@ -1,9 +1,9 @@
 from pyannote.audio import Pipeline
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 import torch
-import myAudio
-import myConfig
-import myFunctions
+from . import Audio
+from . import Config
+from . import Functions
 import pandas as pd
 import editdistance
 import re
@@ -47,7 +47,7 @@ def compute_wer_with_transcript(file_path, reference_text, asr_model, processor)
                 continue                
             try:
                 # Load audio segment
-                audio_chunk = myAudio.load_audio_segment(file_path, start_time, end_time)                
+                audio_chunk = Audio.load_audio_segment(file_path, start_time, end_time)                
                 # Skip empty or very small segments
                 if len(audio_chunk) < 160:  # Less than 10ms at 16kHz
                     continue                    
@@ -110,7 +110,7 @@ def extract_speechFromtext(audio_path, asr_model, processor):
     try:
         wer, transcript = compute_wer_with_transcript(
             audio_path,
-            myConfig.reference_text,
+            Config.reference_text,
             asr_model,
             processor
         )
@@ -139,11 +139,11 @@ if __name__ == "__main__":
     #count = 0    
     for index, row in data_df.iterrows():
         audio_file = row['file_path']
-        file_path = myFunctions.resolve_audio_path(audio_file)
+        file_path = Functions.resolve_audio_path(audio_file)
         print(f"Processing file {index+1}/{len(data_df)}: {file_path}")
         try:
             # Modified compute_wer function to return both WER and transcript
-            reading_wer, transcript = compute_wer_with_transcript(file_path, myConfig.reference_text, asr_model, processor)
+            reading_wer, transcript = compute_wer_with_transcript(file_path, Config.reference_text, asr_model, processor)
             # Add WER score and transcript to the dataframe
             data_df.at[index, 'wer_score'] = reading_wer
             data_df.at[index, 'transcript'] = transcript

@@ -7,7 +7,7 @@ from sklearn.feature_selection import mutual_info_classif
 from sklearn.feature_selection import SelectKBest, RFE
 from sklearn.preprocessing import StandardScaler
 import os
-import myConfig
+from . import Config
 
 def analyze_feature_importance(df, feature_cols, output_dir=None):
     """
@@ -22,7 +22,7 @@ def analyze_feature_importance(df, feature_cols, output_dir=None):
         DataFrame with feature importance rankings
     """
     if output_dir is None:
-        output_dir = os.path.join(myConfig.ROOT_DIR, "feature_analysis")
+        output_dir = os.path.join(Config.ROOT_DIR, "feature_analysis")
     os.makedirs(output_dir, exist_ok=True)
     
     # Extract features and labels
@@ -110,15 +110,13 @@ def recommend_features(importance_df, threshold=None, num_features=None):
         return importance_df[importance_df['RF_Importance'] > avg_importance]['Feature'].tolist()
     
 
-
-
 def analyze_features():
-    # Load the dataframe
-    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")
+    # Load the dataframe 
+    data_file_path = os.path.join(Config.ROOT_DIR, "Data", "dataframe.csv")
     df = pd.read_csv(data_file_path)
     
     # Get all features (combine all feature lists from config)
-    all_features = myConfig.features + myConfig.jitter_shimmer_features + myConfig.spectral_features + myConfig.speech2text_features
+    all_features = Config.features + Config.jitter_shimmer_features + Config.spectral_features + Config.speech2text_features
     
     # Run feature importance analysis
     importance_results = analyze_feature_importance(df, all_features)
@@ -134,6 +132,5 @@ def analyze_features():
     
     return importance_results, recommended_features
 
-
-importance_results, recommended_features = analyze_features()
-# Optionally use only the recommended features
+if __name__ == "__main__":
+    importance_results, recommended_features = analyze_features()

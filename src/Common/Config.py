@@ -6,8 +6,10 @@ from transformers import TrainingArguments
 def configure_paths():
     """Set up all path variables based on current environment"""
     # Find the root directory (repository root)
-    current_file_path = os.path.abspath(__file__)
-    ROOT_DIR = os.path.dirname(current_file_path)
+    current_file_path = os.path.abspath(__file__)    
+    COMMON_DIR = os.path.dirname(current_file_path)    
+    SRC_DIR = os.path.dirname(COMMON_DIR)    
+    ROOT_DIR = os.path.dirname(SRC_DIR)
     
     # Define consistent data paths relative to ROOT_DIR
     DATA_DIR = os.path.join(ROOT_DIR, "Data")
@@ -69,8 +71,8 @@ num_extracted_features = len(selected_features)
 
 
 
-# CNN-RNN model hyperparameters  - enabled when training from scratch
-cnn_rnn_hyperparams = {
+# CNN model hyperparameters - enabled when training from scratch
+cnn_hyperparams = {
     # Core training hyperparameters
     "max_lr": 0.0007701929128195916,
     "focal_loss_gamma": 1.6403510582650866,
@@ -90,7 +92,7 @@ cnn_rnn_hyperparams = {
 }
 
 # fine tuning hyperparameters
-""" cnn_rnn_hyperparams = {
+""" cnn_hyperparams = {
     # Core training hyperparameters
     "max_lr": 0.0008824227362416752 /5,
     "focal_loss_gamma": 1.521142890255866,

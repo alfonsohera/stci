@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
-import myConfig
+from . import Config
 import librosa
 import librosa.display
 import numpy as np
@@ -13,6 +13,7 @@ import plotly.graph_objs as go
 import plotly.io as pio
 from plotly.offline import plot
 import os
+from src.Cnn.cnn_model import SpecAugment  # Import your augmentation class
 
 def plotAgeDistribution(data_df):
     plt.style.use("default")
@@ -21,10 +22,10 @@ def plotAgeDistribution(data_df):
     std_values = data_df.groupby("class")["Age"].std()
     
     # Get unique classes
-    fig, axes = plt.subplots(len(myConfig.classes), 1, figsize=(8, 5 * len(myConfig.classes)), sharex=True)
+    fig, axes = plt.subplots(len(Config.classes), 1, figsize=(8, 5 * len(Config.classes)), sharex=True)
 
-    for i, cls in enumerate(myConfig.classes):
-        ax = axes[i] if len(myConfig.classes) > 1 else axes  # Handle single-class case
+    for i, cls in enumerate(Config.classes):
+        ax = axes[i] if len(Config.classes) > 1 else axes  # Handle single-class case
         subset = data_df[data_df["class"] == cls]["Age"]
 
         sns.histplot(subset, bins=15, kde=False, ax=ax)
@@ -102,7 +103,7 @@ def plotProsodicFeatures(data_df):
 
 def histogramProsodicFeatures(data_df):
     # Define all features to plot (prosodic + jitter/shimmer)
-    all_features = myConfig.features + myConfig.jitter_shimmer_features + myConfig.spectral_features + myConfig.speech2text_features
+    all_features = Config.features + Config.jitter_shimmer_features + Config.spectral_features + Config.speech2text_features
     
     # Calculate mean and std values for all features
     mean_values = data_df.groupby("class")[all_features].mean()
@@ -111,15 +112,15 @@ def histogramProsodicFeatures(data_df):
     # Create one figure per feature, with subplots for each class
     for feature in all_features:
         # Create figure with 3 subplots (one for each class)
-        fig, axes = plt.subplots(len(myConfig.classes), 1, figsize=(10, 12), sharex=True)
+        fig, axes = plt.subplots(len(Config.classes), 1, figsize=(10, 12), sharex=True)
         
         # Set figure title for the entire plot
         fig.suptitle(f"Distribution of {feature} across Cognitive Classes", fontsize=16)
         
         # Generate histograms for each class
-        for i, cls in enumerate(myConfig.classes):
+        for i, cls in enumerate(Config.classes):
             # Get current axis (handle case of single class)
-            ax = axes[i] if len(myConfig.classes) > 1 else axes
+            ax = axes[i] if len(Config.classes) > 1 else axes
             
             # Get class data for this feature
             class_data = data_df[data_df["class"] == cls][feature]
@@ -135,7 +136,7 @@ def histogramProsodicFeatures(data_df):
                 data=class_data,
                 bins=20,
                 kde=True,
-                color=myConfig.CLASS_COLORS.get(cls, f"C{i}"),
+                color=Config.CLASS_COLORS.get(cls, f"C{i}"),
                 ax=ax
             )
             
@@ -156,7 +157,7 @@ def histogramProsodicFeatures(data_df):
             ax.set_ylabel("Frequency")
             
             # Only add x-label for the bottom subplot
-            if i == len(myConfig.classes) - 1:
+            if i == len(Config.classes) - 1:
                 ax.set_xlabel(feature)
         
         # Adjust layout for clarity
@@ -166,24 +167,24 @@ def histogramProsodicFeatures(data_df):
     
     # Print summary statistics
     print("\nMean and Standard Deviation per Feature per Class:\n")
-    for cls in myConfig.classes:
+    for cls in Config.classes:
         print(f"\nClass: {cls}")
         # Print standard prosodic features
         print("  -- Prosodic Features --")
-        for feature in myConfig.features:
+        for feature in Config.features:
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
         
         # Print jitter and shimmer features
         print("\n  -- Voice Quality Features --")
-        for feature in myConfig.jitter_shimmer_features:
+        for feature in Config.jitter_shimmer_features:
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
         # Print spectral features
         print("\n  -- Spectral Features --")
-        for feature in myConfig.spectral_features:
+        for feature in Config.spectral_features:
             mean_val = mean_values.loc[cls, feature]
             std_val = std_values.loc[cls, feature]
             print(f"  Feature: {feature} | Mean: {mean_val:.4f} | Std Dev: {std_val:.4f}")
@@ -267,7 +268,6 @@ def visualize_spectrogram_augmentations(data_df, audio_root_path):
     import random
     import torch
     from torch.utils.data import Dataset
-    from cnn_rnn_model import SpecAugment  # Import your augmentation class
     
     # Print column names for debugging
     print("Available DataFrame columns:", data_df.columns.tolist())
@@ -282,10 +282,10 @@ def visualize_spectrogram_augmentations(data_df, audio_root_path):
     )
     
     # Create figure
-    fig = plt.figure(figsize=(15, 5 * len(myConfig.classes)))
+    fig = plt.figure(figsize=(15, 5 * len(Config.classes)))
     
     # Select one random sample from each class
-    for i, cls in enumerate(myConfig.classes):
+    for i, cls in enumerate(Config.classes):
         # Filter data by class
         class_data = data_df[data_df["class"] == cls]
         
@@ -341,9 +341,9 @@ def visualize_spectrogram_augmentations(data_df, audio_root_path):
             augmented_spec = spec_augment(log_mel_tensor).squeeze(0).numpy()
             
             # Create subplot for this class (3 columns)
-            ax1 = fig.add_subplot(len(myConfig.classes), 3, i*3 + 1)
-            ax2 = fig.add_subplot(len(myConfig.classes), 3, i*3 + 2)
-            ax3 = fig.add_subplot(len(myConfig.classes), 3, i*3 + 3)
+            ax1 = fig.add_subplot(len(Config.classes), 3, i*3 + 1)
+            ax2 = fig.add_subplot(len(Config.classes), 3, i*3 + 2)
+            ax3 = fig.add_subplot(len(Config.classes), 3, i*3 + 3)
             
             # Plot waveform
             times = np.linspace(0, len(y)/sr, num=len(y))
@@ -383,7 +383,6 @@ def visualize_augmentation_examples(data_df, audio_root_path, n_examples=3):
     import random
     import torch
     import os
-    from cnn_rnn_model import SpecAugment
     
     # Initialize the SpecAugment augmentation
     spec_augment = SpecAugment(
@@ -395,7 +394,7 @@ def visualize_augmentation_examples(data_df, audio_root_path, n_examples=3):
     )
     
     # Randomly select a class and then a sample from that class
-    selected_class = random.choice(myConfig.classes)
+    selected_class = random.choice(Config.classes)
     class_data = data_df[data_df["class"] == selected_class]
     
     if len(class_data) == 0:
@@ -503,7 +502,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     from sklearn.metrics.pairwise import cosine_similarity
     import matplotlib.pyplot as plt
     import seaborn as sns
-    from cnn_rnn_model import SpecAugment, DualPathAudioClassifier
+    from src.Cnn.cnn_model import SpecAugment, DualPathAudioClassifier
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -525,7 +524,7 @@ def analyze_augmentation_diversity(data_df, audio_root_path, n_examples=5):
     model.eval()  # Set to evaluation mode
     
     # Randomly select a class and then a sample from that class
-    selected_class = random.choice(myConfig.classes)
+    selected_class = random.choice(Config.classes)
     class_data = data_df[data_df["class"] == selected_class]
     
     if len(class_data) == 0:
@@ -1015,7 +1014,7 @@ def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold
     # Load feature extraction model (CNN14)
     print("Using CNN14 as feature extractor")
 
-    def load_cnn14(checkpoint_path=myConfig.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
+    def load_cnn14(checkpoint_path=Config.checkpoint_dir+'/Cnn14_mAP=0.431.pth'):
         model = Cnn14(classes_num=527, sample_rate=16000, mel_bins=64, hop_size=320, window_size=1024, fmin=50, fmax=8000)
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model.load_state_dict(checkpoint['model'])
@@ -1839,8 +1838,8 @@ def analyze_class_similarity(dataset_path, audio_root_path, similarity_threshold
 
 if __name__ == "__main__": 
 
-    data_file_path = os.path.join(myConfig.DATA_DIR, "dataframe.csv")   
-    dataset_path = myConfig.OUTPUT_PATH
+    data_file_path = os.path.join(Config.DATA_DIR, "dataframe.csv")   
+    dataset_path = Config.OUTPUT_PATH
     data_df = pd.read_csv(data_file_path) 
 
     # To visualize one sample per class:
@@ -1854,15 +1853,15 @@ if __name__ == "__main__":
    
     """ results = analyze_dataset_split_similarity(
         dataset_path=dataset_path,  # Path to your HF dataset
-        audio_root_path=myConfig.DATA_DIR,  # Root path to audio files
+        audio_root_path=Config.DATA_DIR,  # Root path to audio files
         model_path=None,  # Set to your model path if a trained model is available
         similarity_threshold=0.95,
         exclusion_csv="/home/bosh/Documents/ML/zz_PP/00_SCTI/Repo/exclude_list.csv"  # Path to exclusion list CSV
     ) """
 
     results_binary = analyze_class_similarity(
-    dataset_path=myConfig.OUTPUT_PATH,
-    audio_root_path=myConfig.DATA_DIR,
+    dataset_path=Config.OUTPUT_PATH,
+    audio_root_path=Config.DATA_DIR,
     similarity_threshold=0.95,
     binary_classification=True, 
     output_prefix="binary_analysis",
@@ -1873,8 +1872,8 @@ if __name__ == "__main__":
     """
     # For 3-way classification (HC/MCI/AD)
     results_3way = analyze_class_similarity(
-        dataset_path=myConfig.OUTPUT_PATH,
-        audio_root_path=myConfig.DATA_DIR,
+        dataset_path=Config.OUTPUT_PATH,
+        audio_root_path=Config.DATA_DIR,
         similarity_threshold=0.95,
         binary_classification=False,
         output_prefix="3way_analysis"
@@ -1882,8 +1881,8 @@ if __name__ == "__main__":
     
     # For binary classification (HC vs Non-HC)
     results_binary = analyze_class_similarity(
-        dataset_path=myConfig.OUTPUT_PATH,
-        audio_root_path=myConfig.DATA_DIR,
+        dataset_path=Config.OUTPUT_PATH,
+        audio_root_path=Config.DATA_DIR,
         similarity_threshold=0.95,
         binary_classification=True, 
         output_prefix="binary_analysis"
