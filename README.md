@@ -322,7 +322,7 @@ This project relies on several open-source libraries and pre-trained models. I'd
 
 ### Data Sources
 
-- **Original Speech Corpus**: The audio dataset used in this project is from the research paper ["Discriminating speech traits of Alzheimer's disease assessed through a corpus of reading task for Spanish language"](https://doi.org/10.1016/j.specom.2021.12.002) by Ivanova et al. (2021), published in Speech Communication. The corpus contains Spanish language speech recordings of elderly adults with varying degrees of cognitive impairment.
+- **Original Speech Corpus**: The audio dataset used in this project is from the research paper ["Discriminating speech traits of Alzheimer's disease assessed through a corpus of reading task for Spanish language"](https://doi.org/10.1016/j.csl.2021.101341) by Ivanova et al. (2021), published in Speech Communication. The corpus contains Spanish language speech recordings of elderly adults with varying degrees of cognitive impairment.
 
 ### Machine Learning and Deep Learning
 
